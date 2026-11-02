@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Kệ Truyện</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Đến nội dung</a>
+  <div id="app" class="app-shell">
+    <aside class="sidebar" aria-label="Điều hướng chính">
+      <a class="brand" href="#library"><span class="brand-icon" aria-hidden="true">▥</span> Kệ Truyện</a>
+      <nav>
+        <button data-nav="library" class="nav-item active"><span aria-hidden="true">▤</span> Kệ sách <span id="nav-count" class="nav-count"></span></button>
+        <button data-nav="discover" class="nav-item"><span aria-hidden="true">⌕</span> Khám phá</button>
+        <button data-nav="dictionary" class="nav-item"><span aria-hidden="true">Aa</span> Từ điển</button>
+        <button data-nav="settings" class="nav-item"><span aria-hidden="true">⚙</span> Thiết lập</button>
+      </nav>
+      <div class="sidebar-foot"><span class="local-dot"></span> Thư viện cá nhân<p>Dữ liệu lưu trên máy này.</p></div>
+    </aside>
+    <main id="main" tabindex="-1">
+      <section id="library-view" class="view">
+        <header class="page-header"><div><h1>Kệ sách</h1><p>Những câu chuyện luôn ở đây.</p></div><div class="header-actions"><button id="open-trash" class="button">Thùng rác</button><button id="import-file" class="button">Nhập file</button><button id="import-backup" class="button primary"><span aria-hidden="true">↓</span> Nhập thư viện</button></div></header>
+        <div class="library-toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><input id="library-search" type="search" placeholder="Tìm tên truyện, tác giả…" aria-label="Tìm trong kệ sách"></label><label class="sort-label"><span class="sr-only">Sắp xếp</span><select id="library-sort"><option value="recent">Đọc gần đây</option><option value="name">Tên truyện A–Z</option><option value="added">Mới thêm</option><option value="progress">Tiến độ đọc</option><option value="chapters">Số chương</option></select></label><button id="sort-direction" class="icon-button" title="Đảo chiều sắp xếp" aria-label="Đảo chiều sắp xếp">↕</button><div class="view-switch" aria-label="Cách hiển thị"><button data-view="grid" class="active" title="Lưới" aria-label="Lưới" aria-pressed="true">▦</button><button data-view="compact" title="Lưới gọn" aria-label="Lưới gọn" aria-pressed="false">▥</button><button data-view="list" title="Danh sách" aria-label="Danh sách" aria-pressed="false">☰</button></div></div>
+        <div class="filter-row"><div id="kind-tabs" class="tabs" aria-label="Loại sách"><button class="active" data-kind="all" aria-pressed="true">Tất cả</button><button data-kind="text" aria-pressed="false">Truyện chữ</button><button data-kind="comic" aria-pressed="false">Truyện tranh</button><button data-kind="file" aria-pressed="false">File đã nhập</button></div><div class="filter-selects"><label>Nguồn <select id="library-source"><option value="">Tất cả</option></select></label><label>Nhóm <select id="library-group"><option value="">Tất cả</option></select></label></div></div>
+        <div class="results-line"><span id="library-count" role="status">Đang mở thư viện…</span><button id="refresh-library" class="text-button">Làm mới</button></div>
+        <div id="library-error" class="inline-error" role="alert" hidden></div>
+        <div id="book-grid" class="book-grid" aria-label="Sách trong thư viện" aria-busy="true"></div>
+        <p class="library-footnote">Nội dung chương được lấy từ nguồn khi mở và lưu lại trên máy. Sách chưa tải vẫn được giữ trên kệ.</p>
+      </section>
+      <section id="discover-view" class="view" hidden>
+        <header class="page-header"><div><h1>Khám phá</h1><p>Chọn nguồn, tìm truyện rồi thêm vào kệ.</p></div></header>
+        <form id="source-search-form" class="discovery-search"><label>Nguồn truyện<select id="source-select"><option value="">Đang lấy nguồn…</option></select></label><label class="grow">Tên truyện hoặc tác giả<input id="source-query" type="search" placeholder="Bạn muốn đọc gì hôm nay?" required></label><button class="button primary" type="submit">Tìm truyện</button></form>
+        <div id="source-status" class="results-line" role="status">Kết quả lấy trực tiếp từ nguồn bạn chọn.</div><div id="source-results" class="source-results"></div><button id="source-next" class="button" hidden>Xem trang tiếp</button>
+      </section>
+      <section id="dictionary-view" class="view" hidden><header class="page-header"><div><h1>Từ điển</h1><p>Quản lý dữ liệu QT cục bộ và nghĩa riêng theo truyện.</p></div></header><div id="dictionary-page"></div></section>
+      <section id="settings-view" class="view" hidden><header class="page-header"><div><h1>Thiết lập</h1><p>Trạng thái công cụ và dữ liệu trên máy của bạn.</p></div></header><div id="settings-page"></div></section>
+    </main>
+  </div>
+  <section id="reader" class="reader" aria-label="Trình đọc" hidden></section>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div class="dialog-header"><h2 id="dialog-title"></h2><button id="dialog-close" class="icon-button" aria-label="Đóng hộp thoại">×</button></div><div id="dialog-content" class="dialog-content"></div><div id="dialog-actions" class="dialog-actions"></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <input id="file-input" type="file" hidden multiple>
+</body>
+</html>

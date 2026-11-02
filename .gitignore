@@ -1,0 +1,29 @@
+# Track only source, run instructions and regression tests.
+# Personal libraries, exports, dictionaries, logs and analysis stay local.
+*
+!.gitignore
+!README.md
+!Start.cmd
+!documents.py
+!htmltools.py
+!legacy_formats.py
+!library.py
+!pdfocr.py
+!qt.py
+!qt_pack.py
+!run.py
+!server.py
+!sources.py
+!tts.py
+!/web/
+!/web/app.js
+!/web/index.html
+!/web/reader.js
+!/web/style.css
+!/windows/
+!/windows/pdfocr.ps1
+!/windows/tts.ps1
+!/tests/
+!/tests/test_*.py
+!/tests/fixtures/
+!/tests/fixtures/source_*.json
