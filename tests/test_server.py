@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 import tempfile
 import threading
@@ -6,6 +8,7 @@ import unittest
 from unittest.mock import patch
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from server import make_server
 from sources import SourceService
@@ -126,6 +129,33 @@ class HTTPTests(unittest.TestCase):
             status, actual, _ = self.request('/api/books/keep/cover')
         self.assertEqual((status, actual), (200, body))
         refresh.assert_not_called()
+
+    def test_epub_cover_is_saved_and_served_without_resetting_reading_state(self):
+        image = b'\x89PNG\r\n\x1a\n' + b'test cover bytes'
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, 'w') as archive:
+            archive.writestr('META-INF/container.xml', '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>')
+            archive.writestr('book.opf', '<package><metadata><meta name="cover" content="jacket"/></metadata>'
+                '<manifest><item id="jacket" href="jacket.png" media-type="image/png"/>'
+                '<item id="chapter" href="chapter.xhtml"/></manifest><spine><itemref idref="chapter"/></spine></package>')
+            archive.writestr('jacket.png', image)
+            archive.writestr('chapter.xhtml', '<h1>One</h1><p>Readable text.</p>')
+        body = content.getvalue()
+        book = self.server.app.import_file('book.epub', body)
+        store = self.server.app.store
+        store.progress(book['id'], 0, .6)
+        store.save_note({'id': 'keep-note', 'book_id': book['id'], 'note': 'Keep this'})
+        store.update_book(book['id'], {'cover': ''})
+        saved = self.server.app.import_file('book.epub', body)
+        self.assertEqual(saved['id'], book['id'])
+        self.assertEqual((saved['position'], saved['progress']), (.6, .6))
+        self.assertEqual(store.notes(book['id'])[0]['note'], 'Keep this')
+        status, data, _ = self.request('/api/books/' + book['id'])
+        self.assertEqual(status, 200)
+        cover = json.loads(data)['cover']
+        self.assertTrue(cover.startswith('data:image/png;base64,'))
+        self.assertEqual(base64.b64decode(cover.partition(',')[2]), image)
+        self.assertEqual(Path(saved['path']).read_bytes(), body)
 
     def test_reimport_failure_preserves_existing_managed_original(self):
         body = 'A real document to keep.'.encode()

@@ -71,6 +71,43 @@ class DocumentTests(unittest.TestCase):
         self.assertEqual([c['title'] for c in result['chapters']], ['First', 'Second'])
         self.assertTrue(result['chapters'][0]['images'][0].startswith('data:image/png;base64,'))
 
+    def test_epub_cover_uses_declared_image_outside_spine_in_epub2_and_epub3(self):
+        for metadata, properties in [('<meta name="cover" content="jacket"/>', ''),
+                                     ('', 'properties="cover-image"')]:
+            with self.subTest(metadata=metadata, properties=properties):
+                path = self.archive('cover.epub', {
+                    'META-INF/container.xml': '<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>',
+                    'OPS/book.opf': '<package><metadata>' + metadata + '</metadata><manifest>'
+                        '<item id="logo" href="images/logo.png" media-type="image/png"/>'
+                        '<item id="jacket" href="images/jacket%20image.png" media-type="image/png" ' + properties + '/>'
+                        '<item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>'
+                        '</manifest><spine><itemref idref="chapter"/></spine></package>',
+                    'OPS/chapter.xhtml': '<h1>One</h1><p>Readable text.</p>',
+                    'OPS/images/logo.png': PNG + b'logo',
+                    'OPS/images/jacket image.png': PNG,
+                })
+                original = path.read_bytes()
+                result = import_document(path)
+                self.assertEqual(result['book'].get('cover', ''), 'data:image/png;base64,' + base64.b64encode(PNG).decode())
+                self.assertIn('Readable text.', result['chapters'][0]['text'])
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_epub_cover_cannot_reference_outside_archive_or_non_raster_bytes(self):
+        for href, body in [('../../private.png', PNG), ('https://example.com/cover.png', PNG),
+                           ('images/cover.png', b'<svg onload="bad()"/>')]:
+            with self.subTest(href=href):
+                path = self.archive('unsafe-cover.epub', {
+                    'META-INF/container.xml': '<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>',
+                    'OPS/book.opf': '<package><metadata><meta name="cover" content="jacket"/></metadata>'
+                        '<manifest><item id="jacket" href="' + href + '" media-type="image/png"/>'
+                        '<item id="chapter" href="chapter.xhtml"/></manifest>'
+                        '<spine><itemref idref="chapter"/></spine></package>',
+                    'OPS/chapter.xhtml': '<p>Readable text.</p>',
+                    'OPS/images/cover.png': body,
+                })
+                with self.assertRaises(DocumentError):
+                    import_document(path)
+
     def test_epub_repeated_images_cannot_amplify_generated_output(self):
         path = self.archive('images.epub', {
             'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',

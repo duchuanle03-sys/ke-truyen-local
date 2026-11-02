@@ -457,6 +457,12 @@ def _epub(archive, title):
     title_nodes, creators, descriptions = _nodes(package, 'title'), _nodes(package, 'creator'), _nodes(package, 'description')
     book = {'name': _node_text(title_nodes[0]) if title_nodes else title, 'author': ', '.join(_node_text(node) for node in creators), 'description': _node_text(descriptions[0]) if descriptions else ''}
     manifest = {node.get('id'): node for node in _nodes(package, 'item')}
+    cover_id = next((node.get('content') for node in _nodes(package, 'meta')
+                     if node.get('name', '').casefold() == 'cover'), None)
+    cover = next((item for item in manifest.values()
+                  if 'cover-image' in item.get('properties', '').split()), manifest.get(cover_id))
+    if cover is not None and cover.get('href'):
+        book['cover'] = archive.image(opf_path, cover.get('href'))
     spine = _nodes(package, 'itemref')
     if not spine:
         raise DocumentError('EPUB không có spine/mục lục đọc.')
