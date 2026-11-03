@@ -5,6 +5,7 @@ import http.client
 import json
 import re
 import socket
+import webbrowser
 import urllib.error
 import urllib.request
 from html import escape
@@ -12,10 +13,7 @@ from http.cookiejar import Cookie, CookieJar
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 
 from htmltools import html_to_text, is_public_ip, parse_html, safe_remote_url, sanitize_html
-
-
-class SourceError(ValueError):
-    pass
+from source_errors import SourceError, SourceAccessError
 
 
 _SOURCES = {
@@ -25,6 +23,7 @@ _SOURCES = {
     'full': ('Truyện Full', 'https://truyenfull.live', {
         'truyenfull.live', 'truyenfull.vision', 'truyenfull.io', 'truyenfull.vn', 'truyenfull.com'}),
     'hako': ('Hako', 'https://docln.sbs', {'docln.sbs', 'docln.net', 'ln.hako.vn'}),
+    'stv': ('Sáng Tác Việt', 'https://sangtacviet.vip', {'sangtacviet.vip'}),
 }
 _MAX_RESPONSE = 8 * 1024 * 1024
 
@@ -33,7 +32,7 @@ def _public_addresses(host, port):
     try:
         answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as exc:
-        raise SourceError('Không phân giải được tên miền: ' + str(exc)) from exc
+        raise SourceError('Không phân giải được tên miền: ' + str(exc), code='network_error') from exc
     if not answers or any(not is_public_ip(answer[4][0]) for answer in answers):
         raise SourceError('URL trỏ tới địa chỉ mạng không công khai')
     return answers
@@ -120,8 +119,11 @@ class _PublicFetcher:
                 if len(raw) > max_bytes:
                     raise SourceError('Nội dung nguồn vượt giới hạn tải')
                 return raw, response.headers.get_content_charset() or 'utf-8'
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            raise SourceError('Nguồn trả HTTP ' + str(exc.code), code='http_error', http_status=exc.code) from exc
         except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
-            raise SourceError('Không tải được nguồn: ' + str(exc)) from exc
+            raise SourceError('Không tải được nguồn: ' + str(exc), code='network_error') from exc
 
     def __call__(self, url):
         for attempt in range(2):
@@ -203,7 +205,7 @@ def _decode_hako(root):
         return root.inner_html()
     scheme = protected.get('data-s', 'none')
     if scheme not in ('none', 'xor_shuffle', 'base64_reverse'):
-        raise SourceError('Hako: unsupported chapter encoding')
+        raise SourceError('Hako: unsupported chapter encoding', code='parse_error')
     try:
         chunks = json.loads(protected.get('data-c'))
         key = protected.get('data-k').encode('ascii')
@@ -221,12 +223,21 @@ def _decode_hako(root):
             decoded.append(data)
         return b''.join(decoded).decode('utf-8')
     except (ValueError, TypeError, UnicodeError, binascii.Error) as exc:
-        raise SourceError('Hako: không đọc được chương mã hóa: ' + str(exc)) from exc
+        raise SourceError('Hako: không đọc được chương mã hóa: ' + str(exc), code='parse_error') from exc
 
 
 class SourceService:
-    def __init__(self, fetcher=None):
+    def __init__(self, fetcher=None, browser=None):
         self.fetcher = fetcher if fetcher is not None else _PublicFetcher()
+        self.browser = browser
+
+    def _stv(self):
+        from stv_source import StvSource
+        if self.browser is None:
+            from pathlib import Path
+            from browser_source import BrowserSource
+            self.browser = BrowserSource(Path(__file__).resolve().parent / 'user-data')
+        return StvSource(self.browser)
 
     def sources(self):
         return [{'id': key, 'name': value[0]} for key, value in _SOURCES.items()]
@@ -243,9 +254,19 @@ class SourceService:
         if parsed.hostname.removeprefix('www.') not in aliases:
             raise SourceError('URL không thuộc nguồn đã chọn')
         path = parsed.path
+        if source == 'stv' and (parsed.query or not re.fullmatch(r'/truyen/[a-zA-Z0-9_-]+/1/[0-9]+(?:/[0-9]+)?/?', path)):
+            raise SourceError('URL Sáng Tác Việt phải là trang truyện hoặc chương gốc hợp lệ')
+        if source == 'stv':
+            path = path.rstrip('/') + '/'
         if source == 'qq' and path.endswith('.html'):
             path = path[:-5]
         return origin + path + ('?' + parsed.query if parsed.query else '')
+
+    def open_original(self, source, url):
+        url = self._url(source, url)
+        if source == 'stv':
+            return self._stv().open(url)
+        return {'opened': bool(webbrowser.open(url)), 'url': url}
 
     def _load(self, url):
         try:
@@ -257,13 +278,18 @@ class SourceService:
             return text
         except SourceError:
             raise
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            raise SourceError('Nguồn trả HTTP ' + str(exc.code), code='http_error', http_status=exc.code) from exc
         except Exception as exc:
-            raise SourceError('Không tải được nguồn: ' + str(exc)) from exc
+            raise SourceError('Không tải được nguồn: ' + str(exc), code='network_error') from exc
 
     def search(self, source, query, page=1):
         _, origin, _ = self._source(source)
         if type(page) is not int or not 1 <= page <= 10000 or not isinstance(query, str) or not query.strip() or len(query) > 500:
             raise SourceError('Từ khóa hoặc số trang không hợp lệ')
+        if source == 'stv':
+            return self._stv().search(query.strip(), page)
         if source == 'qq':
             url = origin + '/tim-kiem/trang-' + str(page) + '?q=' + quote(query.strip())
             selector, title = '#main_homepage .list_grid li', '.book_name a'
@@ -286,6 +312,8 @@ class SourceService:
 
     def cover(self, source, url):
         url = self._url(source, url) if source in _SOURCES else validate_public_url(url, resolve=False)
+        if source == 'stv':
+            return self._stv().cover(url)
         root = parse_html(self._load(url))
         selector = {'qq': '.book_avatar', 'full': 'div.book', 'hako': '.series-cover'}.get(source)
         container = root.first(selector) if selector else None
@@ -299,6 +327,8 @@ class SourceService:
 
     def detail(self, source, url):
         url = self._url(source, url)
+        if source == 'stv':
+            return self._stv().detail(url)
         root = parse_html(self._load(url))
         if source == 'qq':
             title, author, cover, description = 'h1[itemprop=name]', '.book_info .author a', '.book_avatar', '.story-detail-info'
@@ -377,6 +407,8 @@ class SourceService:
 
     def chapter(self, source, url):
         url = self._url(source, url)
+        if source == 'stv':
+            return self._stv().chapter(url)
         raw = self._load(url)
         root = parse_html(raw)
         if source == 'qq':
@@ -392,12 +424,12 @@ class SourceService:
             return {'html': sanitize_html(markup, url), 'text': '', 'images': images}
         content = root.first('.chapter-c' if source == 'full' else '#chapter-content')
         if not content:
-            raise SourceError('Không tìm thấy nội dung chương; nguồn có thể yêu cầu đăng nhập hoặc kiểm tra trình duyệt')
+            raise SourceError('Không tìm thấy nội dung chương; nguồn có thể yêu cầu đăng nhập hoặc kiểm tra trình duyệt', code='parse_error')
         markup = _decode_hako(content) if source == 'hako' else content.inner_html()
         guest = bool(source == 'hako' and re.search(r'\bisLoggedIn\s*=\s*false\b', raw))
         clean = sanitize_html(markup, url, allow_images=not guest)
         text = html_to_text(clean)
         images = [node.get('src') for node in parse_html(clean).select('img')]
         if not text and not images:
-            raise SourceError('Nội dung chương trống; chưa tải được nội dung')
+            raise SourceError('Nội dung chương trống; chưa tải được nội dung', code='parse_error')
         return {'html': clean, 'text': text, 'images': images}

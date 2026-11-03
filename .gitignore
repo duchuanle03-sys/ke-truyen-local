@@ -5,6 +5,7 @@
 !README.md
 !Start.cmd
 !documents.py
+!browser_source.py
 !htmltools.py
 !legacy_formats.py
 !library.py
@@ -14,6 +15,8 @@
 !run.py
 !server.py
 !sources.py
+!source_errors.py
+!stv_source.py
 !shortcuts.py
 !tts.py
 !/web/
@@ -25,6 +28,7 @@
 !/windows/pdfocr.ps1
 !/windows/tts.ps1
 !/windows/shortcut.ps1
+!/windows/browser-source.ps1
 !/tests/
 !/tests/test_*.py
 !/tests/fixtures/

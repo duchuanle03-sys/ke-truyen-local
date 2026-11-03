@@ -25,6 +25,8 @@ from htmltools import html_to_text, sanitize_html, safe_raster_data_url
 from library import Store
 from qt import QtDictionary
 from sources import SourceService, validate_public_url, safe_fetch_bytes
+from source_errors import SourceError, SourceAccessError
+from browser_source import BrowserSource
 
 ROOT = Path(__file__).resolve().parent
 MAX_BODY = 128 * 1024 * 1024
@@ -52,7 +54,7 @@ def public_content(value):
 class App:
     def __init__(self, data_dir, source_service=None):
         self.store = Store(data_dir)
-        self.sources = source_service or SourceService()
+        self.sources = source_service or SourceService(browser=BrowserSource(self.store.data_dir))
         self.qt = QtDictionary(self.store.data_dir)
         self.uploads = self.store.data_dir / "files"
         self.uploads.mkdir(exist_ok=True)
@@ -72,14 +74,23 @@ class App:
 
     def chapter(self, book_id, index):
         book = self.store.get_book(book_id)
-        chapter = self.store.content(book_id, index)
-        if not chapter["downloaded"]:
-            if book["source"] not in ("qq", "full", "hako"):
-                raise ValueError("Chương chưa có nội dung. Hãy nhập tệp hoặc chọn lại nguồn tương ứng.")
-            content = self.sources.chapter(book["source"], chapter["url"])
-            chapter = self.store.save_content(book_id, index, content)
+        chapter = self._chapter_content(book, index)
         chapter["images"] = ["/api/image?" + urlencode({"url": url, "referer": book["path"]})
                              if url.startswith(("http://", "https://")) else url for url in chapter["images"]]
+        return chapter
+
+    def _chapter_content(self, book, index):
+        book_id = book['id']
+        chapter = self.store.content(book_id, index)
+        if not chapter["downloaded"]:
+            if book["source"] not in ("qq", "full", "hako", "stv"):
+                raise ValueError("Chương chưa có nội dung. Hãy nhập tệp hoặc chọn lại nguồn tương ứng.")
+            try:
+                content = self.sources.chapter(book["source"], chapter["url"])
+            except SourceAccessError as error:
+                self.store.chapter_access(book_id, index, error.access)
+                raise
+            chapter = self.store.save_content(book_id, index, content)
         return chapter
 
     def add_source(self, source, url):
@@ -225,10 +236,7 @@ class App:
                     job["status"] = "cancelled"
                     return
                 book = self.store.get_book(job["book_id"])
-                raw = self.store.content(job["book_id"], index)
-                if not raw["downloaded"]:
-                    raw = self.store.save_content(job["book_id"], index,
-                          self.sources.chapter(book["source"], raw["url"]))
+                raw = self._chapter_content(book, index)
                 for url in raw["images"]:
                     if url.startswith(("http://", "https://")):
                         self.image(url, book["path"])
@@ -237,6 +245,10 @@ class App:
         except Exception as error:
             job["status"] = "failed"
             job["error"] = str(error)
+            if isinstance(error, SourceError):
+                job['error_code'] = error.code
+                if isinstance(error, SourceAccessError):
+                    job['access'] = error.access
 
     def job_action(self, job_id, action):
         with self.lock:
@@ -396,6 +408,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self._guard()
             self._route()
+        except SourceError as error:
+            result = {'error': str(error), 'code': error.code}
+            if error.http_status is not None:
+                result['http_status'] = error.http_status
+            if isinstance(error, SourceAccessError):
+                result['access'] = error.access
+            status = 403 if error.code in ('vip_locked', 'auth_required') else 503 if error.code in ('network_error', 'source_timeout') else 400
+            self._reply(status, result)
         except PermissionError as error:
             self._reply(403, {"error": str(error)})
         except (KeyError, FileNotFoundError) as error:
@@ -501,6 +521,11 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 5 and method == "GET":
                     return self._reply(200, self.app.chapter(book_id, index))
                 if len(parts) == 6 and method == "POST":
+                    if parts[5] == 'original':
+                        self._json()
+                        book = store.get_book(book_id)
+                        chapter = store.content(book_id, index)
+                        return self._reply(200, self.app.sources.open_original(book['source'], chapter['url']))
                     if parts[5] == "edit":
                         body = self._json()
                         text = str(body.get("text", html_to_text(body.get("html", ""))))

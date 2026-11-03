@@ -9,6 +9,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   let scroller, sheet, content, status, progressBar, chapterTitle, previousButton, nextButton, selectionTip, speechBar;
   let saveTimer, resizeTimer, progressChain = Promise.resolve(), loading = false, dirty = false, lastSelection = '';
   let imagePage = 0, autoFrame = 0, autoLast = 0, lastReadingPosition = 0;
+  let lastReadable = null, savedReading = null;
   let voices = [], speechChunks = [], speechIndex = 0, speaking = false, paused = false, speechGeneration = 0, sleepTimer, sleepDeadline = 0, voiceSelect = null, speechStatus = null;
   let wakeLock = null;
   const synth = window.speechSynthesis;
@@ -51,21 +52,21 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     updateStatus();
   }
 
-  function record() { return book && chapter ? { id: book.id, index, position: position() } : null; }
+  function record() { return book && chapter && !loading ? { id: book.id, index, position: position() } : null; }
   function saveProgress(quiet = false) {
     clearTimeout(saveTimer);
     const entry = record();
     if (!entry || !dirty) return progressChain;
     dirty = false;
     progressChain = progressChain.catch(() => {}).then(() => api(`/api/books/${encodeURIComponent(entry.id)}/progress`, { index: entry.index, position: entry.position })).catch((error) => {
-      dirty = true;
+      if (book?.id === entry.id && chapter && index === entry.index && !loading) dirty = true;
       if (!quiet) notify(`Chưa lưu được vị trí đọc: ${error.message}`, true);
     });
     return progressChain;
   }
 
   function scheduleSave() {
-    if (loading) return;
+    if (loading || !chapter) return;
     dirty = true;
     updateStatus();
     clearTimeout(saveTimer);
@@ -115,14 +116,14 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     sheet = el('article', { class: 'reading-sheet', 'aria-label': 'Nội dung chương' }, [chapterTitle, content]);
     scroller = el('div', { class: 'reader-scroll', tabindex: '0' }, [sheet]);
     scroller.addEventListener('scroll', () => {
-      if (!loading && prefs.mode === 'paged' && book.kind !== 'comic') {
+      if (chapter && !loading && prefs.mode === 'paged' && book.kind !== 'comic') {
         const aligned = Math.round(scroller.scrollLeft / pageStep()) * pageStep();
         if (Math.abs(scroller.scrollLeft - aligned) > 1) scroller.scrollLeft = aligned;
       }
       scheduleSave();
     }, { passive: true });
     scroller.addEventListener('wheel', (event) => {
-      if (prefs.mode !== 'paged' || event.ctrlKey || event.shiftKey || event.altKey || document.getElementById('dialog').open) return;
+      if (!chapter || loading || prefs.mode !== 'paged' || event.ctrlKey || event.shiftKey || event.altKey || document.getElementById('dialog').open) return;
       if (window.getSelection()?.toString()) return;
       event.preventDefault();
       const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
@@ -149,7 +150,10 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     });
     status = el('span', { class: 'reader-status', role: 'status' });
     progressBar = el('span');
-    previousButton = button('‹ Chương trước', () => loadChapter(index - 1));
+    previousButton = button('‹ Chương trước', () => {
+      const target = chapter ? { index: index - 1, position: 0 } : previousReading();
+      if (target) loadChapter(target.index, target.position);
+    });
     nextButton = button('Chương sau ›', () => loadChapter(index + 1), true);
     selectionTip = el('div', { class: 'reader-selection-tip', hidden: true }, [button('Ghi chú', () => editNote()), button('Nghe đoạn chọn', () => { startSpeech(lastSelection); selectionTip.hidden = true; }), button('Từ điển', () => { selectionTip.hidden = true; openDictionary(book); })]);
     speechBar = el('div', { class: 'tts-transport', hidden: true }, [icon('Ⅱ', 'Tạm dừng hoặc tiếp tục nghe', togglePause), el('span', { class: 'speech-bar-label', text: 'Đang đọc…' }), icon('■', 'Dừng đọc', stopSpeech), icon('⚙', 'Thiết lập giọng đọc', voiceDialog)]);
@@ -158,16 +162,23 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   }
 
   async function open(selected, atIndex, atPosition) {
-    if (book) await saveProgress();
-    stopSpeech(); stopAutoScroll();
     const token = ++generation;
+    const saved = book ? saveProgress() : progressChain;
+    stopSpeech(); stopAutoScroll();
+    loading = true; chapter = null; dirty = false;
+    await saved;
+    if (token !== generation) return;
     book = selected;
+    lastReadable = null;
+    const savedIndex = Number(book.chapter_index);
+    savedReading = Number.isInteger(savedIndex) ? { index: savedIndex, position: clamp(book.position, 0, 1) } : null;
     prefs = { ...defaults, ...getSettings() };
     chapters = []; chapter = null; index = Number(atIndex ?? book.chapter_index) || 0;
     const initialPosition = Number(atPosition ?? book.position) || 0;
     root.hidden = false; app.inert = true; document.body.style.overflow = 'hidden';
     root.dataset.kind = book.kind === 'comic' ? 'comic' : 'text';
     buildShell();
+    root.dataset.state = 'loading';
     content.append(el('p', { class: 'reader-loading', text: 'Đang mở mục lục…' }));
     try {
       const result = await api(path('/chapters'));
@@ -186,7 +197,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     root.hidden = true; root.classList.remove('is-focused'); app.inert = false; document.body.style.overflow = '';
-    book = null; chapter = null;
+    book = null; chapter = null; dirty = false; lastReadable = savedReading = null;
     document.getElementById('main').focus({ preventScroll: true });
     onClose();
   }
@@ -194,39 +205,76 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   async function loadChapter(next, pos = 0, save = true, continueSpeech = false) {
     if (next < 0 || next >= chapters.length) return;
     const token = ++generation;
-    stopAutoScroll();
-    if (save) await saveProgress();
-    if (token !== generation) return;
-    stopSpeech();
-    loading = true;
+    stopAutoScroll(); stopSpeech();
+    const previous = record();
+    if (previous) lastReadable = previous;
+    const saved = save ? saveProgress() : progressChain;
+    loading = true; dirty = false;
     selectionTip.hidden = true; lastSelection = '';
     index = next; chapter = null; imagePage = 0;
+    root.dataset.state = 'loading';
     chapterTitle.textContent = chapters[index].title || `Chương ${index + 1}`;
     content.replaceChildren(el('p', { class: 'reader-loading', text: 'Đang lấy nội dung chương… Nội dung tải được sẽ lưu trên máy.' }));
     scroller.scrollTop = scroller.scrollLeft = 0;
     status.textContent = `Đang mở chương ${index + 1}/${chapters.length}…`;
     previousButton.disabled = nextButton.disabled = true;
+    await saved;
+    if (token !== generation) return;
     try {
       const result = await api(path(`/chapters/${index}`));
       if (token !== generation) return;
       chapter = result; lastReadingPosition = clamp(pos, 0, 1);
-      if (prefs.qt !== 'original' && book.kind !== 'comic') {
+      if (prefs.qt !== 'original' && book.kind !== 'comic' && !sourceVietnamese()) {
         try { await renderChapter(pos); }
         catch (error) { if (token !== generation) return; renderOriginal(); notify(`QT chưa dùng được: ${error.message} Đang hiển thị nguyên văn.`, true); }
       } else renderOriginal();
       if (token !== generation) return;
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (token !== generation) return;
       restorePosition(pos);
-      loading = false; dirty = true;
+      loading = false; dirty = true; root.dataset.state = 'reading';
+      lastReadable = record();
       await saveProgress();
-      if (continueSpeech) startSpeech();
-    } catch (error) { if (token === generation) { loading = false; showReadError(error, () => loadChapter(next, pos, false)); } }
+      if (token === generation && continueSpeech) startSpeech();
+    } catch (error) { if (token === generation) showReadError(error, () => loadChapter(next, pos, false)); }
+  }
+
+  function previousReading() {
+    if (lastReadable) return lastReadable;
+    if (savedReading && savedReading.index !== index && savedReading.index >= 0 && savedReading.index < chapters.length) return savedReading;
+    return index > 0 && index < chapters.length ? { index: index - 1, position: 0 } : null;
   }
 
   function showReadError(error, retry) {
-    content.replaceChildren(el('div', { class: 'reader-loading' }, [el('h2', { text: 'Chưa mở được nội dung' }), el('p', { class: 'inline-error', text: error.message }), el('p', { class: 'muted', text: 'Sách và vị trí đã lưu vẫn ở trên kệ. Bạn có thể thử lại hoặc chọn chương khác.' }), button('Thử lại', retry, true), button('Mở mục lục', tocDialog)]));
-    status.textContent = 'Chưa có nội dung'; previousButton.disabled = index <= 0; nextButton.disabled = index >= chapters.length - 1;
+    stopSpeech(); stopAutoScroll(); clearTimeout(saveTimer);
+    loading = false; chapter = null; dirty = false; root.dataset.state = 'error';
+    selectionTip.hidden = true; lastSelection = '';
+    const vip = error.code === 'vip_locked' && error.access?.vip === true && typeof error.access.evidence === 'string' && error.access.evidence.trim();
+    if (vip && chapters[index]) chapters[index].is_vip = true;
+    const auth = error.code === 'auth_required';
+    const unverified = !vip && ['vip_locked', 'access_unverified'].includes(error.code);
+    const titles = { network_error: 'Chưa kết nối được nguồn', source_timeout: 'Nguồn phản hồi quá lâu', browser_unavailable: 'Trình duyệt nguồn chưa sẵn sàng', browser_error: 'Chưa kết nối được trình duyệt nguồn', parse_error: 'Chưa nhận diện được nội dung chương', http_error: `Nguồn trả về lỗi HTTP${error.http_status ? ` ${error.http_status}` : ''}` };
+    const title = vip ? 'Chương VIP chưa thể đọc' : auth ? 'Cần đăng nhập tại website gốc' : unverified ? 'Chưa xác minh quyền truy cập' : titles[error.code] || 'Chưa mở được nội dung';
+    const message = vip ? 'Website gốc xác nhận chương VIP và phiên truy cập hiện tại chưa có quyền đọc. Hãy mở đúng chương trên website gốc để kiểm tra quyền truy cập, rồi thử lại.' : auth ? 'Website gốc yêu cầu đăng nhập. Hãy đăng nhập tại website gốc trong cửa sổ được mở, rồi quay lại thử đọc.' : unverified ? 'Chưa xác minh được quyền đọc chương này. Hãy kiểm tra nội dung và phiên đăng nhập trên website gốc, rồi thử lại.' : error.message;
+    const target = previousReading();
+    const previous = button('Quay về chương trước', () => { if (target) loadChapter(target.index, target.position, false); });
+    previous.disabled = !target;
+    const actions = [previous, button('Thử lại', retry, true), button('Mở mục lục', tocDialog)];
+    if (chapters[index]) {
+      const originalPath = path(`/chapters/${index}/original`), token = generation;
+      actions.unshift(button('Mở trên website gốc', async (event) => {
+        const control = event.currentTarget;
+        control.disabled = true;
+        try { await api(originalPath, {}); if (token === generation) notify('Đã mở chương trên website gốc. Kiểm tra quyền đọc tại đó rồi thử lại.'); }
+        catch (problem) { if (token === generation) notify(problem.message, true); }
+        finally { control.disabled = false; }
+      }));
+    }
+    content.replaceChildren(el('div', { class: 'reader-loading reader-access-error', role: 'alert' }, [vip ? el('span', { class: 'vip-label', text: 'VIP' }) : null, el('h2', { text: title }), el('p', { class: 'inline-error', text: message }), el('p', { class: 'muted', text: 'Sách và vị trí đã lưu vẫn ở trên kệ. Bạn có thể thử lại hoặc chọn chương khác.' }), el('div', { class: 'reader-access-actions' }, actions)]));
+    status.textContent = 'Chưa có nội dung'; previousButton.disabled = !target; nextButton.disabled = index >= chapters.length - 1;
   }
+
+  function sourceVietnamese() { return chapter?.language === 'vi' && chapter?.translation === 'source'; }
 
   function safeUrl(value) {
     if (typeof value !== 'string' || !value.trim()) return '';
@@ -294,10 +342,11 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   }
 
   async function renderChapter(pos = position()) {
+    if (!chapter) return;
     stopSpeech();
     const token = generation;
     renderOriginal();
-    if (prefs.qt === 'original' || book.kind === 'comic') { requestAnimationFrame(() => restorePosition(pos)); return; }
+    if (prefs.qt === 'original' || book.kind === 'comic' || sourceVietnamese()) { requestAnimationFrame(() => { if (token === generation) restorePosition(pos); }); return; }
     const original = content.innerText || chapter.text || '';
     if (!original.trim()) return;
     const result = await api('/api/qt', { text: original, book_id: book.id });
@@ -312,7 +361,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
       else { const originalBox = el('section', { class: 'qt-source' }); appendParagraphs(original, originalBox); content.append(originalBox); appendParagraphs(result.text, content); }
     } else appendParagraphs(result.text, content);
     content.append(...images);
-    requestAnimationFrame(() => restorePosition(pos));
+    requestAnimationFrame(() => { if (token === generation) restorePosition(pos); });
     if (result.warning) notify(result.warning);
     else if (result.text === original) notify('QT chưa thay đổi văn bản. Kiểm tra từ điển đã nhập và ngôn ngữ nội dung.');
   }
@@ -347,7 +396,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     function render() {
       const q = query.value.trim().toLocaleLowerCase('vi');
       const items = chapters.map((item, i) => ({ ...item, index: Number.isInteger(item.index) ? item.index : i })).filter((item) => !q || `${item.index + 1} ${item.title}`.toLocaleLowerCase('vi').includes(q));
-      list.replaceChildren(...items.map((item) => el('button', { class: `toc-item${item.index === index ? ' active' : ''}`, onclick: () => { dialog.close(); loadChapter(item.index); } }, [el('span', { text: item.title || `Chương ${item.index + 1}` }), item.downloaded ? el('span', { class: 'cached', text: 'Đã lưu' }) : null])));
+      list.replaceChildren(...items.map((item) => el('button', { class: `toc-item${item.index === index ? ' active' : ''}`, onclick: () => { dialog.close(); loadChapter(item.index); } }, [el('span', { class: 'toc-title' }, [item.title || `Chương ${item.index + 1}`, item.is_vip === true ? el('span', { class: 'toc-vip', text: '🔒', role: 'img', 'aria-label': 'Chương VIP theo mục lục nguồn; quyền đọc chưa được kiểm tra', title: 'Chương VIP theo mục lục nguồn; quyền đọc chưa được kiểm tra' }) : null]), item.downloaded ? el('span', { class: 'cached', text: 'Đã lưu' }) : null])));
       if (!items.length) list.append(el('p', { class: 'muted', text: 'Không có chương phù hợp.' }));
     }
     query.oninput = render; render();
@@ -373,8 +422,11 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   }
 
   function qtDialog() {
+    if (!chapter) { notify('Mở nội dung chương trước khi chọn chế độ QT.'); return; }
+    const translatedAtSource = sourceVietnamese();
     const choose = el('select', { 'aria-label': 'Chế độ QT' }, [['original', 'Nguyên văn'], ['qt', 'Bản QT'], ['bilingual', 'Song ngữ xen đoạn']].map(([value, text]) => el('option', { value, text })));
-    choose.value = prefs.qt;
+    choose.value = translatedAtSource ? 'original' : prefs.qt;
+    choose.disabled = translatedAtSource;
     const error = el('p', { class: 'inline-error', hidden: true });
     choose.onchange = async () => {
       const pos = position(); prefs.qt = choose.value; saveSettings({ ...prefs }); error.hidden = true; choose.disabled = true;
@@ -382,7 +434,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
       catch (problem) { renderOriginal(); restorePosition(pos); error.textContent = `${problem.message} Đang hiển thị nguyên văn.`; error.hidden = false; }
       finally { choose.disabled = false; }
     };
-    showDialog('QT và từ điển', [el('p', { class: 'muted', text: 'QT sử dụng từ điển đã nhập trên máy. Chưa có bộ VietPhrase/Names thì nội dung có thể không đổi. Đây là dịch từ điển, không phải dịch AI.' }), el('label', { class: 'field', text: 'Nội dung hiển thị' }, [choose]), error], [button('Chỉnh từ điển truyện này', () => openDictionary(book)), button('Dịch lại chương', async () => { try { await renderChapter(); notify('Đã cập nhật nội dung theo từ điển hiện tại.'); } catch (problem) { error.textContent = problem.message; error.hidden = false; } }, true)]);
+    showDialog('QT và từ điển', [el('p', { class: 'muted', text: translatedAtSource ? 'Đang hiển thị bản tiếng Việt do website gốc cung cấp. QT cục bộ không áp dụng cho chương này.' : 'QT sử dụng từ điển đã nhập trên máy. Chưa có bộ VietPhrase/Names thì nội dung có thể không đổi. Đây là dịch từ điển, không phải dịch AI.' }), el('label', { class: 'field', text: 'Nội dung hiển thị' }, [choose]), error], [button('Chỉnh từ điển truyện này', () => openDictionary(book)), translatedAtSource ? null : button('Dịch lại chương', async () => { try { await renderChapter(); notify('Đã cập nhật nội dung theo từ điển hiện tại.'); } catch (problem) { error.textContent = problem.message; error.hidden = false; } }, true)].filter(Boolean));
   }
 
   function searchDialog() {
@@ -484,6 +536,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   }
 
   function startAutoScroll() {
+    if (!chapter || loading) { notify('Chưa có nội dung chương để tự cuộn.'); return; }
     if (prefs.mode !== 'scroll') { notify('Chuyển sang cuộn dọc để dùng tự cuộn.'); return; }
     stopAutoScroll();
     autoLast = performance.now();
@@ -657,7 +710,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   synth?.addEventListener('voiceschanged', refreshVoices);
 
   document.addEventListener('selectionchange', () => {
-    if (root.hidden || !content) return;
+    if (root.hidden || !content || !chapter || loading) return;
     const selection = window.getSelection();
     const valid = selection && selection.toString().trim() && content.contains(selection.anchorNode) && content.contains(selection.focusNode);
     if (valid) lastSelection = selection.toString();
@@ -677,7 +730,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     const pos = lastReadingPosition; clearTimeout(resizeTimer); resizeTimer = setTimeout(() => restorePosition(pos), 100);
   });
   window.addEventListener('dictionarychange', async (event) => {
-    if (!book || !chapter || prefs.qt === 'original' || !['*', book.id].includes(event.detail)) return;
+    if (!book || !chapter || loading || sourceVietnamese() || prefs.qt === 'original' || !['*', book.id].includes(event.detail)) return;
     const pos = position();
     try { await renderChapter(pos); }
     catch (error) { notify(`Đã lưu từ điển nhưng chưa cập nhật được chương: ${error.message}`, true); }

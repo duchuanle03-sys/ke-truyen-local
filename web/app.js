@@ -27,11 +27,31 @@ async function api(path, data, options = {}) {
       body: data === undefined ? options.body : JSON.stringify(data),
     });
   } catch {
-    throw new Error('Không kết nối được ứng dụng cục bộ. Hãy kiểm tra cửa sổ máy chủ rồi thử lại.');
+    const error = new Error('Không kết nối được ứng dụng cục bộ. Hãy kiểm tra cửa sổ máy chủ rồi thử lại.');
+    error.code = 'network_error';
+    throw error;
   }
   const type = response.headers.get('content-type') || '';
-  const result = type.includes('json') ? await response.json() : await response.text();
-  if (!response.ok) throw new Error(result.error || `Yêu cầu thất bại (${response.status}). ${typeof result === 'string' ? result.slice(0, 200) : ''}`);
+  let result;
+  try { result = type.includes('json') ? await response.json() : await response.text(); }
+  catch {
+    const error = new Error('Phản hồi của máy chủ chưa có nội dung hợp lệ. Hãy thử lại.');
+    error.code = 'parse_error'; error.http_status = response.status;
+    throw error;
+  }
+  if (!response.ok) {
+    const error = new Error(typeof result?.error === 'string' ? result.error : `Yêu cầu thất bại (${response.status}). ${typeof result === 'string' ? result.slice(0, 200) : ''}`);
+    error.code = typeof result?.code === 'string' ? result.code : 'http_error';
+    error.http_status = Number.isInteger(result?.http_status) ? result.http_status : response.status;
+    if (result?.access && typeof result.access === 'object') {
+      error.access = {
+        vip: typeof result.access.vip === 'boolean' ? result.access.vip : null,
+        state: typeof result.access.state === 'string' ? result.access.state : '',
+        evidence: typeof result.access.evidence === 'string' ? result.access.evidence : '',
+      };
+    }
+    throw error;
+  }
   return result;
 }
 

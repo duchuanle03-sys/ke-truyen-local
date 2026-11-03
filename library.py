@@ -132,12 +132,12 @@ class Store:
                       hashlib.sha256((source + ":" + path).encode()).hexdigest()[:32])
         # A source refresh must reuse imported shelf IDs rather than split reading history.
         existing = db.execute("SELECT id FROM books WHERE source=? AND path=?", (source, path)).fetchone() if path else None
-        if not existing and source in ("qq", "full", "hako") and path:
+        if not existing and source in ("qq", "full", "hako", "stv") and path:
             existing = next((row for row in db.execute("SELECT id,path FROM books WHERE source=?", (source,))
                              if _chapter_key(row["path"]) == _chapter_key(path)), None)
         if existing and "id" not in book and "book_id" not in book:
             book_id = existing["id"]
-        if chapters is not None and source in ('qq', 'full', 'hako'):
+        if chapters is not None and source in ('qq', 'full', 'hako', 'stv'):
             old_urls = [_chapter_key(row['url']) for row in db.execute(
                 'SELECT url FROM chapters WHERE book_id=? ORDER BY idx', (book_id,))]
             new_urls = [_chapter_key(chapter.get('url', chapter.get('path', ''))) for chapter in chapters]
@@ -171,8 +171,14 @@ class Store:
             for index, chapter in enumerate(chapters):
                 title = str(chapter.get("title", chapter.get("name", "")) or "Chương " + str(index + 1))
                 url = str(chapter.get("url", chapter.get("path", "")) or "")
-                old = db.execute("SELECT url FROM chapters WHERE book_id=? AND idx=?", (book_id, index)).fetchone()
-                if old and _chapter_key(old["url"]) != _chapter_key(url):
+                old = db.execute("SELECT url,raw FROM chapters WHERE book_id=? AND idx=?", (book_id, index)).fetchone()
+                same_url = old and _chapter_key(old['url']) == _chapter_key(url)
+                metadata = json.loads(old['raw']) if same_url else {}
+                metadata.update({key: value for key, value in chapter.items()
+                                 if value is not None or key not in ('language', 'translation', 'is_vip', 'access')})
+                if chapter.get('is_vip') is False:
+                    metadata.pop('access', None)
+                if old and not same_url:
                     db.execute("UPDATE chapters SET html='',text='',images='[]',downloaded=0,"
                                "original_html=NULL,original_text=NULL WHERE book_id=? AND idx=?", (book_id, index))
                 has_body = bool(chapter.get("html") or chapter.get("text") or chapter.get("images"))
@@ -181,15 +187,21 @@ class Store:
                     VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id,idx) DO UPDATE SET
                     title=excluded.title,url=excluded.url,raw=excluded.raw
                 """, (book_id, index, title, url, chapter.get("html", ""), chapter.get("text", ""),
-                      _json(chapter.get("images", [])), int(has_body), _json(chapter)))
+                      _json(chapter.get("images", [])), int(has_body), _json(metadata)))
         return self._book(db.execute("SELECT * FROM books WHERE id=?", (book_id,)).fetchone())
 
     def chapters(self, book_id):
         self.get_book(book_id)
         with self.db() as db:
-            return [dict(row) | {"index": row["idx"], "downloaded": bool(row["downloaded"])}
-                    for row in db.execute("SELECT idx,title,url,downloaded FROM chapters WHERE book_id=? ORDER BY idx",
-                                          (book_id,))]
+            result = []
+            for row in db.execute('SELECT idx,title,url,downloaded,raw FROM chapters WHERE book_id=? ORDER BY idx', (book_id,)):
+                item = dict(row)
+                metadata = json.loads(item.pop('raw'))
+                if type(metadata.get('is_vip')) is bool:
+                    item['is_vip'] = metadata['is_vip']
+                item.update(index=item['idx'], downloaded=bool(item['downloaded']))
+                result.append(item)
+            return result
 
     def content(self, book_id, index):
         with self.db() as db:
@@ -200,16 +212,34 @@ class Store:
         item["index"] = item.pop("idx")
         item["images"] = json.loads(item["images"])
         item["downloaded"] = bool(item["downloaded"])
-        item.pop("raw", None)
+        metadata = json.loads(item.pop('raw'))
+        if type(metadata.get('is_vip')) is bool:
+            item['is_vip'] = metadata['is_vip']
+        if metadata.get('translation') == 'source' and metadata.get('language') == 'vi':
+            item.update(translation='source', language='vi')
         return item
 
     def save_content(self, book_id, index, content):
         self.content(book_id, index)
         with self.db() as db:
-            db.execute("UPDATE chapters SET html=?,text=?,images=?,downloaded=1 WHERE book_id=? AND idx=?",
+            metadata = json.loads(db.execute('SELECT raw FROM chapters WHERE book_id=? AND idx=?', (book_id, index)).fetchone()['raw'])
+            if content.get('translation') == 'source' and content.get('language') == 'vi':
+                metadata.update(translation='source', language='vi')
+            metadata.pop('access', None)
+            db.execute("UPDATE chapters SET html=?,text=?,images=?,downloaded=1,raw=? WHERE book_id=? AND idx=?",
                        (content.get("html", ""), content.get("text", ""), _json(content.get("images", [])),
-                        book_id, int(index)))
+                        _json(metadata), book_id, int(index)))
         return self.content(book_id, index)
+
+    def chapter_access(self, book_id, index, access):
+        if (access.get('state') != 'vip_locked' or access.get('vip') is not True
+                or not isinstance(access.get('evidence'), str) or not access['evidence'].strip()):
+            return
+        self.content(book_id, index)
+        with self.db() as db:
+            metadata = json.loads(db.execute('SELECT raw FROM chapters WHERE book_id=? AND idx=?', (book_id, index)).fetchone()['raw'])
+            metadata.update(is_vip=True, access=access)
+            db.execute('UPDATE chapters SET raw=? WHERE book_id=? AND idx=?', (_json(metadata), book_id, index))
 
     def edit_content(self, book_id, index, content):
         old = self.content(book_id, index)
@@ -236,6 +266,10 @@ class Store:
         if not math.isfinite(position) or not 0 <= position <= 1 or not 0 <= index < book["chapter_count"]:
             raise ValueError("Vị trí đọc không hợp lệ.")
         with self.db() as db:
+            chapter = db.execute('SELECT downloaded,raw FROM chapters WHERE book_id=? AND idx=?', (book_id, index)).fetchone()
+            access = json.loads(chapter['raw']).get('access') if chapter else None
+            if chapter and not chapter['downloaded'] and isinstance(access, dict) and access.get('state') == 'vip_locked':
+                raise ValueError('Chương VIP chưa đọc được; vị trí đọc trước đó được giữ nguyên.')
             db.execute("UPDATE books SET chapter_index=?,position=?,progress=?,read_at=? WHERE id=?",
                        (index, position, (index + position) / book["chapter_count"], time.time(), book_id))
         return self.get_book(book_id)
