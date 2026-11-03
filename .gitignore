@@ -14,6 +14,7 @@
 !run.py
 !server.py
 !sources.py
+!shortcuts.py
 !tts.py
 !/web/
 !/web/app.js
@@ -23,6 +24,7 @@
 !/windows/
 !/windows/pdfocr.ps1
 !/windows/tts.ps1
+!/windows/shortcut.ps1
 !/tests/
 !/tests/test_*.py
 !/tests/fixtures/

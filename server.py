@@ -1,9 +1,11 @@
 """Loopback-only application API; original exports are never served as files."""
+import base64
 import hashlib
 import html
 import json
 import logging
 import mimetypes
+import os
 import re
 import socket
 import threading
@@ -173,6 +175,27 @@ class App:
                 raise ValueError('Không tải được bìa cũ hoặc bìa trên trang nguồn: ' + str(error)) from original
             self.store.update_book(book_id, {'cover': metadata['cover']})
             return body
+
+    def shortcut(self, book_id, port):
+        from shortcuts import create_shortcut
+        book = self.store.get_book(book_id)
+        if book['trashed_at']:
+            raise ValueError('Hãy khôi phục truyện khỏi thùng rác trước khi tạo lối tắt.')
+        cover_bytes = b''
+        if book['cover']:
+            embedded = safe_raster_data_url(book['cover'])
+            if embedded:
+                cover_bytes = base64.b64decode(embedded.partition(',')[2], validate=True)
+            else:
+                try:
+                    cover_bytes, _ = self.cover(book_id)
+                except (ValueError, OSError):
+                    pass
+        result = create_shortcut(book_id=book['id'], title=book['name'], cover_bytes=cover_bytes,
+                                 data_dir=self.store.data_dir, port=port)
+        if not result['used_cover']:
+            result['warning'] = 'Chưa lấy được bìa hợp lệ; lối tắt dùng biểu tượng mặc định.'
+        return result
 
     def download(self, book_id, start=0, count=-1):
         book = self.store.get_book(book_id)
@@ -394,6 +417,8 @@ class Handler(BaseHTTPRequestHandler):
         parts = [piece for piece in path.split("/") if piece]
         method = "GET" if self.command == "HEAD" else self.command
         store = self.app.store
+        if path == '/api/instance' and method == 'GET':
+            return self._reply(200, {'app': 'ke-truyen-local', 'data_directory': str(store.data_dir), 'pid': os.getpid()})
         if not path.startswith("/api/"):
             if method != "GET":
                 raise KeyError("Không có đường dẫn này.")
@@ -439,6 +464,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply(200, self.app.purge_book(book_id))
             if len(parts) == 4:
                 action = parts[3]
+                if action == 'shortcut' and method == 'POST':
+                    self._json()
+                    return self._reply(200, self.app.shortcut(book_id, self.server.server_address[1]))
                 if action == 'trash' and method == 'POST':
                     self._json()
                     return self._reply(200, self.app.trash_book(book_id))

@@ -64,6 +64,56 @@ class HTTPTests(unittest.TestCase):
         result = json.loads(self.request("/api/settings")[1])
         self.assertEqual(result["fontSize"], 24)
 
+    def test_instance_identifies_the_local_app_and_library(self):
+        status, body, _ = self.request('/api/instance')
+        self.assertEqual(status, 200)
+        instance = json.loads(body)
+        self.assertEqual(instance['app'], 'ke-truyen-local')
+        self.assertEqual(Path(instance['data_directory']), self.server.app.store.data_dir)
+        self.assertIsInstance(instance['pid'], int)
+
+    def test_shortcut_uses_saved_cover_and_actual_port_without_changing_reading_state(self):
+        image = b'\x89PNG\r\n\x1a\n' + b'cover'
+        store = self.server.app.store
+        book = store.upsert_book({'id': 'shortcut-book', 'name': 'Book',
+            'cover': 'data:image/png;base64,' + base64.b64encode(image).decode()},
+            [{'title': 'One', 'text': 'Keep this chapter'}])
+        store.progress(book['id'], 0, .6)
+        store.save_note({'id': 'shortcut-note', 'book_id': book['id'], 'note': 'Keep this'})
+        before = store.get_book(book['id'])
+        def create(**kwargs):
+            self.assertEqual(kwargs['book_id'], book['id'])
+            self.assertEqual(kwargs['cover_bytes'], image)
+            self.assertEqual(kwargs['port'], self.server.server_address[1])
+            self.assertEqual(kwargs['data_dir'], store.data_dir)
+            return {'path': 'temporary-desktop/book.lnk', 'used_cover': True}
+        with patch('shortcuts.create_shortcut', side_effect=create):
+            status, body, _ = self.request('/api/books/shortcut-book/shortcut', {})
+        self.assertEqual(status, 200, body)
+        self.assertTrue(json.loads(body)['used_cover'])
+        self.assertEqual(store.get_book(book['id']), before)
+        self.assertEqual(store.notes(book['id'])[0]['note'], 'Keep this')
+
+    def test_shortcut_cannot_be_created_by_get_cross_origin_or_for_trashed_book(self):
+        store = self.server.app.store
+        store.upsert_book({'id': 'shortcut-book', 'name': 'Book'})
+        with patch('shortcuts.create_shortcut', side_effect=AssertionError('Must not write a shortcut')):
+            self.assertEqual(self.request('/api/books/shortcut-book/shortcut')[0], 404)
+            self.assertEqual(self.request('/api/books/shortcut-book/shortcut', {}, {'Origin': 'https://other.example'})[0], 403)
+            store.trash_book('shortcut-book')
+            self.assertEqual(self.request('/api/books/shortcut-book/shortcut', {})[0], 400)
+
+    def test_shortcut_can_be_created_when_remote_cover_is_unavailable(self):
+        self.server.app.store.upsert_book({'id': 'no-cover', 'name': 'Book', 'source': 'hako',
+            'cover': 'https://images.example/dead.jpg'})
+        def create(**kwargs):
+            self.assertEqual(kwargs['cover_bytes'], b'')
+            return {'path': 'temporary-desktop/book.lnk', 'used_cover': False}
+        with patch.object(self.server.app, 'cover', side_effect=ValueError('404')), patch('shortcuts.create_shortcut', side_effect=create):
+            status, body, _ = self.request('/api/books/no-cover/shortcut', {})
+        self.assertEqual(status, 200, body)
+        self.assertTrue(json.loads(body)['warning'])
+
     def test_dictionary_pagination_is_bounded_at_http_boundary(self):
         for word in ['one', 'two', 'three']:
             self.server.app.qt.save('vp', word, word)

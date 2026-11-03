@@ -264,7 +264,19 @@ async function bookDetail(initial, fromSource = false) {
       finally { event.target.disabled = false; }
     } })]);
     dialog.body.append(download);
-    dialog.actions.replaceChildren(el('button', { class: 'button danger', text: 'Xóa khỏi kệ', onclick: () => confirmTrash(book) }), el('button', { class: 'button', text: 'Sửa thông tin', onclick: () => editBook(book) }), el('button', { class: 'button primary', text: percent(book) ? `Đọc tiếp · ${percent(book)}%` : 'Bắt đầu đọc', onclick: () => { dialog.close(); reader.open(book); } }));
+    const shortcut = el('button', { class: 'button', text: 'Thêm lối tắt', onclick: async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true; button.textContent = 'Đang tạo…'; status.hidden = true;
+      try {
+        const result = await api(`/api/books/${encodeURIComponent(book.id)}/shortcut`, {});
+        status.className = 'inline-info';
+        status.textContent = `Đã tạo lối tắt: ${result.path}${result.warning ? '\n' + result.warning : ''}`;
+        status.hidden = false;
+        notify('Đã tạo lối tắt trên Desktop.');
+      } catch (error) { status.className = 'inline-error'; status.textContent = error.message; status.hidden = false; }
+      finally { button.disabled = false; button.textContent = 'Thêm lối tắt'; }
+    } });
+    dialog.actions.replaceChildren(el('button', { class: 'button danger', text: 'Xóa khỏi kệ', onclick: () => confirmTrash(book) }), el('button', { class: 'button', text: 'Sửa thông tin', onclick: () => editBook(book) }), shortcut, el('button', { class: 'button primary', text: percent(book) ? `Đọc tiếp · ${percent(book)}%` : 'Bắt đầu đọc', onclick: () => { dialog.close(); reader.open(book); } }));
   }
 }
 
@@ -517,5 +529,17 @@ async function initialize() {
   document.querySelectorAll('[data-view]').forEach((button) => { button.classList.toggle('active', button.dataset.view === state.view); button.setAttribute('aria-pressed', String(button.dataset.view === state.view)); });
   await Promise.all([loadLibrary(), loadGroups()]);
   $('nav-count').textContent = state.books.length || '';
+  const locationUrl = new URL(location.href);
+  const requestedBook = locationUrl.searchParams.get('book');
+  if (requestedBook !== null) {
+    locationUrl.searchParams.delete('book');
+    history.replaceState(null, '', locationUrl.pathname + locationUrl.search + locationUrl.hash);
+    try {
+      if (!requestedBook || requestedBook.length > 256 || /[\x00-\x1f]/.test(requestedBook)) throw new Error('Mã truyện không hợp lệ.');
+      const selected = await api(`/api/books/${encodeURIComponent(requestedBook)}`);
+      if (selected.trashed_at) throw new Error('Truyện đang ở Thùng rác. Hãy khôi phục truyện để đọc tiếp.');
+      await reader.open(selected);
+    } catch (error) { notify(`Không mở được truyện từ lối tắt: ${error.message}`, true); }
+  }
 }
 initialize();
