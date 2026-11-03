@@ -1,6 +1,6 @@
-const defaults = { theme: 'sepia', mode: 'scroll', font: 'Georgia', size: 21, lineHeight: 1.85, paragraph: 1.15, letter: 0, word: 0, width: 760, align: 'left', indent: false, qt: 'original', rate: 1, pitch: 1, voice: '', sleep: 0, autoSpeed: 28, zoom: 100 };
+const defaults = { theme: 'sepia', mode: 'scroll', font: 'Times', size: 21, lineHeight: 1.85, paragraph: 1.15, letter: 0, word: 0, width: 760, align: 'left', indent: false, qt: 'original', rate: 1, pitch: 1, voice: '', sleep: 0, autoSpeed: 28, zoom: 100 };
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));
-const fonts = { Georgia: 'Georgia,"Times New Roman",serif', Times: '"Times New Roman",serif', Segoe: '"Segoe UI",Arial,sans-serif', Arial: 'Arial,sans-serif' };
+const fonts = { Times: '"Times New Roman",serif', Segoe: '"Segoe UI",Arial,sans-serif', Arial: 'Arial,sans-serif' };
 
 export function createReader({ api, el, notify, showDialog, getSettings, saveSettings, openDictionary, onClose }) {
   const root = document.getElementById('reader');
@@ -88,9 +88,10 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
 
   function applyPrefs(preserve = true) {
     const pos = preserve ? position() : 0;
+    if (!Object.hasOwn(fonts, prefs.font)) prefs.font = defaults.font;
     root.dataset.theme = ['sepia', 'night', 'day', 'system'].includes(prefs.theme) ? prefs.theme : 'sepia';
     root.dataset.mode = prefs.mode === 'paged' ? 'paged' : 'scroll';
-    root.style.setProperty('--reading-font', fonts[prefs.font] || fonts.Georgia);
+    root.style.setProperty('--reading-font', fonts[prefs.font]);
     root.style.setProperty('--font-size', `${clamp(prefs.size, 12, 40)}px`);
     root.style.setProperty('--line-height', clamp(prefs.lineHeight, 1.2, 3));
     root.style.setProperty('--paragraph-space', `${clamp(prefs.paragraph, 0, 3)}em`);
@@ -366,7 +367,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   }
   function settingsDialog() {
     const indent = el('input', { type: 'checkbox', checked: prefs.indent, onchange: () => changePref('indent', indent.checked) });
-    const grid = el('div', { class: 'reader-setting-grid' }, [selectControl('Nền đọc', 'theme', [['sepia', 'Giấy ấm'], ['day', 'Sáng'], ['night', 'Tối'], ['system', 'Theo hệ thống']]), selectControl('Cách đọc', 'mode', [['scroll', 'Cuộn dọc'], ['paged', book.kind === 'comic' ? 'Từng ảnh' : 'Lật trang ngang']]), selectControl('Phông chữ', 'font', [['Georgia', 'Georgia'], ['Times', 'Times New Roman'], ['Segoe', 'Segoe UI'], ['Arial', 'Arial']]), selectControl('Căn chữ', 'align', [['left', 'Căn trái'], ['justify', 'Căn đều'], ['center', 'Căn giữa'], ['right', 'Căn phải']]), rangeControl('Cỡ chữ', 'size', 12, 40, 1, ' px'), rangeControl('Giãn dòng', 'lineHeight', 1.2, 3, .05), rangeControl('Khoảng cách đoạn', 'paragraph', 0, 3, .1, ' em'), rangeControl('Độ rộng nội dung', 'width', 400, 1400, 20, ' px'), rangeControl('Giãn ký tự', 'letter', 0, 5, .25, ' px'), rangeControl('Giãn từ', 'word', 0, 10, .5, ' px'), el('label', { class: 'wide' }, [el('span', { text: 'Thụt đầu dòng' }), indent])]);
+    const grid = el('div', { class: 'reader-setting-grid' }, [selectControl('Nền đọc', 'theme', [['sepia', 'Giấy ấm'], ['day', 'Sáng'], ['night', 'Tối'], ['system', 'Theo hệ thống']]), selectControl('Cách đọc', 'mode', [['scroll', 'Cuộn dọc'], ['paged', book.kind === 'comic' ? 'Từng ảnh' : 'Lật trang ngang']]), selectControl('Phông chữ', 'font', [['Times', 'Times New Roman'], ['Segoe', 'Segoe UI'], ['Arial', 'Arial']]), selectControl('Căn chữ', 'align', [['left', 'Căn trái'], ['justify', 'Căn đều'], ['center', 'Căn giữa'], ['right', 'Căn phải']]), rangeControl('Cỡ chữ', 'size', 12, 40, 1, ' px'), rangeControl('Giãn dòng', 'lineHeight', 1.2, 3, .05), rangeControl('Khoảng cách đoạn', 'paragraph', 0, 3, .1, ' em'), rangeControl('Độ rộng nội dung', 'width', 400, 1400, 20, ' px'), rangeControl('Giãn ký tự', 'letter', 0, 5, .25, ' px'), rangeControl('Giãn từ', 'word', 0, 10, .5, ' px'), el('label', { class: 'wide' }, [el('span', { text: 'Thụt đầu dòng' }), indent])]);
     if (book.kind === 'comic') grid.prepend(rangeControl('Thu phóng ảnh khi cuộn · nháy đúp để phóng/thu', 'zoom', 50, 200, 10, '%'));
     showDialog('Cách đọc và giao diện', [grid, el('p', { class: 'muted small', text: 'Thiết lập được lưu cho các lần đọc sau. Mũi tên, Space và PageUp/PageDown chuyển trang; không áp dụng khi gõ hoặc bôi chọn.' })], [button('Đặt lại giao diện đọc', () => { const pos = position(); prefs = { ...defaults, voice: prefs.voice, rate: prefs.rate, pitch: prefs.pitch }; applyPrefs(false); restorePosition(pos); saveSettings({ ...prefs }); settingsDialog(); })]);
   }

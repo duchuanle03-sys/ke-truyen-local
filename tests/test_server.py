@@ -44,6 +44,21 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(body), [])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
 
+    def test_second_server_on_same_port_fails_without_changing_running_library(self):
+        self.server.app.store.upsert_book({'id': 'keep', 'name': 'Keep'},
+                                         [{'title': 'One', 'text': 'Keep this chapter'}])
+        self.server.app.store.progress('keep', 0, .6)
+        before = json.loads(self.request('/api/books')[1])
+        with tempfile.TemporaryDirectory() as temporary:
+            other_data = Path(temporary) / 'unused'
+            with self.assertRaises(OSError):
+                second = make_server(other_data, port=self.server.server_address[1])
+                second.server_close()
+            self.assertFalse(other_data.exists())
+        status, body, _ = self.request('/api/books')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), before)
+
     def test_settings_roundtrip(self):
         self.assertEqual(self.request("/api/settings", {"fontSize": 24})[0], 200)
         result = json.loads(self.request("/api/settings")[1])

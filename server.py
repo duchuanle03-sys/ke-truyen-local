@@ -5,6 +5,7 @@ import json
 import logging
 import mimetypes
 import re
+import socket
 import threading
 import time
 import uuid
@@ -266,6 +267,14 @@ def image_type(body):
 
 class HTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+    allow_reuse_address = not hasattr(socket, 'SO_EXCLUSIVEADDRUSE')
+
+    def server_bind(self):
+        # Windows SO_REUSEADDR lets stale servers share the port and receive requests.
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
     def service_actions(self):
         try:
             self.app.cleanup_trash()
@@ -274,7 +283,8 @@ class HTTPServer(ThreadingHTTPServer):
 
     def server_close(self):
         super().server_close()
-        self.app.close()
+        if hasattr(self, 'app'):
+            self.app.close()
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "KeTruyen"
