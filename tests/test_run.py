@@ -48,6 +48,26 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(parse_qs(url.query), {'book': [book_id]})
         self.assertEqual(self.server.app.store.get_book(book_id)['position'], .6)
 
+    def test_standard_launcher_reuses_running_library(self):
+        for options in ([], ['--no-browser']):
+            with self.subTest(options=options):
+                with patch('run.make_server', side_effect=AssertionError('Must reuse the running app')), \
+                     patch('run.open_window') as opened:
+                    result = run.main(['--data-dir', str(self.data), '--port', str(self.port)] + options)
+                self.assertEqual(result, 0)
+                if options:
+                    opened.assert_not_called()
+                else:
+                    opened.assert_called_once_with(f'http://127.0.0.1:{self.port}')
+
+    def test_standard_launcher_reuses_instance_that_starts_during_bind(self):
+        with patch('run.running_instance', side_effect=[False, True]), \
+             patch('run.make_server', side_effect=OSError('Another launch acquired the port')), \
+             patch('run.open_window') as opened:
+            result = run.main(['--data-dir', str(self.data), '--port', str(self.port)])
+        self.assertEqual(result, 0)
+        opened.assert_called_once_with(f'http://127.0.0.1:{self.port}')
+
     def test_instance_probe_requires_same_app_and_same_library(self):
         self.assertTrue(run.running_instance(self.data, self.port))
         self.assertFalse(run.running_instance(self.data.parent / 'other-library', self.port))
@@ -78,12 +98,14 @@ class LauncherTests(unittest.TestCase):
             thread.join(3)
 
     def test_failed_start_does_not_open_another_service(self):
-        with patch('run.make_server', side_effect=OSError('busy')), patch('run.running_instance', return_value=False), \
-             patch('run.time.sleep'), patch('run.open_window') as opened, patch('run.report_error') as error:
-            result = run.main(['--data-dir', str(self.data.parent / 'other'), '--port', str(self.port), '--book=keep'])
-        self.assertEqual(result, 1)
-        opened.assert_not_called()
-        self.assertTrue(error.call_args.args[0])
+        for options in ([], ['--book=keep']):
+            with self.subTest(options=options):
+                with patch('run.make_server', side_effect=OSError('busy')), patch('run.running_instance', return_value=False), \
+                     patch('run.time.sleep'), patch('run.open_window') as opened, patch('run.report_error') as error:
+                    result = run.main(['--data-dir', str(self.data.parent / 'other'), '--port', str(self.port)] + options)
+                self.assertEqual(result, 1)
+                opened.assert_not_called()
+                self.assertTrue(error.call_args.args[0])
 
     def test_shortcut_starts_server_when_app_is_not_running(self):
         with socket.socket() as reservation:

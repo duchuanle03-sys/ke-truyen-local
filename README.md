@@ -14,6 +14,8 @@ python -X utf8 run.py
 
 Mở `http://127.0.0.1:8765` nếu trình duyệt không tự mở. Giữ cửa sổ máy chủ mở khi đọc; nhấn `Ctrl+C` để dừng. Có thể đổi cổng bằng `--port 8768` hoặc tắt mở trình duyệt tự động bằng `--no-browser`.
 
+Nếu máy chủ của cùng thư viện đã chạy, mở lại `Start.cmd` sẽ dùng máy chủ đó để mở giao diện, kể cả khi máy chủ được khởi động nền từ lối tắt truyện.
+
 Bản clone mới có thư viện trống. Dùng **Nhập file**, **Nhập thư viện**, hoặc **Khám phá** để thêm truyện.
 
 ## Chức năng hiện có

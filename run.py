@@ -61,7 +61,7 @@ def main(argv=None):
     if args.book is not None and (not args.book or len(args.book) > 256 or any(ord(char) < 32 for char in args.book)):
         parser.error('Mã truyện không hợp lệ.')
     query = '/?' + urlencode({'book': args.book}) if args.book is not None else ''
-    reuse = args.book is not None and not (args.import_backup or args.import_qt)
+    reuse = not (args.import_backup or args.import_qt)
     if reuse and running_instance(args.data_dir, args.port):
         if not args.no_browser:
             open_window(f'http://127.0.0.1:{args.port}' + query)
@@ -73,7 +73,7 @@ def main(argv=None):
         server = make_server(args.data_dir, port=args.port)
     except OSError as error:
         if reuse:
-            # Another shortcut may be starting the same library at the same time.
+            # Another launch may be starting the same library at the same time.
             for _ in range(6):
                 if running_instance(args.data_dir, args.port):
                     if not args.no_browser:
