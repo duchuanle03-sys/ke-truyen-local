@@ -242,6 +242,10 @@ $('file-input').onchange = async () => {
     try {
       const result = await api('/api/import/file', undefined, { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) } });
       line.textContent = `${file.name}: đã nhập ${result.book?.chapter_count || result.chapter_count || ''} chương.`;
+      if (result.warnings?.length) list.append(el('details', {}, [
+        el('summary', { text: `Lưu ý về tệp gốc (${result.warnings.length})` }),
+        el('ul', {}, result.warnings.map(text => el('li', { text }))),
+      ]));
     } catch (error) { line.className = 'inline-error'; line.textContent = `${file.name}: ${error.message}`; }
   }
   $('file-input').value = '';

@@ -4,6 +4,24 @@ from htmltools import sanitize_html
 from server import public_content
 
 class OutputTests(unittest.TestCase):
+    def test_svg_document_images_drop_active_content_and_external_resources(self):
+        from htmltools import sanitize_svg
+        raw = b'''<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" onload="bad()" viewBox="0 0 20 20">
+          <script>bad()</script><foreignObject><iframe src="http://localhost"/></foreignObject>
+          <image href="http://localhost/private"/><use xlink:href="file:///secret"/>
+          <animate attributeName="href" values="javascript:bad()"/>
+          <style>@import 'http://localhost/x'; .a {fill:url(http://localhost/x);}</style>
+          <path onclick="bad()" d="M0 0L10 10" style="fill:url(http://localhost/x);stroke:#000"/>
+        </svg>'''
+        clean = sanitize_svg(raw).decode()
+        for bad in ('script', 'foreignObject', 'iframe', 'localhost', 'file:', 'javascript:', 'onload', 'onclick', 'animate', '<use', '<image'):
+            self.assertNotIn(bad, clean)
+        self.assertIn('path', clean)
+        self.assertIn('stroke:#000', clean)
+        for bad in (b'<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///secret">]><svg>&x;</svg>',
+                    b'<html/>', b'<svg>' + b'<g>' * 110 + b'</g>' * 110 + b'</svg>'):
+            self.assertEqual(sanitize_svg(bad), b'')
+
     def test_library_covers_use_book_identity_to_allow_recovery(self):
         out = public_content({'id': 'book-id', 'source': 'hako', 'cover': 'https://cdn.example/old.jpg'})
         self.assertEqual(out['cover'], '/api/books/book-id/cover')

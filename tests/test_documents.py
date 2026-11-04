@@ -108,6 +108,69 @@ class DocumentTests(unittest.TestCase):
                 with self.assertRaises(DocumentError):
                     import_document(path)
 
+    def test_epub_recovers_image_case_and_skips_only_missing_optional_images(self):
+        path = self.archive('case.epub', {
+            'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+            'book.opf': '<package><metadata><meta name="cover" content="cover"/></metadata><manifest>'
+                '<item id="cover" href="images/COVER.png"/><item id="one" href="one.xhtml"/></manifest>'
+                '<spine><itemref idref="one"/></spine></package>',
+            'images/cover.png': PNG,
+            'one.xhtml': '<h1>One</h1><p>Keep before.</p><img src="images/COVER.png">'
+                '<img src="images/missing.png"><p>Keep after.</p>',
+        })
+        result = import_document(path)
+        self.assertTrue(result['book']['cover'].startswith('data:image/png;'))
+        self.assertEqual(len(result['chapters'][0]['images']), 1)
+        self.assertIn('Keep after.', result['chapters'][0]['text'])
+        self.assertTrue(any('missing.png' in w for w in result['warnings']))
+
+    def test_epub_rejects_ambiguous_image_case_and_missing_spine_document(self):
+        for extra, chapter in [({'a.png': PNG, 'A.png': PNG}, '<p>Text</p><img src="a.PNG">'),
+                               ({}, None)]:
+            with self.subTest(chapter=chapter):
+                entries = {
+                    'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+                    'book.opf': '<package><manifest><item id="one" href="one.xhtml"/></manifest><spine><itemref idref="one"/></spine></package>',
+                } | extra
+                if chapter is not None:
+                    entries['one.xhtml'] = chapter
+                with self.assertRaises(DocumentError):
+                    import_document(self.archive('missing.epub', entries))
+
+    def test_epub_repairs_sparse_utf8_damage_with_warning_without_legacy_mojibake(self):
+        content = ('<?xml version="1.0" encoding="utf-8"?><p>' + 'Tiếng Việt vẫn đúng. ' * 100 + 'Lỗi: ').encode() + b'\xe1i</p>'
+        entries = {
+            'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+            'book.opf': '<package><manifest><item id="one" href="one.xhtml"/></manifest><spine><itemref idref="one"/></spine></package>',
+            'one.xhtml': content,
+        }
+        result = import_document(self.archive('damaged.epub', entries))
+        self.assertIn('Tiếng Việt vẫn đúng.', result['chapters'][0]['text'])
+        self.assertIn('\ufffdi', result['chapters'][0]['text'])
+        self.assertTrue(any('UTF-8' in w and 'one.xhtml' in w for w in result['warnings']))
+        entries['one.xhtml'] = content.replace(b'\xe1i', '\ufffdi'.encode())
+        valid = import_document(self.archive('valid-utf8.epub', entries))
+        self.assertEqual(valid['warnings'], [])
+        entries['one.xhtml'] = b'<p>\xff\x00\x01binary</p>'
+        with self.assertRaises(DocumentError):
+            import_document(self.archive('binary.epub', entries))
+
+    def test_epub_static_svg_is_preserved_as_inert_document_image(self):
+        from server import public_content
+        path = self.archive('vector.epub', {
+            'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+            'book.opf': '<package><manifest><item id="one" href="one.xhtml"/></manifest><spine><itemref idref="one"/></spine></package>',
+            'one.xhtml': '<p>Diagram below.</p><img src="diagram.svg">',
+            'diagram.svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+                '<defs><style>.cls-1 {fill-rule:evenodd;}</style></defs><path class="cls-1" d="M0 0L20 20"/></svg>',
+        })
+        chapter = import_document(path)['chapters'][0]
+        self.assertEqual(len(chapter['images']), 1)
+        image = chapter['images'][0]
+        self.assertTrue(image.startswith('data:image/svg+xml;base64,'))
+        self.assertIn('fill-rule', base64.b64decode(image.partition(',')[2]).decode())
+        self.assertIn('data:image/svg+xml;base64,', public_content(chapter)['html'])
+
     def test_epub_repeated_images_cannot_amplify_generated_output(self):
         path = self.archive('images.epub', {
             'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',

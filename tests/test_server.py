@@ -232,5 +232,21 @@ class HTTPTests(unittest.TestCase):
         self.assertTrue(original.is_file())
         self.assertEqual(original.read_bytes(), body)
 
+    def test_file_import_returns_repair_warnings_and_serves_static_svg(self):
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, 'w') as archive:
+            archive.writestr('META-INF/container.xml', '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>')
+            archive.writestr('book.opf', '<package><manifest><item id="chapter" href="chapter.xhtml"/></manifest><spine><itemref idref="chapter"/></spine></package>')
+            archive.writestr('chapter.xhtml', '<p>Keep this text.</p><img src="missing.png"><img src="diagram.svg">')
+            archive.writestr('diagram.svg', '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0L20 20"/></svg>')
+        request = urllib.request.Request(self.base + '/api/import/file', content.getvalue(),
+            {'Content-Type': 'application/octet-stream', 'X-Filename': 'vector.epub'})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            book = json.load(response)
+        self.assertTrue(any('missing.png' in w for w in book['warnings']))
+        status, body, _ = self.request('/api/books/' + book['id'] + '/chapters/0')
+        self.assertEqual(status, 200, body)
+        self.assertIn('data:image/svg+xml;base64,', json.loads(body)['html'])
+
 if __name__ == "__main__":
     unittest.main()

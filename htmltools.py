@@ -4,6 +4,7 @@ from html.parser import HTMLParser
 import base64
 import ipaddress
 import re
+import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 
@@ -194,6 +195,96 @@ def safe_raster_data_url(url):
     return url if valid else ''
 
 
+def sanitize_svg(data):
+    """Rebuild a bounded static drawing; never keep scripts, links or animation."""
+    if len(data) > 2 * 1024 * 1024:
+        return b''
+    try:
+        text = data.decode('utf-8-sig')
+        if re.search(r'<!\s*(?:DOCTYPE|ENTITY)\b', text, re.I):
+            return b''
+        root = ET.fromstring(text)
+    except (UnicodeError, ET.ParseError, ValueError):
+        return b''
+    ns = '{http://www.w3.org/2000/svg}'
+    if root.tag not in ('svg', ns + 'svg'):
+        return b''
+    pending, count = [(root, 0)], 0
+    while pending:
+        node, depth = pending.pop()
+        count += 1
+        if depth > 100 or count > 10000:
+            return b''
+        pending.extend((child, depth + 1) for child in node)
+    tags = {'svg', 'g', 'defs', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
+            'text', 'tspan', 'title', 'desc', 'linearGradient', 'radialGradient', 'stop', 'clipPath'}
+    paint = {'fill', 'fill-rule', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity',
+             'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray',
+             'stroke-dashoffset', 'opacity', 'stop-color', 'stop-opacity', 'clip-path', 'clip-rule',
+             'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor'}
+    attrs = paint | {'id', 'class', 'viewBox', 'preserveAspectRatio', 'width', 'height', 'd', 'points',
+                     'x', 'y', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'dx', 'dy',
+                     'transform', 'offset', 'gradientUnits', 'gradientTransform', 'spreadMethod'}
+
+    def value_safe(value):
+        value = re.sub(r'url\(\s*#[\w.-]+\s*\)', '', value, flags=re.I)
+        return not re.search(r'url\s*\(|expression\s*\(|[\\@<>"\'{}]', value, re.I)
+
+    def style_clean(value):
+        rules = []
+        for declaration in value.split(';'):
+            key, _, val = declaration.partition(':')
+            if key.strip().lower() in paint and value_safe(val):
+                rules.append(key.strip().lower() + ':' + val.strip())
+        return ';'.join(rules)
+
+    def clean(node):
+        if node.tag.startswith('{') and not node.tag.startswith(ns):
+            return None
+        tag = node.tag.removeprefix(ns)
+        if tag == 'style':
+            rules = []
+            for match in re.finditer(r'([.#][\w-]+)\s*\{([^{}]*)\}', node.text or ''):
+                declarations = style_clean(match[2])
+                if declarations:
+                    rules.append(match[1] + '{' + declarations + '}')
+            result = ET.Element(ns + 'style')
+            result.text = ''.join(rules)
+            return result if rules else None
+        if tag not in tags:
+            return None
+        result = ET.Element(ns + tag)
+        for key, value in node.attrib.items():
+            if key in attrs and value_safe(value):
+                result.set(key, value)
+            elif key == 'style':
+                result.set(key, style_clean(value))
+        if tag in {'text', 'tspan', 'title', 'desc'}:
+            result.text = node.text
+        for child in node:
+            safe = clean(child)
+            if safe is not None:
+                result.append(safe)
+                if tag in {'text', 'tspan'}:
+                    safe.tail = child.tail
+        return result
+
+    return ET.tostring(clean(root), encoding='utf-8')
+
+
+def safe_document_data_url(url):
+    raster = safe_raster_data_url(url)
+    if raster:
+        return raster
+    if not isinstance(url, str) or len(url) > 3 * 1024 * 1024 or not url.startswith('data:image/svg+xml;base64,'):
+        return ''
+    try:
+        data = sanitize_svg(base64.b64decode(url.partition(',')[2], validate=True))
+    except ValueError:
+        return ''
+    return 'data:image/svg+xml;base64,' + base64.b64encode(data).decode('ascii') if data else ''
+
+
 def sanitize_html(markup, base_url='', allow_images=True, allow_data_images=False):
     def clean(node):
         if isinstance(node, str):
@@ -203,7 +294,7 @@ def sanitize_html(markup, base_url='', allow_images=True, allow_data_images=Fals
         body = ''.join(clean(c) for c in node.children)
         if node.tag == 'img':
             raw_url = node.get('data-original') or node.get('data-src') or node.get('src')
-            url = safe_remote_url(raw_url, base_url) or (safe_raster_data_url(raw_url) if allow_data_images else '')
+            url = safe_remote_url(raw_url, base_url) or (safe_document_data_url(raw_url) if allow_data_images else '')
             return '<img src="' + escape(url, quote=True) + '" alt="' + escape(node.get('alt'), quote=True) + '" loading="lazy">' if url and allow_images else ''
         if node.tag not in ALLOWED:
             return body

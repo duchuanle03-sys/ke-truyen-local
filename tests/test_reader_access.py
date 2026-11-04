@@ -1,5 +1,6 @@
 """Exercise the actual app and reader in an isolated, installed headless browser."""
 import json
+import base64
 import os
 from pathlib import Path
 import shutil
@@ -70,6 +71,12 @@ try {
     check($('.reader-scroll').scrollLeft === 0 && (await state()).progress.at(-1).position === 0, 'Adjacent fallback invented a saved position');
   } else {
     await ready();
+    const image = $('.chapter-content img');
+    check(image?.src.startsWith('data:image/svg+xml;base64,'), 'Reader removed the sanitized SVG document image');
+    image.loading = 'eager';
+    await wait(() => image.complete);
+    check(image.naturalWidth === 20 && image.naturalHeight === 20, 'SVG document image did not render');
+    check(!$('.chapter-content svg'), 'SVG became inline active markup');
     check($('.chapter-content').textContent.includes('Tiếng Việt từ website gốc'), 'Source Vietnamese was changed');
     check((await state()).qt === 0, 'Saved QT preference translated source Vietnamese');
     window.dispatchEvent(new CustomEvent('dictionarychange', {detail: '*'}));
@@ -166,7 +173,11 @@ class ReaderAccessTests(unittest.TestCase):
                             index = int(path.rsplit('/', 1)[-1])
                             if index in (0, 8):
                                 text = '\n'.join(f'Tiếng Việt từ website gốc, đoạn {i}.' for i in range(100))
-                                return self.reply({'title': f'Chương {index + 1}', 'text': text, **({'language': 'vi', 'translation': 'source'} if index == 0 else {})})
+                                from htmltools import sanitize_svg
+                                svg = sanitize_svg(b'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="#000"/></svg>')
+                                image = 'data:image/svg+xml;base64,' + base64.b64encode(svg).decode()
+                                markup = '<img src="' + image + '">' + ''.join('<p>' + p + '</p>' for p in text.splitlines())
+                                return self.reply({'title': f'Chương {index + 1}', 'text': text, 'html': markup, **({'language': 'vi', 'translation': 'source'} if index == 0 else {})})
                             if index == 7:
                                 calls['slow'] = True
                                 time.sleep(.4)

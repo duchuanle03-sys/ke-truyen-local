@@ -276,11 +276,11 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
 
   function sourceVietnamese() { return chapter?.language === 'vi' && chapter?.translation === 'source'; }
 
-  function safeUrl(value) {
+  function safeUrl(value, allowSvg = false) {
     if (typeof value !== 'string' || !value.trim()) return '';
     try {
       const url = new URL(value, location.href);
-      return ['http:', 'https:'].includes(url.protocol) || /^data:image\/(png|jpeg|gif|webp);base64,/i.test(value) ? url.href : '';
+      return ['http:', 'https:'].includes(url.protocol) || /^data:image\/(png|jpeg|gif|webp);base64,/i.test(value) || (allowSvg && /^data:image\/svg\+xml;base64,/i.test(value)) ? url.href : '';
     } catch { return ''; }
   }
   function sanitizedContent(html) {
@@ -298,7 +298,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
         if (href) { clean.href = href; clean.target = '_blank'; clean.rel = 'noopener noreferrer'; }
       }
       if (node.tagName === 'IMG') {
-        const src = safeUrl(node.getAttribute('src'));
+        const src = safeUrl(node.getAttribute('src'), true);
         if (!src) return;
         clean.src = src; clean.alt = node.getAttribute('alt') || 'Ảnh trong chương'; clean.loading = 'lazy'; clean.referrerPolicy = 'no-referrer';
       }

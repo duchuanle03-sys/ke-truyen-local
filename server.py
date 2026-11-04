@@ -126,7 +126,10 @@ class App:
         if book.get("name") in (key, path.stem) or not book.get("name"):
             book["name"] = Path(clean_name).stem
         saved = self.store.upsert_book(book, result["chapters"])
-        return self.store.restore_book(saved['id']) if saved['trashed_at'] else saved
+        saved = self.store.restore_book(saved['id']) if saved['trashed_at'] else saved
+        if result.get('warnings'):
+            saved['warnings'] = result['warnings']
+        return saved
 
     def trash_book(self, book_id):
         with self.lock:

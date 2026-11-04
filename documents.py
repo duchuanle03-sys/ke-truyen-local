@@ -18,6 +18,7 @@ import stat
 from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
 import zipfile
+from htmltools import sanitize_svg
 
 
 class DocumentError(ValueError):
@@ -33,7 +34,8 @@ MAX_MEMBER_SIZE = 64 * 1024 * 1024
 MAX_ARCHIVE_SIZE = 256 * 1024 * 1024
 MAX_MEMBERS = 10_000
 MAX_RATIO = 200
-MAX_OUTPUT_SIZE = 128 * 1024 * 1024
+# Includes temporary HTML and duplicate text/image fields, beyond the archive's bytes.
+MAX_OUTPUT_SIZE = 256 * 1024 * 1024
 _OUTPUT_BUDGET = ContextVar('document_output_budget', default=None)
 TEXT_EXTENSIONS = {'.txt', '.html', '.htm', '.xhtml', '.md', '.markdown', '.fb2', '.fodt'}
 OFFICE_EXTENSIONS = {'.docx', '.docm', '.dotx', '.dotm', '.odt', '.ott'}
@@ -72,11 +74,11 @@ def capabilities():
         'ocr': {'supported': False, 'reason': 'Chưa tích hợp OCR PDF scan hoặc dữ liệu ngôn ngữ.', 'detected_engine': shutil.which('tesseract')},
         'legacy': {'supported': False, 'reason': 'MOBI/PRC/AZW/AZW3/UMD/CHM/DOC/DOT/WPS/RTF/HWP/HWPX/HWPML cần bộ chuyển đổi đã kiểm thử.', 'detected_engine': shutil.which('ebook-convert') or shutil.which('soffice')},
         'limits': {'file_bytes': MAX_FILE_SIZE, 'member_bytes': MAX_MEMBER_SIZE, 'archive_uncompressed_bytes': MAX_ARCHIVE_SIZE, 'archive_members': MAX_MEMBERS, 'compression_ratio': MAX_RATIO, 'generated_character_budget': MAX_OUTPUT_SIZE},
-        'layout': 'Giữ văn bản, tiêu đề và ảnh raster; không bảo toàn toàn bộ bố cục, CSS hoặc macro.',
+        'layout': 'Giữ văn bản, tiêu đề, ảnh raster và SVG tĩnh; không bảo toàn toàn bộ bố cục, CSS hoặc macro.',
     }
 
 
-def decode_text(data):
+def decode_text(data, repair_utf8=False):
     """Return (text, encoding); fallback encodings remain visible to callers."""
     if len(data) > MAX_MEMBER_SIZE:
         raise DocumentError('Văn bản vượt giới hạn 64 MiB.')
@@ -91,12 +93,20 @@ def decode_text(data):
     else:
         declaration = re.search(br'(?:encoding\s*=\s*[\"\']|charset\s*=\s*[\"\']?)([a-zA-Z0-9_-]+)', data[:1024], re.IGNORECASE)
         explicit = declaration.group(1).decode('ascii') if declaration else None
+        repair_utf8 = repair_utf8 and explicit is not None and explicit.lower().replace('_', '-') in ('utf-8', 'utf8')
         # shortcut: legacy encodings are ambiguous, add user encoding selection before promising exact decoding of every legacy text file.
         encodings = ([explicit] if explicit else []) + ['utf-8', 'gb18030', 'cp1258', 'cp1252']
     for encoding in encodings:
         try:
             text = data.decode(encoding)
-        except (UnicodeError, LookupError):
+        except UnicodeError:
+            if not repair_utf8 or encoding.lower().replace('_', '-') not in ('utf-8', 'utf8', 'utf-8-sig'):
+                continue
+            text = data.decode(encoding, errors='replace')
+            if text.count('\ufffd') > max(1, len(data) // 1000):
+                continue
+            encoding = 'utf-8 (repaired)'
+        except LookupError:
             continue
         controls = sum(ord(c) < 32 and c not in '\t\n\r\f' for c in text)
         if controls:
@@ -163,6 +173,7 @@ class _Archive:
             if len(infos) > MAX_MEMBERS:
                 raise DocumentError('Archive chứa quá nhiều mục (tối đa 10.000).')
             self.members, total = {}, 0
+            self.folded_members, self.warnings = {}, {}
             for info in infos:
                 name = info.filename.replace('\\', '/')
                 parts = name.rstrip('/').split('/')
@@ -182,6 +193,7 @@ class _Archive:
                 if info.file_size > 1_048_576 and info.file_size / max(info.compress_size, 1) > MAX_RATIO:
                     raise DocumentError('Tỷ lệ nén archive vượt giới hạn an toàn.')
                 self.members[name] = info
+                self.folded_members.setdefault(name.casefold(), []).append(name)
         except Exception:
             self.archive.close()
             raise
@@ -197,10 +209,19 @@ class _Archive:
             if self._budget_token is not None:
                 _OUTPUT_BUDGET.reset(self._budget_token)
 
+    def member_name(self, name):
+        if name in self.members:
+            return name
+        matches = self.folded_members.get(name.casefold(), [])
+        if len(matches) > 1:
+            raise DocumentError('Tham chiếu archive mơ hồ do khác chữ hoa/thường: ' + name)
+        return matches[0] if matches else None
+
     def read(self, name):
-        if name not in self.members:
+        actual = self.member_name(name)
+        if actual is None:
             raise DocumentError('Archive thiếu mục bắt buộc: ' + name)
-        with self.archive.open(self.members[name]) as handle:
+        with self.archive.open(self.members[actual]) as handle:
             data = handle.read(MAX_MEMBER_SIZE + 1)
         if len(data) > MAX_MEMBER_SIZE:
             raise DocumentError('Mục archive vượt giới hạn kích thước.')
@@ -219,10 +240,20 @@ class _Archive:
             raise DocumentError('Tham chiếu thoát khỏi archive.')
         return resolved
 
-    def image(self, base, reference):
+    def image(self, base, reference, allow_svg=True):
         name = self.resolve(base, reference)
-        if PurePosixPath(name).suffix.lower() not in IMAGE_EXTENSIONS:
-            raise DocumentError('Chỉ hỗ trợ ảnh raster trong tài liệu.')
+        suffix = PurePosixPath(name).suffix.lower()
+        if suffix not in IMAGE_EXTENSIONS | ({'.svg'} if allow_svg else set()):
+            raise DocumentError('Định dạng ảnh trong tài liệu chưa hỗ trợ: ' + suffix)
+        if self.member_name(name) is None:
+            self.warnings.setdefault(name, 'Ảnh không có trong tệp, đã giữ phần chữ: ' + name)
+            return ''
+        if suffix == '.svg':
+            data = sanitize_svg(self.read(name))
+            if not data:
+                raise DocumentError('Ảnh SVG không hợp lệ hoặc vượt giới hạn an toàn: ' + name)
+            _reserve_output(26 + 4 * ((len(data) + 2) // 3))
+            return 'data:image/svg+xml;base64,' + base64.b64encode(data).decode('ascii')
         return _image_url(self.read(name))
 
 
@@ -299,6 +330,8 @@ class _HTML(HTMLParser):
             if urlsplit(reference).scheme or urlsplit(reference).netloc:
                 return ''
             url = self.image(reference)
+            if not url:
+                return ''
             return '<img src="' + escape(url, quote=True) + '" alt="' + escape(node.attrs.get('alt', ''), quote=True) + '">'
         inner = self.render_children(node)
         if node.tag not in ALLOWED:
@@ -462,7 +495,7 @@ def _epub(archive, title):
     cover = next((item for item in manifest.values()
                   if 'cover-image' in item.get('properties', '').split()), manifest.get(cover_id))
     if cover is not None and cover.get('href'):
-        book['cover'] = archive.image(opf_path, cover.get('href'))
+        book['cover'] = archive.image(opf_path, cover.get('href'), allow_svg=False)
     spine = _nodes(package, 'itemref')
     if not spine:
         raise DocumentError('EPUB không có spine/mục lục đọc.')
@@ -474,12 +507,16 @@ def _epub(archive, title):
         if item.get('media-type') not in ('application/xhtml+xml', 'text/html', None):
             raise DocumentError('EPUB spine chứa định dạng chưa hỗ trợ: ' + str(item.get('media-type')))
         member = archive.resolve(opf_path, item.get('href'))
+        member = archive.member_name(member) or member
         if member in seen:
             raise DocumentError('EPUB spine lặp lại cùng tài liệu; từ chối khuếch đại nội dung.')
         seen.add(member)
-        text, _ = decode_text(archive.read(member))
+        text, encoding = decode_text(archive.read(member), repair_utf8=True)
+        if encoding == 'utf-8 (repaired)':
+            archive.warnings[member] = 'UTF-8 có byte hỏng; ký tự không khôi phục được hiển thị bằng �: ' + member
         parser = _HTML(text, lambda reference, member=member: archive.image(member, reference))
         chapters.extend(parser.chapters(parser.title or PurePosixPath(member).stem))
+    book['warnings'] = list(archive.warnings.values())
     return book, chapters
 
 
@@ -614,4 +651,5 @@ def import_document(path):
         chapter['index'] = index
     book = {'name': path.stem, 'author': '', 'kind': 'text', 'format': extension[1:], 'description': '', 'source': 'local', 'path': str(path.resolve()), 'chapter_count': len(chapters)}
     book.update(metadata)
-    return {'book': book, 'chapters': chapters}
+    warnings = book.pop('warnings', [])
+    return {'book': book, 'chapters': chapters, 'warnings': warnings}
