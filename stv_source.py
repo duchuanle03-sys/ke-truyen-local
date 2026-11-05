@@ -184,7 +184,8 @@ class StvSource:
         expected = {'qidian': 'https://m.qidian.com/book/' + book + '/' + cid + '.html',
                     'fanqie': 'https://fanqienovel.com/reader/' + cid}
         origin = payload.get('origin')
-        origin_matches = origin == expected[host] if host in expected else False
+        # Cached providers can omit origin; the verified POST still binds the exact book and chapter.
+        origin_matches = origin == expected[host] if host in expected else origin in ('', None)
         if host not in expected and isinstance(origin, str) and safe_remote_url(origin):
             parsed = urlsplit(origin)
             # Other providers must expose the exact numeric chapter as a whole path component.
@@ -195,9 +196,6 @@ class StvSource:
             if host == 'ciweimao' and parsed.hostname not in ('ciweimao.com', 'www.ciweimao.com', 'wap.ciweimao.com', 'sangtacviet.com', 'sangtacviet.vip'):
                 origin_matches = False
         if host == 'ciweimao':
-            # Ciweimao can omit both origin and paragraph links; bind that format to the verified POST resource.
-            if origin in ('', None):
-                origin_matches = True
             root = _html(payload.get('data'))
             nodes = root.select('a.num-link')
             if nodes:

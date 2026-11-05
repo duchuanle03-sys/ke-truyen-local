@@ -158,6 +158,21 @@ class StvHttpTests(unittest.TestCase):
             source, _ = self.source(TOC, '<div>page</div>', payload)
             with self.subTest(fields=fields), self.assertRaises(SourceError): source.chapter(url)
 
+    def test_cached_providers_can_omit_origin_but_must_match_the_posted_resource(self):
+        for host in ('trxs', 'trxs2', 'sfacg'):
+            url = CHAPTER.replace('/qidian/', '/' + host + '/')
+            for origin in ('', None):
+                source, _ = self.source(TOC, '<div>page</div>', chapter(bookhost=host, origin=origin))
+                with self.subTest(host=host, origin=origin):
+                    self.assertEqual(source.chapter(url)['text'], 'Tiếng Việt rõ ràng.\nĐoạn hai.')
+            for fields in ({'bookid': '124'}, {'bookhost': 'ciweimao'},
+                           {'origin': 'https://example.com/chapter/902'}, {'bookid': None}, {'bookhost': None}):
+                payload = chapter(bookhost=host, origin=''); payload.update(fields)
+                source, _ = self.source(TOC, '<div>page</div>', payload)
+                with self.subTest(host=host, fields=fields), self.assertRaises(SourceError) as caught:
+                    source.chapter(url)
+                self.assertEqual(caught.exception.code, 'parse_error')
+
     def test_response_must_belong_to_the_actual_post_book_and_chapter(self):
         payload = chapter(bookhost='ciweimao', origin='', data='<p>Nội dung tiếng Việt.</p>')
         url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
