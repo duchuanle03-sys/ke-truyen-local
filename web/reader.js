@@ -123,7 +123,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
       scheduleSave();
     }, { passive: true });
     scroller.addEventListener('wheel', (event) => {
-      if (!chapter || loading || prefs.mode !== 'paged' || event.ctrlKey || event.shiftKey || event.altKey || document.getElementById('dialog').open) return;
+      if (!chapter || loading || prefs.mode !== 'paged' || event.ctrlKey || event.shiftKey || event.altKey || document.querySelector('dialog[open]')) return;
       if (window.getSelection()?.toString()) return;
       event.preventDefault();
       const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
@@ -206,16 +206,18 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     if (next < 0 || next >= chapters.length) return;
     const token = ++generation;
     stopAutoScroll(); stopSpeech();
-    const previous = record();
+    const previous = record(), previousChapter = chapter, previousIndex = index, previousImagePage = imagePage;
     if (previous) lastReadable = previous;
     const saved = save ? saveProgress() : progressChain;
     loading = true; dirty = false;
     selectionTip.hidden = true; lastSelection = '';
     index = next; chapter = null; imagePage = 0;
     root.dataset.state = 'loading';
-    chapterTitle.textContent = chapters[index].title || `Chương ${index + 1}`;
-    content.replaceChildren(el('p', { class: 'reader-loading', text: 'Đang lấy nội dung chương… Nội dung tải được sẽ lưu trên máy.' }));
-    scroller.scrollTop = scroller.scrollLeft = 0;
+    if (!previousChapter) {
+      chapterTitle.textContent = chapters[index].title || `Chương ${index + 1}`;
+      content.replaceChildren(el('p', { class: 'reader-loading', text: 'Đang lấy nội dung chương… Nội dung tải được sẽ lưu trên máy.' }));
+      scroller.scrollTop = scroller.scrollLeft = 0;
+    }
     status.textContent = `Đang mở chương ${index + 1}/${chapters.length}…`;
     previousButton.disabled = nextButton.disabled = true;
     await saved;
@@ -236,7 +238,15 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
       lastReadable = record();
       await saveProgress();
       if (token === generation && continueSpeech) startSpeech();
-    } catch (error) { if (token === generation) showReadError(error, () => loadChapter(next, pos, false)); }
+    } catch (error) {
+      if (token !== generation) return;
+      if (error.code === 'captcha_cancelled' && previousChapter && previous) {
+        chapter = previousChapter; index = previousIndex; imagePage = previousImagePage;
+        loading = false; dirty = false; root.dataset.state = 'reading';
+        restorePosition(previous.position); notify(error.message); return;
+      }
+      showReadError(error, () => loadChapter(next, pos, false));
+    }
   }
 
   function previousReading() {
@@ -246,6 +256,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   }
 
   function showReadError(error, retry) {
+    chapterTitle.textContent = chapters[index]?.title || `Chương ${index + 1}`;
     stopSpeech(); stopAutoScroll(); clearTimeout(saveTimer);
     loading = false; chapter = null; dirty = false; root.dataset.state = 'error';
     selectionTip.hidden = true; lastSelection = '';
@@ -288,8 +299,21 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     const parsed = new DOMParser().parseFromString(html, 'text/html');
     const allowed = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'BR', 'IMG', 'HR', 'EM', 'B', 'I', 'STRONG', 'U', 'BLOCKQUOTE', 'UL', 'OL', 'LI', 'A', 'PRE', 'CODE', 'SPAN', 'FIGURE', 'FIGCAPTION']);
     const unsafe = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'MATH', 'TEMPLATE', 'FORM', 'INPUT', 'BUTTON', 'LINK', 'META']);
+    const block = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'BR', 'HR', 'BLOCKQUOTE', 'UL', 'OL', 'LI', 'PRE', 'FIGURE', 'FIGCAPTION']);
     function copy(node, target) {
-      if (node.nodeType === Node.TEXT_NODE) { target.append(document.createTextNode(node.textContent)); return; }
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent.replace(/\r\n?/g, '\n');
+        // STV uses literal newlines between inline translation tokens; ordinary HTML collapses them.
+        if (book.source === 'stv' && text.includes('\n') && !node.parentElement?.closest('pre')) {
+          const before = node.previousSibling, after = node.nextSibling;
+          if (!text.trim() && (!before || !after || block.has(before.nodeName) || block.has(after.nodeName))) return;
+          text.split('\n').forEach((line, i) => {
+            if (i) target.append(document.createElement('br'));
+            target.append(document.createTextNode(line));
+          });
+        } else target.append(document.createTextNode(text));
+        return;
+      }
       if (node.nodeType !== Node.ELEMENT_NODE || unsafe.has(node.tagName)) return;
       if (!allowed.has(node.tagName)) { for (const child of node.childNodes) copy(child, target); return; }
       const clean = document.createElement(node.tagName.toLowerCase());
@@ -717,7 +741,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     selectionTip.hidden = !valid;
   });
   document.addEventListener('keydown', (event) => {
-    if (root.hidden || document.getElementById('dialog').open || event.ctrlKey || event.metaKey || event.altKey || event.target.closest?.('input,textarea,select,button,[contenteditable=true]')) return;
+    if (root.hidden || document.querySelector('dialog[open]') || event.ctrlKey || event.metaKey || event.altKey || event.target.closest?.('input,textarea,select,button,[contenteditable=true]')) return;
     if (event.key === 'Escape') { root.classList.remove('is-focused'); stopAutoScroll(); selectionTip.hidden = true; return; }
     if (window.getSelection()?.toString()) return;
     if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(event.key)) { event.preventDefault(); step(event.shiftKey ? -1 : 1); }

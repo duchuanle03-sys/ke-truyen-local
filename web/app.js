@@ -1,4 +1,5 @@
 import { createReader } from './reader.js';
+import { createCaptchaDialog } from './captcha.js';
 
 const $ = (id) => document.getElementById(id);
 export function el(tag, attrs = {}, children = []) {
@@ -18,10 +19,11 @@ export function el(tag, attrs = {}, children = []) {
 }
 
 async function api(path, data, options = {}) {
+  const { captcha: allowCaptcha = true, ...fetchOptions } = options;
   let response;
   try {
     response = await fetch(path, {
-      ...options,
+      ...fetchOptions,
       method: options.method || (data === undefined ? 'GET' : 'POST'),
       headers: { ...(data === undefined ? {} : { 'Content-Type': 'application/json' }), ...options.headers },
       body: data === undefined ? options.body : JSON.stringify(data),
@@ -50,10 +52,16 @@ async function api(path, data, options = {}) {
         evidence: typeof result.access.evidence === 'string' ? result.access.evidence : '',
       };
     }
+    if (allowCaptcha && error.code === 'captcha_required' && result?.captcha) {
+      await verifyCaptcha(result.captcha);
+      return api(path, data, options);
+    }
     throw error;
   }
   return result;
 }
+
+const verifyCaptcha = createCaptchaDialog({ el, request: (path, data) => api(path, data, { captcha: false }) });
 
 function notify(message, error = false) {
   clearTimeout(notify.timer);
@@ -499,12 +507,16 @@ async function renderSettings() {
   if (results[1].status === 'fulfilled') {
     const list = Array.isArray(results[1].value) ? results[1].value : results[1].value.jobs || [];
     if (!list.length) jobs.append(el('p', { class: 'muted', text: 'Chưa có yêu cầu tải. Mở chi tiết sách trên kệ để tải một khoảng chương.' }));
-    const jobStatuses = { queued: 'Đang chờ', running: 'Đang tải', paused: 'Tạm dừng', completed: 'Hoàn tất', failed: 'Lỗi', cancelled: 'Đã hủy' };
+    const jobStatuses = { queued: 'Đang chờ', running: 'Đang tải', paused: 'Tạm dừng', verification_required: 'Chờ xác minh CAPTCHA', completed: 'Hoàn tất', failed: 'Lỗi', cancelled: 'Đã hủy' };
     for (const job of list) {
       const row = el('article', { class: 'download-job' }, [el('h3', { text: job.name || 'Tải chương' }), el('p', { class: 'muted small', text: `${jobStatuses[job.status] || job.status} · ${job.completed}/${job.total} chương` }), el('progress', { value: job.completed, max: job.total, 'aria-label': 'Tiến độ tải chương' })]);
       if (job.error) row.append(el('p', { class: 'inline-error', text: job.error }));
       const controls = el('div', { class: 'header-actions' });
-      for (const [action, text, enabled] of [['pause', 'Tạm dừng', job.status === 'running'], ['resume', 'Tiếp tục', job.status === 'paused'], ['retry', 'Thử lại phần còn lại', ['failed', 'cancelled'].includes(job.status)], ['cancel', 'Hủy tải', ['queued', 'running', 'paused'].includes(job.status)], ['delete', 'Xóa khỏi danh sách', ['completed', 'failed', 'cancelled'].includes(job.status)]]) {
+      if (job.status === 'verification_required' && job.captcha) controls.append(el('button', { class: 'button primary', text: 'Xác minh CAPTCHA', onclick: async () => {
+        try { await verifyCaptcha(job.captcha); await renderSettings(); }
+        catch (error) { notify(error.message, true); await renderSettings(); }
+      } }));
+      for (const [action, text, enabled] of [['pause', 'Tạm dừng', job.status === 'running'], ['resume', 'Tiếp tục', job.status === 'paused'], ['retry', 'Thử lại phần còn lại', ['failed', 'cancelled'].includes(job.status)], ['cancel', 'Hủy tải', ['queued', 'running', 'paused', 'verification_required'].includes(job.status)], ['delete', 'Xóa khỏi danh sách', ['completed', 'failed', 'cancelled'].includes(job.status)]]) {
         if (enabled) controls.append(el('button', { class: 'button', text, onclick: async (event) => {
           event.currentTarget.disabled = true;
           try { await api(`/api/jobs/${encodeURIComponent(job.id)}/${action}`, {}); await renderSettings(); }

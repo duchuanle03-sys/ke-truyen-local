@@ -1,288 +1,277 @@
-"""Read STV's own rendered Vietnamese through an ordinary isolated browser session."""
+"""Sáng Tác Việt over the independently verified .com HTTP sequence."""
 import json
+import random
 import re
+import threading
+import uuid
+from html import escape
 from urllib.parse import urlencode, urlsplit
 
-from htmltools import html_to_text, parse_html, safe_remote_url, sanitize_html
-from source_errors import SourceError, SourceAccessError
+from htmltools import html_to_text, parse_html, safe_remote_url, safe_raster_data_url, sanitize_html
+from source_errors import SourceError, SourceAccessError, SourceCaptchaError
+from stv_http import StvHttp
 
-
-ORIGIN = 'https://sangtacviet.vip'
+ORIGIN = 'https://sangtacviet.com'
 _MAX_HTML = 8 * 1024 * 1024
-_METADATA = 'h1#book_name2,meta[property="og:title"],meta[property="og:novel:book_name"],meta[property="og:novel:author"],meta[property="og:description"],meta[property="og:image"]'
-_VIP = re.compile(r'\bvip\b', re.I)
-_DENIED = re.compile(r'chưa\s+(?:mua|mở\s+khóa)|không\s+có\s+quyền|(?:cần|phải|vui\s+lòng|yêu\s+cầu)\s+(?:mua|mở\s+khóa)', re.I)
-_LOGIN = re.compile(r'(?:vui\s+lòng|cần|hãy|phải)\s+đăng\s+nhập', re.I)
 _PLACEHOLDER = re.compile(r'nhấp\s+vào\s+để\s+tải\s+chương|đang\s+tải\s+(?:nội\s+dung|chương)', re.I)
 
 
 def _parts(url, chapter=False):
     parsed = urlsplit(url)
     match = re.fullmatch(r'/truyen/([a-zA-Z0-9_-]+)/1/([0-9]+)/(?:([0-9]+)/)?', parsed.path)
-    if (parsed.scheme != 'https' or parsed.netloc != 'sangtacviet.vip' or parsed.query or parsed.fragment
+    if (parsed.scheme != 'https' or parsed.netloc != 'sangtacviet.com' or parsed.query or parsed.fragment
             or not match or bool(match[3]) != chapter):
-        raise SourceError('URL truyện hoặc chương Sáng Tác Việt không hợp lệ')
+        raise SourceError('URL truyện hoặc chương Sáng Tác Việt không hợp lệ.')
     return match.groups()
 
 
-def _metadata_expression(toc_url=None):
-    selected = 'Array.from(document.querySelectorAll(' + json.dumps(_METADATA) + ')).map(n=>n.outerHTML).join("")'
-    if not toc_url:
-        return '(()=>{if(document.readyState==="loading"||!document.querySelector("#book_name2"))return null;return {url:location.href,html:' + selected + '};})()'
-    return '''(()=>{
-      if(document.readyState==='loading'||!document.querySelector('#book_name2'))return null;
-      const key=location.href, old=window.__localReaderStvToc;
-      if(!old||old.key!==key){
-        const state=window.__localReaderStvToc={key};
-        fetch(ENDPOINT,{credentials:'same-origin'}).then(async r=>{
-          if(!r.ok)return {error:{code:'http_error',http_status:r.status}};
-          try{return {toc:await r.json()};}catch(_){return {error:{code:'parse_error'}};}
-        }).then(value=>state.value=value).catch(()=>state.value={error:{code:'network_error'}});
-        return null;
-      }
-      if(!old.value)return null;
-      return {url:location.href,html:SELECTED,...old.value};
-    })()'''.replace('ENDPOINT', json.dumps(toc_url)).replace('SELECTED', selected)
+def _json(text):
+    try:
+        value = json.loads(text)
+    except (ValueError, TypeError) as error:
+        raise SourceError('Sáng Tác Việt trả dữ liệu JSON không hợp lệ.', code='parse_error') from error
+    if not isinstance(value, dict):
+        raise SourceError('Dữ liệu nguồn không phải object.', code='parse_error')
+    return value
 
 
-def _search_expression(page):
-    return '''(()=>{
-      if(document.readyState==='loading'||window.loading===true)return null;
-      const container=document.getElementById('search-containter');
-      if(!container||(!container.querySelector('.booksearch')&&!container.innerText.includes('Không tìm thấy truyện?')))return null;
-      const shown=document.getElementById('spag');
-      if(shown&&parseInt(shown.textContent,10)!==PAGE)return null;
-      const pagination_html=Array.from(document.querySelectorAll('a.page-link[onclick]')).map(a=>{
-        const clone=a.cloneNode(true);
-        if(a.closest('.disabled,[aria-disabled="true"]')||!a.getClientRects().length)clone.setAttribute('aria-disabled','true');
-        return clone.outerHTML;
-      }).join('');
-      const html=container.outerHTML, key=location.href, signature=html+pagination_html;
-      const old=window.__localReaderStvSearch;
-      if(!old||old.key!==key||old.signature!==signature){window.__localReaderStvSearch={key,signature,at:Date.now()};return null;}
-      if(Date.now()-old.at<500)return null;
-      return {url:location.href,html,pagination_html};
-    })()'''.replace('PAGE', str(page))
-
-
-def _chapter_expression(book, chapter):
-    target = json.dumps('cld-' + book + '-' + chapter)
-    return '''(()=>{
-      const language=document.querySelector('.seloption[value="vi"]');
-      const languageKey='__localReaderStvLanguageChange';
-      try{
-        const stored=sessionStorage.getItem(languageKey);
-        if(stored){
-          const state=JSON.parse(stored);
-          if(!state||state.url!==location.href||typeof state.timeOrigin!=='string')sessionStorage.removeItem(languageKey);
-          else{
-            if(state.timeOrigin===String(performance.timeOrigin)||document.readyState!=='complete')return null;
-            sessionStorage.removeItem(languageKey);
-            return {url:location.href,language_changed:true};
-          }
-        }
-        if(language&&language.getClientRects().length){
-          sessionStorage.setItem(languageKey,JSON.stringify({url:location.href,timeOrigin:String(performance.timeOrigin)}));
-          language.click();
-          return null;
-        }
-      }catch(_){return {url:location.href,error:{code:'browser_error',evidence:'Không lưu được trạng thái chọn tiếng Việt trong phiên trình duyệt.'}};}
-      const node=document.getElementById(TARGET);
-      const text=node?.innerText?.trim()||'';
-      if(!node||!node.classList.contains('contentbox')||!node.closest('#content-container')||!text
-          ||/nhấp\\s+vào\\s+để\\s+tải\\s+chương|đang\\s+tải\\s+(?:nội\\s+dung|chương)/i.test(text)
-          ||(text.match(/[\\u3400-\\u9fff]/g)||[]).length>(text.match(/[A-Za-z\\u00c0-\\u024f\\u1e00-\\u1eff]/g)||[]).length){
-        const requests=performance.getEntriesByType('resource');
-        for(let i=requests.length-1;i>=0;i--){
-          let request;
-          try{request=new URL(requests[i].name);}catch(_){continue;}
-          if(request.origin!==location.origin||request.pathname!=='/index.php'
-              ||request.searchParams.get('sajax')!=='readchapter'
-              ||request.searchParams.get('bookid')!==BOOK||request.searchParams.get('c')!==CHAPTER
-              ||request.searchParams.get('h')!==location.pathname.split('/')[2])continue;
-          const status=requests[i].responseStatus;
-          if(status===403||status===404)return {url:location.href,error:{code:'http_error',http_status:status}};
-          break;
-        }
-        const pending=document.getElementById('maincontent');
-        const evidence=(pending?.innerText||'').trim().slice(0,600);
-        if(/\\bvip\\b/i.test(evidence)&&/chưa\\s+(?:mua|mở\\s+khóa)|không\\s+có\\s+quyền|(?:cần|phải|vui\\s+lòng|yêu\\s+cầu)\\s+(?:mua|mở\\s+khóa)/i.test(evidence))return {url:location.href,error:{code:'vip_locked',evidence}};
-        if(/(?:vui\\s+lòng|cần|hãy|phải)\\s+đăng\\s+nhập/i.test(evidence))return {url:location.href,error:{code:'auth_required',evidence}};
-        return null;
-      }
-      const html=node.outerHTML, key=location.href;
-      const old=window.__localReaderStvChapter;
-      if(!old||old.key!==key||old.html!==html){window.__localReaderStvChapter={key,html,at:Date.now()};return null;}
-      if(Date.now()-old.at<1500)return null;
-      return {url:location.href,html};
-    })()'''.replace('TARGET', target).replace('BOOK', json.dumps(book)).replace('CHAPTER', json.dumps(chapter))
+def _html(markup):
+    if not isinstance(markup, str) or len(markup) > _MAX_HTML:
+        raise SourceError('Nội dung nguồn không hợp lệ hoặc quá lớn.', code='parse_error')
+    try:
+        return parse_html(markup)
+    except ValueError as error:
+        raise SourceError('Không đọc được cấu trúc nội dung nguồn.', code='parse_error') from error
 
 
 class StvSource:
-    def __init__(self, browser):
-        self.browser = browser
+    def __init__(self, http=None):
+        self.http = http if http is not None else StvHttp()
+        self.lock = threading.RLock()
+        self.pending = None
+        self.tocs = {}
 
-    def open(self, url):
-        _parts(url, chapter=bool(re.fullmatch(r'/truyen/[^/]+/1/[0-9]+/[0-9]+/', urlsplit(url).path)))
-        return self.browser.open(url)
+    def close(self):
+        if self.pending:
+            self.pending['event'].set()
+        self.http.close()
 
-    def _read(self, url, expression):
-        try:
-            data = self.browser.read(url, expression, timeout=60)
-        except SourceError:
-            raise
-        except Exception as exc:
-            code = {'browser_timeout': 'source_timeout', 'browser_unavailable': 'browser_unavailable',
-                    'browser_error': 'browser_error'}.get(getattr(exc, 'code', ''), 'network_error')
-            raise SourceError('Không mở được trình duyệt nguồn: ' + str(exc), code=code) from exc
-        if not isinstance(data, dict) or data.get('url') != url:
-            raise SourceError('Trình duyệt trả sai trang nguồn', code='parse_error')
-        return data
+    def _request(self, path, **options):
+        return self.http.request(path, **options)
 
-    def _html(self, data):
-        markup = data.get('html', '')
-        if not isinstance(markup, str) or len(markup) > _MAX_HTML:
-            raise SourceError('Trang nguồn trả nội dung không hợp lệ hoặc quá lớn', code='parse_error')
-        try:
-            return parse_html(markup)
-        except ValueError as exc:
-            raise SourceError('Không đọc được cấu trúc trang nguồn', code='parse_error') from exc
+    def _error(self, payload, url=None):
+        code = str(payload.get('code', ''))
+        if code == '21' and url is not None:
+            if self.pending is None:
+                self.pending = {'id': uuid.uuid4().hex, 'url': url, 'image': None,
+                                'generation': getattr(self.http, 'generation', 0), 'event': threading.Event(), 'verified': False}
+                self.pending['captcha'] = {'source': 'stv', 'id': self.pending['id']}
+            raise SourceCaptchaError(self.pending['id'], self.pending)
+        evidence = html_to_text(str(payload.get('err', '')))[:400]
+        if re.search(r'\bvip\b', evidence, re.I) and re.search(r'chưa\s+(?:mua|mở\s+khóa)|không\s+có\s+quyền|(?:cần|phải|vui\s+lòng|yêu\s+cầu)\s+(?:mua|mở\s+khóa)', evidence, re.I):
+            raise SourceAccessError('Chương VIP yêu cầu quyền đọc tại website gốc.', code='vip_locked', vip=True, evidence=evidence)
+        if re.search(r'(?:vui\s+lòng|cần|hãy|phải)\s+đăng\s+nhập', evidence, re.I):
+            raise SourceAccessError('Website gốc yêu cầu đăng nhập.', code='auth_required', evidence=evidence)
+        raise SourceError('Sáng Tác Việt trả mã ' + (code or 'không rõ') + (': ' + evidence if evidence else '.'),
+                          code='source_response_error')
 
-    def _error(self, data):
-        error = data.get('error')
-        if not isinstance(error, dict):
-            return
-        code = error.get('code')
-        evidence = str(error.get('evidence', ''))[:600]
-        if code == 'http_error' and type(error.get('http_status')) is int:
-            status = error['http_status']
-            raise SourceError('Nguồn trả HTTP ' + str(status), code=code, http_status=status)
-        if code in ('network_error', 'parse_error', 'browser_error'):
-            raise SourceError('Không tải được nội dung nguồn: ' + (evidence or code), code=code)
-        if code == 'vip_locked' and _VIP.search(evidence) and _DENIED.search(evidence):
-            raise SourceAccessError('Chương VIP chưa được mở trên trang gốc.', code='vip_locked', vip=True, evidence=evidence)
-        if code == 'auth_required' and _LOGIN.search(evidence):
-            raise SourceAccessError('Trang gốc yêu cầu đăng nhập.', code='auth_required', evidence=evidence)
-        raise SourceAccessError('Chưa xác minh được quyền đọc trên trang gốc.', evidence=evidence)
-
-    def _metadata(self, data, url):
-        self._error(data)
-        root = self._html(data)
+    def _metadata(self, markup, url):
+        root = _html(markup)
         def meta(name):
             node = root.first('meta[property="' + name + '"]')
             return node.get('content') if node else ''
-        name_node = root.first('#book_name2')
-        name = name_node.text() if name_node else meta('og:novel:book_name') or meta('og:title')
+        title = root.first('#book_name2')
+        name = title.text() if title else meta('og:novel:book_name') or meta('og:title')
         if not name:
-            raise SourceError('Không tìm thấy thông tin truyện Sáng Tác Việt', code='parse_error')
+            raise SourceError('Không tìm thấy thông tin truyện Sáng Tác Việt.', code='parse_error')
         return {'name': name, 'author': meta('og:novel:author'), 'description': meta('og:description'),
                 'cover': safe_remote_url(meta('og:image'), url), 'path': url, 'source': 'stv',
                 'kind': 'text', 'format': 'online'}
 
     def search(self, query, page):
-        fields = {'find': '', 'findinname': query, 'minc': 0, 'tag': ''}
-        if page > 1:
-            fields['p'] = page
-        url = ORIGIN + '/search/?' + urlencode(fields)
-        data = self._read(url, _search_expression(page))
-        self._error(data)
-        root = self._html(data)
-        rows = root.select('a.booksearch')
-        if not rows:
-            message = root.first('#search-containter center')
-            if message and message.text().startswith('Không tìm thấy truyện?'):
-                return {'items': [], 'next': None}
-            raise SourceError('Chưa xác nhận được kết quả tìm kiếm từ trang gốc', code='parse_error')
-        items, seen = [], set()
-        for row in rows:
-            name, author, tag = row.first('.searchbooktitle'), row.first('.searchbookauthor'), row.first('.searchtag')
-            path = safe_remote_url(row.get('href'), ORIGIN)
-            if not name or not name.text() or not path:
-                raise SourceError('Kết quả tìm kiếm thiếu tên hoặc liên kết truyện', code='parse_error')
-            path = path.rstrip('/') + '/'
-            _parts(path)
-            if path in seen:
-                continue
-            seen.add(path)
-            image = row.first('img')
-            cover = safe_remote_url(image.get('data-original') or image.get('data-src') or image.get('src'), url) if image else ''
-            items.append({'name': name.text(), 'author': author.text() if author else '', 'path': path,
-                'cover': cover, 'description': tag.text() if tag else ''})
-        pagination = data.get('pagination_html', '')
-        if not isinstance(pagination, str) or len(pagination) > _MAX_HTML:
-            raise SourceError('Phân trang tìm kiếm không hợp lệ', code='parse_error')
-        pager = parse_html(pagination) if pagination else root
-        next_page = None
-        for link in pager.select('a.page-link'):
-            if link.get('onclick').strip().rstrip(';') != 'gopagen()':
-                continue
-            ancestor, disabled = link, False
-            while ancestor:
-                disabled = disabled or 'disabled' in ancestor.get('class').split() or ancestor.get('aria-disabled') == 'true'
-                ancestor = ancestor.parent
-            if not disabled:
-                next_page = page + 1
-                break
-        return {'items': items, 'next': next_page}
+        with self.lock:
+            fields = {'find': '', 'findinname': query, 'minc': 0, 'tag': '', 'p': page}
+            path = '/io/searchtp/searchBooks?' + urlencode(fields)
+            response = self._request(path, session='metadata')
+            root = _html(response['text'])
+            rows = root.select('a.booksearch')
+            if not rows:
+                if 'Không tìm thấy truyện?' in root.text() or not response['text'].strip():
+                    return {'items': [], 'next': None}
+                raise SourceError('Chưa nhận diện được kết quả tìm kiếm nguồn.', code='parse_error')
+            items, seen = [], set()
+            for row in rows:
+                name, author, tag = row.first('.searchbooktitle'), row.first('.searchbookauthor'), row.first('.searchtag')
+                url = safe_remote_url(row.get('href'), ORIGIN)
+                if not name or not name.text() or not url:
+                    raise SourceError('Kết quả thiếu tên hoặc liên kết truyện.', code='parse_error')
+                parsed = urlsplit(url)
+                if parsed.hostname not in ('sangtacviet.com', 'sangtacviet.vip'):
+                    raise SourceError('Liên kết tìm kiếm không thuộc Sáng Tác Việt.', code='parse_error')
+                url = ORIGIN + parsed.path.rstrip('/') + '/'
+                _parts(url)
+                if url in seen:
+                    continue
+                seen.add(url)
+                image = row.first('img')
+                cover = safe_remote_url(image.get('data-original') or image.get('data-src') or image.get('src'), ORIGIN) if image else ''
+                items.append({'name': name.text(), 'author': author.text() if author else '', 'path': url,
+                              'cover': cover, 'description': tag.text() if tag else ''})
+            # shortcut: observed searchBooks page size is 48; update if the source changes pagination.
+            return {'items': items, 'next': page + 1 if len(rows) >= 48 else None}
 
     def cover(self, url):
-        _parts(url)
-        book = self._metadata(self._read(url, _metadata_expression()), url)
-        if not book['cover']:
-            raise SourceError('Trang truyện không cung cấp bìa hợp lệ', code='parse_error')
-        return {'cover': book['cover'], 'path': url}
+        with self.lock:
+            _parts(url)
+            book = self._metadata(self._request(url, session='metadata', navigation=True)['text'], url)
+            if not book['cover']:
+                raise SourceError('Trang truyện không cung cấp bìa hợp lệ.', code='parse_error')
+            return {'cover': book['cover'], 'path': url}
 
-    def detail(self, url):
-        host, book_id, _ = _parts(url)
-        endpoint = ORIGIN + '/index.php?' + urlencode({'ngmar': 'chapterlist', 'h': host,
-            'bookid': book_id, 'sajax': 'getchapterlist'})
-        data = self._read(url, _metadata_expression(endpoint))
-        book = self._metadata(data, url)
-        response = data.get('toc')
-        if not isinstance(response, dict) or response.get('code') != 1:
-            raise SourceError('Không tải được mục lục Sáng Tác Việt đầy đủ', code='parse_error')
+    def _toc(self, host, book):
+        url = ORIGIN + '/truyen/' + host + '/1/' + book + '/'
+        path = '/index.php?' + urlencode({'ngmar': 'chapterlist', 'h': host, 'bookid': book, 'sajax': 'getchapterlist'})
+        response = _json(self._request(path, session='metadata', referer=url)['text'])
+        if str(response.get('code')) != '1':
+            self._error(response)
         def entries(value):
             if not isinstance(value, str) or not value.strip() or len(value) > _MAX_HTML:
-                raise SourceError('Mục lục Sáng Tác Việt trống hoặc không hợp lệ', code='parse_error')
+                raise SourceError('Mục lục nguồn trống hoặc không hợp lệ.', code='parse_error')
             result = []
             for row in value.strip().split('-//-'):
                 fields = row.strip().split('-/-', 2)
                 if len(fields) != 3 or not re.fullmatch(r'[0-9]+', fields[1]) or not fields[2].strip():
-                    raise SourceError('Mục lục Sáng Tác Việt thiếu mã hoặc tên chương', code='parse_error')
+                    raise SourceError('Mục lục thiếu mã hoặc tên chương.', code='parse_error')
                 result.append((fields[1], fields[2].strip()))
             return result
         translated = entries(response.get('data'))
         original = entries(response['oridata']) if response.get('oridata') else translated
-        if [item[0] for item in translated] != [item[0] for item in original]:
-            raise SourceError('Trang gốc chưa trả đủ mục lục tiếng Việt', code='parse_error')
+        if [c[0] for c in translated] != [c[0] for c in original]:
+            raise SourceError('Nguồn chưa trả đủ mục lục tiếng Việt.', code='parse_error')
         chapters, seen = [], set()
-        for chapter_id, title in translated:
-            if chapter_id in seen:
-                continue
-            seen.add(chapter_id)
-            chapters.append({'index': len(chapters), 'title': title, 'url': url + chapter_id + '/'})
-        book['chapters'] = chapters
-        return book
+        for cid, title in translated:
+            if cid not in seen:
+                seen.add(cid)
+                chapters.append({'index': len(chapters), 'title': title, 'url': url + cid + '/'})
+        self.tocs[(host, book)] = seen
+        return chapters
+
+    def detail(self, url):
+        with self.lock:
+            host, book, _ = _parts(url)
+            result = self._metadata(self._request(url, session='metadata', navigation=True)['text'], url)
+            result['chapters'] = self._toc(host, book)
+            return result
+
+    def _identity(self, payload, host, book, cid):
+        expected = {'qidian': 'https://m.qidian.com/book/' + book + '/' + cid + '.html',
+                    'fanqie': 'https://fanqienovel.com/reader/' + cid}
+        origin = payload.get('origin')
+        origin_matches = origin == expected[host] if host in expected else False
+        if host not in expected and isinstance(origin, str) and safe_remote_url(origin):
+            parsed = urlsplit(origin)
+            # Other providers must expose the exact numeric chapter as a whole path component.
+            origin_matches = (not parsed.query and not parsed.fragment and
+                parsed.path.rstrip('/').rsplit('/', 1)[-1] in (cid, cid + '.html', cid + '.htm'))
+            if parsed.hostname in ('sangtacviet.com', 'sangtacviet.vip'):
+                origin_matches = origin_matches and parsed.path == '/truyen/' + host + '/1/' + book + '/' + cid + '/'
+        if (str(payload.get('bookid')) != book or payload.get('bookhost') != host or not origin_matches
+                or cid not in self.tocs[(host, book)]):
+            raise SourceError('Chưa xác minh được đúng nguồn/truyện/chương từ phản hồi Sáng Tác Việt; không lưu nội dung không chắc chắn.', code='parse_error')
+
+    def _clean(self, markup, url):
+        root = _html(markup)
+        for token in root.select('i[t][h]'):
+            token.tag = 'span'
+        clean = sanitize_html(root.inner_html(), url)
+        text = html_to_text(clean)
+        if not text or _PLACEHOLDER.search(text) or '\ufffd' in text:
+            raise SourceError('Nguồn trả chương trống, chưa tải xong hoặc lỗi mã hóa.', code='parse_error')
+        if not re.search(r'<(?:p|div|br|h[1-6])\b', clean, re.I):
+            clean = ''.join('<p>' + escape(line) + '</p>' for line in text.splitlines() if line.strip())
+        return clean, text
 
     def chapter(self, url):
-        _, book_id, chapter_id = _parts(url, chapter=True)
-        expression = _chapter_expression(book_id, chapter_id)
-        data = self._read(url, expression)
-        if data.get('language_changed') is True:
-            data = self._read(url, expression)
-            if data.get('language_changed') is True:
-                raise SourceError('Trang gốc chưa hoàn tất chọn tiếng Việt; hãy mở bản gốc rồi thử lại.', code='parse_error')
-        root = self._html(data)
-        content = root.first('#cld-' + book_id + '-' + chapter_id)
-        if content and 'contentbox' in content.get('class').split():
-            for token in content.select('i[t][h]'):
-                token.tag = 'span'
-            clean = sanitize_html(content.inner_html(), url)
-            text = html_to_text(clean)
-            chinese = len(re.findall(r'[\u3400-\u9fff]', text))
-            latin = len(re.findall(r'[A-Za-z\u00c0-\u024f\u1e00-\u1eff]', text))
-            if text and not _PLACEHOLDER.search(text) and chinese <= latin:
-                return {'html': clean, 'text': text, 'images': [n.get('src') for n in parse_html(clean).select('img')],
-                        'language': 'vi', 'translation': 'source'}
-        self._error(data)
-        raise SourceError('Trang gốc chưa trả đúng nội dung chương', code='parse_error')
+        with self.lock:
+            host, book, cid = _parts(url, chapter=True)
+            if self.pending is not None:
+                raise SourceCaptchaError(self.pending['id'], self.pending)
+            if (host, book) not in self.tocs or cid not in self.tocs[(host, book)]:
+                self._toc(host, book)
+            if cid not in self.tocs[(host, book)]:
+                raise SourceError('Chương không có trong mục lục nguồn.', code='parse_error')
+            book_url = ORIGIN + '/truyen/' + host + '/1/' + book + '/'
+            document = self._request(url, session='reading', navigation=True, referer=book_url)['text']
+            api = '/index.php?' + urlencode({'bookid': book, 'h': host, 'c': cid, 'ngmar': 'readc',
+                                            'sajax': 'readchapter', 'sty': 1, 'exts': ''})
+            if '/stv.readinit.js' in document:
+                bootstrap = _json(self._request(api, session='reading', method='POST', seed=True, xhr=True, referer=url)['text'])
+                if str(bootstrap.get('code')) not in ('7', '0'):
+                    self._error(bootstrap, url)
+            payload = _json(self._request(api, session='reading', method='POST', body='', referer=url)['text'])
+            if str(payload.get('code')) != '0':
+                self._error(payload, url)
+            self._identity(payload, host, book, cid)
+            clean, text = self._clean(payload.get('data'), url)
+            chinese = lambda value: len(re.findall(r'[\u3400-\u9fff]', value)) > len(re.findall(r'[A-Za-z\u00c0-\u024f\u1e00-\u1eff]', value))
+            if chinese(text):
+                translated = self._request('/index.php?ngmar=trans&langhint=chinese', session='metadata',
+                    method='POST', body=urlencode({'ajax': 'trans', 'content': text}), referer=ORIGIN + '/trans/')['text']
+                try:
+                    envelope = json.loads(translated)
+                except (ValueError, TypeError):
+                    envelope = None
+                if isinstance(envelope, (dict, list)):
+                    # Only the chapter/read CAPTCHA workflow is verified; do not invent a Trans verification purpose.
+                    confirmation = isinstance(envelope, dict) and str(envelope.get('code')) == '21'
+                    message = 'Trans yêu cầu xác minh riêng; chưa có bản dịch hợp lệ.' if confirmation else 'Trans trả phản hồi lỗi thay vì nội dung dịch.'
+                    raise SourceError(message, code='translation_verification_required' if confirmation else 'translation_error')
+                clean, text = self._clean(translated, url)
+                if chinese(text):
+                    raise SourceError('Trans chưa trả nội dung tiếng Việt hợp lệ.', code='parse_error')
+            return {'html': clean, 'text': text, 'images': [n.get('src') for n in parse_html(clean).select('img')],
+                    'language': 'vi', 'translation': 'source'}
+
+    def captcha(self, action, challenge_id, answer=None):
+        with self.lock:
+            pending = self.pending
+            if not pending or not isinstance(challenge_id, str):
+                raise SourceError('Yêu cầu CAPTCHA đã hết hiệu lực. Hãy mở lại chương.', code='captcha_expired')
+            # A cancel can already be in flight when refresh rotates the image ID; old IDs cannot verify.
+            if action == 'cancel' and challenge_id in (pending['id'], pending.get('previous_id')):
+                pending['event'].set()
+                self.pending = None
+                return {'cancelled': True}
+            if challenge_id != pending['id']:
+                raise SourceError('Ảnh CAPTCHA đã thay đổi. Hãy dùng ảnh mới.', code='captcha_expired')
+            if getattr(self.http, 'generation', 0) != pending['generation']:
+                pending['event'].set()
+                self.pending = None
+                raise SourceError('Phiên HTTP đã thay đổi; cần mở lại chương.', code='captcha_expired')
+            if action in ('image', 'refresh'):
+                if action == 'refresh' or pending['image'] is None:
+                    response = self._request('/generate_captcha.php?random=' + str(random.random()),
+                        session='reading', referer=pending['url'], image=True, require_session=True)
+                    image = safe_raster_data_url('data:' + response['content_type'] + ';base64,' + response['body_base64'])
+                    if not image:
+                        raise SourceError('Website trả ảnh CAPTCHA không hợp lệ.', code='parse_error')
+                    if action == 'refresh':
+                        pending['previous_id'] = pending['id']
+                        pending['id'] = uuid.uuid4().hex
+                        pending['captcha']['id'] = pending['id']
+                    pending['image'] = image
+                return {'id': pending['id'], 'image': pending['image']}
+            if action == 'verify':
+                if not pending['image'] or not isinstance(answer, str) or not 4 <= len(answer.strip()) <= 128 or re.search(r'[\x00-\x1f\x7f]', answer):
+                    raise SourceError('Hãy tải ảnh và nhập mã CAPTCHA từ 4 ký tự.', code='captcha_failed')
+                body = urlencode({'ajax': 'verifycaptcha', 'token': answer.strip(), 'purpose': 'read', 'provider': 'sangtacviet'})
+                # Verification has side effects: never automatically replay the user's answer.
+                response = self._request('/index.php?ngmar=verifyca', session='reading', method='POST', body=body,
+                    referer=pending['url'], fresh_connection=True, require_session=True)
+                if response['text'].strip() != 'success':
+                    raise SourceError('Xác minh CAPTCHA thất bại. Kiểm tra mã hoặc làm mới ảnh rồi thử lại.', code='captcha_failed')
+                pending['verified'] = True
+                pending['event'].set()
+                self.pending = None
+                return {'verified': True}
+            raise SourceError('Thao tác CAPTCHA không hợp lệ.')

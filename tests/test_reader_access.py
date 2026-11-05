@@ -152,7 +152,7 @@ class ReaderAccessTests(unittest.TestCase):
                         path = urlsplit(self.path).path
                         if path == '/':
                             return self.reply(WEB.joinpath('index.html').read_text(encoding='utf-8').replace('</body>', '<script type="module" src="/qa.js"></script></body>'), content_type='text/html')
-                        if path in ('/app.js', '/reader.js', '/style.css'):
+                        if path in ('/app.js', '/reader.js', '/captcha.js', '/style.css'):
                             return self.reply(WEB.joinpath(path[1:]).read_text(encoding='utf-8'), content_type='text/css' if path.endswith('.css') else 'text/javascript')
                         if path == '/qa.js':
                             return self.reply(CHECKS, content_type='text/javascript')

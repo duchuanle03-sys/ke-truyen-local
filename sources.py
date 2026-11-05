@@ -5,6 +5,7 @@ import http.client
 import json
 import re
 import socket
+import threading
 import webbrowser
 import urllib.error
 import urllib.request
@@ -23,7 +24,7 @@ _SOURCES = {
     'full': ('Truyện Full', 'https://truyenfull.live', {
         'truyenfull.live', 'truyenfull.vision', 'truyenfull.io', 'truyenfull.vn', 'truyenfull.com'}),
     'hako': ('Hako', 'https://docln.sbs', {'docln.sbs', 'docln.net', 'ln.hako.vn'}),
-    'stv': ('Sáng Tác Việt', 'https://sangtacviet.vip', {'sangtacviet.vip'}),
+    'stv': ('Sáng Tác Việt', 'https://sangtacviet.com', {'sangtacviet.com', 'sangtacviet.vip'}),
 }
 _MAX_RESPONSE = 8 * 1024 * 1024
 
@@ -227,17 +228,26 @@ def _decode_hako(root):
 
 
 class SourceService:
-    def __init__(self, fetcher=None, browser=None):
+    def __init__(self, fetcher=None):
         self.fetcher = fetcher if fetcher is not None else _PublicFetcher()
-        self.browser = browser
+        self._stv_source = None
+        self._stv_lock = threading.Lock()
 
     def _stv(self):
         from stv_source import StvSource
-        if self.browser is None:
-            from pathlib import Path
-            from browser_source import BrowserSource
-            self.browser = BrowserSource(Path(__file__).resolve().parent / 'user-data')
-        return StvSource(self.browser)
+        with self._stv_lock:
+            if self._stv_source is None:
+                self._stv_source = StvSource()
+            return self._stv_source
+
+    def close(self):
+        if self._stv_source is not None:
+            self._stv_source.close()
+
+    def captcha(self, source, action, challenge_id, answer=None):
+        if source != 'stv':
+            raise SourceError('Nguồn này không cung cấp xác minh CAPTCHA trong ứng dụng.')
+        return self._stv().captcha(action, challenge_id, answer)
 
     def sources(self):
         return [{'id': key, 'name': value[0]} for key, value in _SOURCES.items()]
@@ -254,7 +264,7 @@ class SourceService:
         if parsed.hostname.removeprefix('www.') not in aliases:
             raise SourceError('URL không thuộc nguồn đã chọn')
         path = parsed.path
-        if source == 'stv' and (parsed.query or not re.fullmatch(r'/truyen/[a-zA-Z0-9_-]+/1/[0-9]+(?:/[0-9]+)?/?', path)):
+        if source == 'stv' and (parsed.query or parsed.fragment or not re.fullmatch(r'/truyen/[a-zA-Z0-9_-]+/1/[0-9]+(?:/[0-9]+)?/?', path)):
             raise SourceError('URL Sáng Tác Việt phải là trang truyện hoặc chương gốc hợp lệ')
         if source == 'stv':
             path = path.rstrip('/') + '/'
@@ -264,8 +274,6 @@ class SourceService:
 
     def open_original(self, source, url):
         url = self._url(source, url)
-        if source == 'stv':
-            return self._stv().open(url)
         return {'opened': bool(webbrowser.open(url)), 'url': url}
 
     def _load(self, url):

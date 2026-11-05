@@ -25,8 +25,7 @@ from htmltools import html_to_text, sanitize_html, safe_raster_data_url
 from library import Store
 from qt import QtDictionary
 from sources import SourceService, validate_public_url, safe_fetch_bytes
-from source_errors import SourceError, SourceAccessError
-from browser_source import BrowserSource
+from source_errors import SourceError, SourceAccessError, SourceCaptchaError
 
 ROOT = Path(__file__).resolve().parent
 MAX_BODY = 128 * 1024 * 1024
@@ -54,7 +53,7 @@ def public_content(value):
 class App:
     def __init__(self, data_dir, source_service=None):
         self.store = Store(data_dir)
-        self.sources = source_service or SourceService(browser=BrowserSource(self.store.data_dir))
+        self.sources = source_service or SourceService()
         self.qt = QtDictionary(self.store.data_dir)
         self.uploads = self.store.data_dir / "files"
         self.uploads.mkdir(exist_ok=True)
@@ -70,6 +69,8 @@ class App:
         for job in self.jobs.values():
             job["cancelled"] = True
         self.executor.shutdown(wait=False, cancel_futures=True)
+        if callable(getattr(self.sources, 'close', None)):
+            self.sources.close()
         self.qt.close()
 
     def chapter(self, book_id, index):
@@ -135,13 +136,13 @@ class App:
         with self.lock:
             book = self.store.trash_book(book_id)
             for job in self.jobs.values():
-                if job['book_id'] == book_id and job['status'] in ('queued', 'running', 'paused'):
+                if job['book_id'] == book_id and job['status'] in ('queued', 'running', 'paused', 'verification_required'):
                     job['cancelled'] = True
         return book
 
     def purge_book(self, book_id):
         with self.lock:
-            if any(job['book_id'] == book_id and job['status'] in ('queued', 'running', 'paused') for job in self.jobs.values()):
+            if any(job['book_id'] == book_id and job['status'] in ('queued', 'running', 'paused', 'verification_required') for job in self.jobs.values()):
                 raise ValueError('Đang dừng tác vụ tải của truyện. Hãy thử lại sau khi tác vụ dừng.')
             self.store.purge_book(book_id)
             self.jobs = {key: job for key, job in self.jobs.items() if job['book_id'] != book_id}
@@ -152,7 +153,7 @@ class App:
             return
         self._next_trash_cleanup = time.monotonic() + 60
         with self.lock:
-            active = {job['book_id'] for job in self.jobs.values() if job['status'] in ('queued', 'running', 'paused')}
+            active = {job['book_id'] for job in self.jobs.values() if job['status'] in ('queued', 'running', 'paused', 'verification_required')}
             removed = set(self.store.purge_expired(skip_ids=active))
             self.jobs = {key: job for key, job in self.jobs.items() if job['book_id'] not in removed}
 
@@ -220,11 +221,11 @@ class App:
         with self.lock:
             if self.store.get_book(book_id)['trashed_at']:
                 raise ValueError('Hãy khôi phục truyện khỏi thùng rác trước khi tải.')
-            if any(j["book_id"] == book_id and j["status"] in ("queued", "running", "paused") for j in self.jobs.values()):
+            if any(j["book_id"] == book_id and j["status"] in ("queued", "running", "paused", "verification_required") for j in self.jobs.values()):
                 raise ValueError("Truyện đang có trong hàng đợi tải.")
             job = {"id": uuid.uuid4().hex, "book_id": book_id, "name": book["name"],
                    "start": start, "end": end, "total": end - start, "completed": 0,
-                   "status": "queued", "error": "", "cancelled": False}
+                   "status": "queued", "error": "", "cancelled": False, "captcha": None}
             self.jobs[job["id"]] = job
         self.executor.submit(self._download, job)
         return dict(job)
@@ -239,7 +240,26 @@ class App:
                     job["status"] = "cancelled"
                     return
                 book = self.store.get_book(job["book_id"])
-                raw = self._chapter_content(book, index)
+                while True:
+                    try:
+                        raw = self._chapter_content(book, index)
+                        break
+                    except SourceCaptchaError as error:
+                        verification = error.verification
+                        if not verification:
+                            raise
+                        job.update(status='verification_required', error=str(error), captcha=error.captcha)
+                        while not verification['event'].wait(.2):
+                            if job['cancelled']:
+                                job['status'] = 'cancelled'
+                                return
+                        if job['cancelled']:
+                            job['status'] = 'cancelled'
+                            return
+                        if not verification['verified']:
+                            raise SourceError('Đã hủy xác minh. Các chương đã tải vẫn được giữ; có thể thử lại phần còn lại.', code='captcha_cancelled')
+                        job.update(status='running', error='')
+                        job['captcha'] = None
                 for url in raw["images"]:
                     if url.startswith(("http://", "https://")):
                         self.image(url, book["path"])
@@ -267,7 +287,7 @@ class App:
             elif action == "retry" and job["status"] in ("failed", "cancelled"):
                 return self.download(job["book_id"], job["start"] + job["completed"],
                                      job["total"] - job["completed"])
-            elif action == "delete" and job["status"] not in ("running", "queued", "paused"):
+            elif action == "delete" and job["status"] not in ("running", "queued", "paused", "verification_required"):
                 del self.jobs[job_id]
             else:
                 raise ValueError("Không thể thực hiện thao tác với trạng thái hiện tại.")
@@ -417,7 +437,9 @@ class Handler(BaseHTTPRequestHandler):
                 result['http_status'] = error.http_status
             if isinstance(error, SourceAccessError):
                 result['access'] = error.access
-            status = 403 if error.code in ('vip_locked', 'auth_required') else 503 if error.code in ('network_error', 'source_timeout') else 400
+            if isinstance(error, SourceCaptchaError):
+                result['captcha'] = error.captcha
+            status = 409 if error.code == 'captcha_required' else 403 if error.code in ('vip_locked', 'auth_required') else 503 if error.code in ('network_error', 'source_timeout') else 400
             self._reply(status, result)
         except PermissionError as error:
             self._reply(403, {"error": str(error)})
@@ -466,6 +488,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(200, self.app.capabilities())
         if path == "/api/sources" and method == "GET":
             return self._reply(200, self.app.sources.sources())
+        if path == '/api/sources/stv/captcha' and method == 'GET':
+            return self._reply(200, self.app.sources.captcha('stv', 'image', q.get('id')))
+        if len(parts) == 5 and parts[:4] == ['api', 'sources', 'stv', 'captcha'] and method == 'POST':
+            if parts[4] not in ('refresh', 'verify', 'cancel'):
+                raise KeyError('Không có thao tác CAPTCHA này.')
+            body = self._json()
+            return self._reply(200, self.app.sources.captcha('stv', parts[4], body.get('id'), body.get('answer')))
         if len(parts) == 4 and parts[:2] == ["api", "sources"]:
             source, action = parts[2:]
             if action == "search" and method == "GET":

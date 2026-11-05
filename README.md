@@ -4,7 +4,7 @@
 
 ## Chạy ứng dụng
 
-Cần Python 3.10 trở lên và Chrome hoặc Edge. Phần Python dùng thư viện chuẩn, không cần cài thêm gói.
+Cần Python 3.10 trở lên và trình duyệt để hiển thị app. Riêng nguồn Sáng Tác Việt cần **Node.js 20 trở lên** cho HTTP transport; không cần Chrome/Edge hỗ trợ nguồn. Phần Python và Node dùng thư viện chuẩn, không cần cài thêm gói.
 
 Nhấp đúp `Start.cmd`, hoặc chạy trong thư mục dự án:
 
@@ -22,7 +22,8 @@ Bản clone mới có thư viện trống. Dùng **Nhập file**, **Nhập thư 
 
 - Kệ sách có tìm kiếm, bộ lọc và nhóm; lưu chương, vị trí và phần trăm đã đọc.
 - QQ, Full, Hako và Sáng Tác Việt: tìm truyện, xem chi tiết, thêm vào kệ, mục lục và tải chương. Khả năng truy cập phụ thuộc trang nguồn và kết nối mạng.
-- Sáng Tác Việt dùng cửa sổ Chrome/Edge hỗ trợ để website tạo bản Việt, rồi đọc trong app. Nội dung được giữ theo bản Việt website hiển thị, không tự dịch lại bằng QT của app. Hồ sơ trình duyệt riêng nằm trong `user-data/.browser-stv/`; không cần đăng nhập để đọc chương công khai. Nếu nguồn yêu cầu tài khoản có quyền đọc, dùng **Mở trên website gốc** để đăng nhập/mở khóa tại đó, rồi **Thử lại**. App không mua chương hay vượt giới hạn truy cập.
+- Sáng Tác Việt ưu tiên `sangtacviet.com`, dùng HTTP trực tiếp cho tìm kiếm, chi tiết, mục lục và chương; liên kết `.vip` cũ tự chuyển về `.com`. Không mở trình duyệt nguồn, không nhập cookie từ Chrome và không cần tài khoản cho chương công khai. Một HTTP worker giữ phiên/cookie trong bộ nhớ khi điều hướng; chương đã tải được cache như ba nguồn còn lại. Chương đã là tiếng Việt không gọi dịch; nội dung tiếng Trung được chuyển qua Trans của Sáng Tác Việt, không qua QT cục bộ.
+- Khi website trả yêu cầu CAPTCHA rõ ràng, app hiển thị ảnh để bạn tự nhập, với **Gửi**, **Làm mới CAPTCHA**, **Hủy** và phóng to ảnh. Xác minh thành công tự tiếp tục thao tác bị ngắt; hủy hoặc sai mã không đánh dấu chương đã đọc và không mất vị trí cũ. Tác vụ tải chờ xác minh có nút tương ứng trong **Thiết lập → Tải nội dung**. App không tự giải hay vượt CAPTCHA; website có thể yêu cầu lại. **Mở trên website gốc** chỉ mở trình duyệt khi bạn chủ động bấm; đăng nhập bên ngoài không tự chuyển cookie vào app. Chưa tích hợp tài khoản/chương trả phí của nguồn.
 - Chương VIP bị chặn chỉ có màn hình riêng khi nguồn xác nhận rõ; giữ vị trí đọc trước, mở đúng chương gốc và quay về chương trước. Lỗi mạng, HTTP, phân tích nội dung và quyền chưa xác minh được hiển thị riêng. Ổ khóa trong mục lục chỉ xuất hiện khi có thông tin VIP đã xác nhận; chưa có thông tin không có nghĩa chương miễn phí.
 - Nhập thư viện từ thư mục hoặc ZIP xuất của vBook, giữ dữ liệu tiến độ có trong bản xuất. Chỉ khôi phục được thông tin và tệp thực sự có trong bản xuất; không có đồng bộ với tài khoản vBook.
 - Nhập tệp EPUB, PDF, TXT và các định dạng khác được liệt kê trong **Thiết lập**. PDF có OCR Windows để tìm kiếm/nghe và nút mở bản gốc; chất lượng phụ thuộc gói ngôn ngữ OCR đã cài.
@@ -38,7 +39,7 @@ Bản clone mới có thư viện trống. Dùng **Nhập file**, **Nhập thư 
 
 Dữ liệu được tạo trong `user-data/`. Máy chủ chỉ lắng nghe tại địa chỉ loopback của máy đang chạy. Đọc tệp đã nhập và chương đã tải không cần Internet; tải nội dung mới và giọng TTS online cần mạng.
 
-Phiên trình duyệt hỗ trợ Sáng Tác Việt chứa dữ liệu phiên đăng nhập của riêng website đó. Không chia sẻ thư mục `.browser-stv/` hoặc đưa vào Git; kho mã chỉ lưu mã nguồn và kiểm thử. Ứng dụng dùng phiên truy cập hợp lệ hiện có, không sao chép mật khẩu vào thiết lập của app. Chương mới vẫn cần mạng; chương đã lưu đọc được khi website không truy cập được.
+Phiên HTTP Sáng Tác Việt và CAPTCHA chỉ nằm trong bộ nhớ, không ghi đáp án, cookie hoặc mật khẩu vào log/thư viện. Khởi động lại app tạo phiên mới và website có thể yêu cầu xác minh lại. Các thư mục `.browser-stv/` từ bản cũ không còn được dùng; vẫn nên giữ riêng tư vì có thể chứa phiên đăng nhập cũ. Chương mới cần mạng; chương đã lưu đọc được khi website không truy cập được.
 
 **Dừng máy chủ rồi sao chép nội dung `user-data/`, loại trừ thư mục `.browser-stv/`, để sao lưu** thư viện, tiến độ, tệp nhập và từ điển. Khôi phục bằng cách chép lại dữ liệu khi máy chủ đang dừng; đăng nhập lại website gốc nếu cần. Có thể chọn thư mục dữ liệu khác bằng `--data-dir`.
 
@@ -57,9 +58,11 @@ Repo chỉ chứa mã nguồn, hướng dẫn và kiểm thử cùng mẫu trang
 python -X utf8 -m unittest discover -s tests -v
 node --check web/app.js
 node --check web/reader.js
+node --check web/captcha.js
+node --check stv_http_worker.mjs
 ```
 
-Node.js chỉ cần khi kiểm tra cú pháp JavaScript. Kiểm thử dùng dữ liệu tạm, không sửa thư viện thật; mẫu QQ/Full/Hako không cần tải mạng. Kiểm thử tích hợp OCR/TTS phụ thuộc Windows và các thành phần ngôn ngữ/giọng đã cài.
+Node.js cần khi dùng Sáng Tác Việt và kiểm tra JavaScript. Kiểm thử dùng dữ liệu tạm và phản hồi HTTP tổng hợp, không sửa thư viện thật hoặc giải CAPTCHA website. Kiểm thử DOM chỉ mở giao diện cục bộ trong trình duyệt kiểm thử; không dùng trình duyệt để tải nội dung nguồn. Kiểm thử tích hợp OCR/TTS phụ thuộc Windows và các thành phần ngôn ngữ/giọng đã cài.
 
 ## Giới hạn
 

@@ -14,3 +14,10 @@ class SourceAccessError(SourceError):
             code, vip = 'access_unverified', None
         super().__init__(message, code=code)
         self.access = {'state': code, 'vip': vip, 'evidence': evidence}
+
+
+class SourceCaptchaError(SourceError):
+    def __init__(self, challenge_id, verification=None):
+        super().__init__('Sáng Tác Việt yêu cầu xác minh CAPTCHA để tiếp tục.', code='captcha_required')
+        self.captcha = verification['captcha'] if verification is not None else {'source': 'stv', 'id': challenge_id}
+        self.verification = verification

@@ -17,6 +17,9 @@
 !sources.py
 !source_errors.py
 !stv_source.py
+!stv_http.py
+!stv_http_worker.mjs
+!/web/captcha.js
 !shortcuts.py
 !tts.py
 !/web/
