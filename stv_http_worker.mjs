@@ -129,7 +129,7 @@ export class Session {
       if (!/^image\/(?:png|jpeg|gif|webp)$/.test(content_type)) throw failure('parse_error', 'Website chưa trả ảnh CAPTCHA hợp lệ.');
       return {body_base64: bytes.toString('base64'), content_type};
     }
-    return {text};
+    return {text, request_url: url.href, request_method: method};
   }
 }
 

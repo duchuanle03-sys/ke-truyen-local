@@ -3,7 +3,7 @@ import base64
 import json
 import unittest
 from unittest.mock import patch
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urljoin
 
 from sources import SourceService
 from source_errors import SourceError
@@ -30,7 +30,8 @@ class HttpFixture:
         value = self.responses.pop(0)
         if isinstance(value, Exception): raise value
         if isinstance(value, dict) and 'body_base64' in value: return value
-        return {'text': json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value}
+        return {'text': json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value,
+                'request_url': urljoin(ORIGIN, path), 'request_method': options.get('method', 'GET')}
     def close(self): pass
 
 class StvHttpTests(unittest.TestCase):
@@ -107,20 +108,64 @@ class StvHttpTests(unittest.TestCase):
                      link.replace('wap.ciweimao.com/', 'wap.ciweimao.com.evil.test/'),
                      link.replace('/chapter/get_par_tsu_list?', '/other?'),
                      link.replace('chapter_id=901', 'chapter_id=901&amp;chapter_id=902'),
-                     link + link.replace('chapter_id=901', 'chapter_id=902'), '<p>Chương không có định danh.</p>'):
+                     link + link.replace('chapter_id=901', 'chapter_id=902')):
             source, _ = self.source(TOC, '<div>page</div>', chapter(bookhost='ciweimao', origin='', data='<p>Nội dung thử.</p>'+data))
             with self.subTest(data=data), self.assertRaises(SourceError) as caught:
                 source.chapter(url)
             self.assertEqual(caught.exception.code, 'parse_error')
 
+    def test_ciweimao_without_optional_identifiers_uses_the_verified_post_resource(self):
+        url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
+        # Source chapter caches can retain an older title than the current TOC.
+        payload = chapter(bookhost='ciweimao', origin='', chaptername='Tên chương cũ', data='<p>Nội dung tiếng Việt.</p>')
+        source, http = self.source(TOC, '<div>page</div>', payload)
+        self.assertEqual(source.chapter(url)['text'], 'Nội dung tiếng Việt.')
+        path, options = http.calls[-1]
+        self.assertEqual(options['method'], 'POST')
+        query = parse_qs(path.split('?', 1)[1])
+        self.assertEqual((query['bookid'], query['h'], query['c']), (['123'], ['ciweimao'], ['901']))
+
+    def test_ciweimao_no_identifier_fallback_still_rejects_wrong_book_or_source(self):
+        url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
+        for fields in ({'bookid': '124'}, {'bookhost': 'qidian'}, {'bookid': None}, {'bookhost': None}):
+            payload = chapter(bookhost='ciweimao', origin='', data='<p>Nội dung tiếng Việt.</p>'); payload.update(fields)
+            source, _ = self.source(TOC, '<div>page</div>', payload)
+            with self.subTest(fields=fields), self.assertRaises(SourceError): source.chapter(url)
+
+    def test_response_must_belong_to_the_actual_post_book_and_chapter(self):
+        payload = chapter(bookhost='ciweimao', origin='', data='<p>Nội dung tiếng Việt.</p>')
+        url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
+        api = ORIGIN + '/index.php?bookid=123&h=ciweimao&c=901&ngmar=readc&sajax=readchapter&sty=1&exts='
+        for changes in ({'request_method': 'GET'}, {'request_url': api.replace('c=901', 'c=902')},
+                        {'request_url': api.replace('bookid=123', 'bookid=124')},
+                        {'request_url': api.replace('sangtacviet.com', 'evil.test')},
+                        {'request_url': api + '&c=902'}, {'request_url': ''}):
+            class MismatchedHttp(HttpFixture):
+                def request(self, path, **options):
+                    response = super().request(path, **options)
+                    if 'sajax=readchapter' in path: response.update(changes)
+                    return response
+            source = StvSource(http=MismatchedHttp(TOC, '<div>page</div>', payload))
+            with self.subTest(changes=changes), self.assertRaises(SourceError) as caught: source.chapter(url)
+            self.assertEqual(caught.exception.code, 'parse_error')
+
     def test_ciweimao_reference_does_not_override_mismatched_book_or_nonempty_origin(self):
         url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
         data = '<p>Tiếng Việt.<a class="num-link" href="https://wap.ciweimao.com/chapter/get_par_tsu_list?chapter_id=901">0</a></p>'
-        for changes in ({'bookid': '124'}, {'bookhost': 'qidian'}, {'origin': 'https://wap.ciweimao.com/chapter/902'}):
+        for changes in ({'bookid': '124'}, {'bookhost': 'qidian'}, {'origin': 'https://wap.ciweimao.com/chapter/902'},
+                        {'origin': 'https://evil.test/chapter/901'}):
             payload = chapter(bookhost='ciweimao', origin='', data=data); payload.update(changes)
             source, _ = self.source(TOC, '<div>page</div>', payload)
             with self.subTest(changes=changes), self.assertRaises(SourceError):
                 source.chapter(url)
+
+    def test_ciweimao_explicit_chapter_reference_cannot_disagree_with_valid_origin(self):
+        url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
+        data = '<p>Nội dung.<a class="num-link" href="https://wap.ciweimao.com/chapter/get_par_tsu_list?chapter_id=902">0</a></p>'
+        payload = chapter(bookhost='ciweimao', origin='https://wap.ciweimao.com/chapter/901', data=data)
+        source, _ = self.source(TOC, '<div>page</div>', payload)
+        with self.assertRaises(SourceError) as caught: source.chapter(url)
+        self.assertEqual(caught.exception.code, 'parse_error')
 
     def test_only_chinese_calls_trans_and_paragraphs_are_not_duplicated(self):
         source, http = self.source(TOC, '<div>page</div>', chapter(data='<p>这是合成的中文测试。</p><p>第二段文字。</p>'), '<p>Đoạn thứ nhất.</p><p>Đoạn thứ hai.</p>')

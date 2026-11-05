@@ -174,7 +174,13 @@ class StvSource:
             result['chapters'] = self._toc(host, book)
             return result
 
-    def _identity(self, payload, host, book, cid):
+    def _identity(self, payload, host, book, cid, response):
+        requested = urlsplit(response.get('request_url') if isinstance(response.get('request_url'), str) else '')
+        query = parse_qs(requested.query, keep_blank_values=True)
+        request_matches = (response.get('request_method') == 'POST' and requested.scheme == 'https'
+            and requested.netloc == 'sangtacviet.com' and requested.path == '/index.php' and not requested.fragment
+            and all(query.get(key) == [value] for key, value in
+                    (('bookid', book), ('h', host), ('c', cid), ('ngmar', 'readc'), ('sajax', 'readchapter'))))
         expected = {'qidian': 'https://m.qidian.com/book/' + book + '/' + cid + '.html',
                     'fanqie': 'https://fanqienovel.com/reader/' + cid}
         origin = payload.get('origin')
@@ -186,11 +192,18 @@ class StvSource:
                 parsed.path.rstrip('/').rsplit('/', 1)[-1] in (cid, cid + '.html', cid + '.htm'))
             if parsed.hostname in ('sangtacviet.com', 'sangtacviet.vip'):
                 origin_matches = origin_matches and parsed.path == '/truyen/' + host + '/1/' + book + '/' + cid + '/'
-        if host == 'ciweimao' and origin in ('', None):
-            # This provider omits origin; generated paragraph-comment links carry the actual chapter_id.
-            chapter_ids = {ids[0] if len(ids) == 1 else None for _, ids in _ciweimao_comments(_html(payload.get('data')))}
-            origin_matches = chapter_ids == {cid}
-        if (str(payload.get('bookid')) != book or payload.get('bookhost') != host or not origin_matches
+            if host == 'ciweimao' and parsed.hostname not in ('ciweimao.com', 'www.ciweimao.com', 'wap.ciweimao.com', 'sangtacviet.com', 'sangtacviet.vip'):
+                origin_matches = False
+        if host == 'ciweimao':
+            # Ciweimao can omit both origin and paragraph links; bind that format to the verified POST resource.
+            if origin in ('', None):
+                origin_matches = True
+            root = _html(payload.get('data'))
+            nodes = root.select('a.num-link')
+            if nodes:
+                references = list(_ciweimao_comments(root))
+                origin_matches = origin_matches and len(references) == len(nodes) and all(ids == [cid] for _, ids in references)
+        if (not request_matches or str(payload.get('bookid')) != book or payload.get('bookhost') != host or not origin_matches
                 or cid not in self.tocs[(host, book)]):
             raise SourceError('Chưa xác minh được đúng nguồn/truyện/chương từ phản hồi Sáng Tác Việt; không lưu nội dung không chắc chắn.', code='parse_error')
 
@@ -226,10 +239,11 @@ class StvSource:
                 bootstrap = _json(self._request(api, session='reading', method='POST', seed=True, xhr=True, referer=url)['text'])
                 if str(bootstrap.get('code')) not in ('7', '0'):
                     self._error(bootstrap, url)
-            payload = _json(self._request(api, session='reading', method='POST', body='', referer=url)['text'])
+            response = self._request(api, session='reading', method='POST', body='', referer=url)
+            payload = _json(response['text'])
             if str(payload.get('code')) != '0':
                 self._error(payload, url)
-            self._identity(payload, host, book, cid)
+            self._identity(payload, host, book, cid, response)
             clean, text = self._clean(payload.get('data'), url)
             chinese = lambda value: len(re.findall(r'[\u3400-\u9fff]', value)) > len(re.findall(r'[A-Za-z\u00c0-\u024f\u1e00-\u1eff]', value))
             if chinese(text):
