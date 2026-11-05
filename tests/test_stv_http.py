@@ -91,6 +91,37 @@ class StvHttpTests(unittest.TestCase):
         with self.assertRaises(SourceError): source.chapter(BOOK + '999/')
         self.assertEqual(len(http.calls), 1)
 
+    def test_ciweimao_without_origin_uses_exact_paragraph_chapter_ids(self):
+        url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
+        data = '<p>Tiếng Việt.<a class="num-link" href="https://wap.ciweimao.com/chapter/get_par_tsu_list?chapter_id=901&amp;data-pgid=1">4</a></p><p>Đoạn hai.<a class="num-link num-link2" href="https://wap.ciweimao.com/chapter/get_par_tsu_list?chapter_id=901&amp;data-pgid=2">0</a></p>'
+        source, _ = self.source(TOC, '<div>page</div>', chapter(bookhost='ciweimao', origin='', data=data))
+        result = source.chapter(url)
+        self.assertEqual(result['text'], 'Tiếng Việt.\nĐoạn hai.')
+        self.assertEqual(result['html'].count('<p>'), 2)
+        self.assertNotIn('num-link', result['html'])
+
+    def test_ciweimao_missing_origin_does_not_accept_wrong_ambiguous_or_forged_ids(self):
+        url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
+        link = '<a class="num-link" href="https://wap.ciweimao.com/chapter/get_par_tsu_list?chapter_id=901&amp;data-pgid=1">0</a>'
+        for data in (link.replace('chapter_id=901', 'chapter_id=902'), link.replace('chapter_id=901', 'chapter_id=901999'),
+                     link.replace('wap.ciweimao.com/', 'wap.ciweimao.com.evil.test/'),
+                     link.replace('/chapter/get_par_tsu_list?', '/other?'),
+                     link.replace('chapter_id=901', 'chapter_id=901&amp;chapter_id=902'),
+                     link + link.replace('chapter_id=901', 'chapter_id=902'), '<p>Chương không có định danh.</p>'):
+            source, _ = self.source(TOC, '<div>page</div>', chapter(bookhost='ciweimao', origin='', data='<p>Nội dung thử.</p>'+data))
+            with self.subTest(data=data), self.assertRaises(SourceError) as caught:
+                source.chapter(url)
+            self.assertEqual(caught.exception.code, 'parse_error')
+
+    def test_ciweimao_reference_does_not_override_mismatched_book_or_nonempty_origin(self):
+        url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
+        data = '<p>Tiếng Việt.<a class="num-link" href="https://wap.ciweimao.com/chapter/get_par_tsu_list?chapter_id=901">0</a></p>'
+        for changes in ({'bookid': '124'}, {'bookhost': 'qidian'}, {'origin': 'https://wap.ciweimao.com/chapter/902'}):
+            payload = chapter(bookhost='ciweimao', origin='', data=data); payload.update(changes)
+            source, _ = self.source(TOC, '<div>page</div>', payload)
+            with self.subTest(changes=changes), self.assertRaises(SourceError):
+                source.chapter(url)
+
     def test_only_chinese_calls_trans_and_paragraphs_are_not_duplicated(self):
         source, http = self.source(TOC, '<div>page</div>', chapter(data='<p>这是合成的中文测试。</p><p>第二段文字。</p>'), '<p>Đoạn thứ nhất.</p><p>Đoạn thứ hai.</p>')
         self.assertEqual(source.chapter(CHAPTER)['text'], 'Đoạn thứ nhất.\nĐoạn thứ hai.')

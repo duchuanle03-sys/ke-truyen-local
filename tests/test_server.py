@@ -160,6 +160,29 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(actual, body)
         self.assertEqual(kind, 'image/png')
 
+    def test_stv_image_403_retries_https_without_referrer_and_caches_real_image(self):
+        from source_errors import SourceError
+        url = 'http://cdn.example/stv-cover.jpg'
+        referer = 'https://sangtacviet.com/truyen/ciweimao/1/123/'
+        body = b'\x89PNG\r\n\x1a\n' + b'public cover'
+        with patch('server.safe_fetch_bytes', side_effect=[SourceError('Forbidden', code='http_error', http_status=403), body]) as fetch:
+            actual, kind = self.server.app.image(url, referer)
+            self.assertEqual((actual, kind), (body, 'image/png'))
+            self.assertEqual(fetch.call_args_list[0].args[0], url)
+            self.assertEqual(fetch.call_args_list[0].kwargs['headers']['Referer'], referer)
+            self.assertEqual(fetch.call_args_list[1].args[0], url.replace('http:', 'https:'))
+            self.assertNotIn('Referer', fetch.call_args_list[1].kwargs['headers'])
+            self.assertEqual(self.server.app.image(url, referer), (body, 'image/png'))
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_stv_image_retry_keeps_http_failures_and_other_sources_distinct(self):
+        from source_errors import SourceError
+        for referer, status in [('https://sangtacviet.com/truyen/qidian/1/123/', 404),
+                                ('https://docln.sbs/truyen/123/', 403), ('', 403)]:
+            with self.subTest(referer=referer, status=status), patch('server.safe_fetch_bytes', side_effect=SourceError('Failure', code='http_error', http_status=status)) as fetch:
+                with self.assertRaises(SourceError): self.server.app.image('https://cdn.example/missing.jpg', referer)
+                self.assertEqual(fetch.call_count, 1)
+
     def test_failed_cover_is_refreshed_without_changing_library_or_progress(self):
         book = self.server.app.store.upsert_book({'id': 'keep', 'name': 'Keep', 'source': 'hako',
             'path': 'https://ln.hako.vn/truyen/1-keep', 'cover': 'https://old.example/dead.jpg'},

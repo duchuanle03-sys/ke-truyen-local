@@ -166,7 +166,14 @@ class App:
         else:
             if referer:
                 referer = validate_public_url(referer, resolve=False)
-            body = safe_fetch_bytes(url, headers={"Referer": referer, "Accept": "image/*"})
+            try:
+                body = safe_fetch_bytes(url, headers={"Referer": referer, "Accept": "image/*"})
+            except SourceError as error:
+                if (error.code != 'http_error' or error.http_status != 403
+                        or (urlsplit(referer).hostname or '').removeprefix('www.') not in ('sangtacviet.com', 'sangtacviet.vip')):
+                    raise
+                # STV's cover uses no-referrer; browsers also upgrade its mixed-content image to HTTPS.
+                body = safe_fetch_bytes(urlsplit(url)._replace(scheme='https').geturl(), headers={"Accept": "image/*"})
             if len(body) > 20 * 1024 * 1024:
                 raise ValueError("Ảnh vượt giới hạn 20 MiB.")
             content_type = image_type(body)

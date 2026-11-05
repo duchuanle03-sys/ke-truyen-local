@@ -5,7 +5,7 @@ import re
 import threading
 import uuid
 from html import escape
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from htmltools import html_to_text, parse_html, safe_remote_url, safe_raster_data_url, sanitize_html
 from source_errors import SourceError, SourceAccessError, SourceCaptchaError
@@ -42,6 +42,17 @@ def _html(markup):
         return parse_html(markup)
     except ValueError as error:
         raise SourceError('Không đọc được cấu trúc nội dung nguồn.', code='parse_error') from error
+
+
+def _ciweimao_comments(root):
+    for node in root.select('a.num-link[href]'):
+        href = safe_remote_url(node.get('href'))
+        if not href:
+            continue
+        link = urlsplit(href)
+        if (link.scheme == 'https' and link.netloc == 'wap.ciweimao.com'
+                and link.path == '/chapter/get_par_tsu_list' and not link.fragment):
+            yield node, parse_qs(link.query, keep_blank_values=True).get('chapter_id', [])
 
 
 class StvSource:
@@ -175,12 +186,19 @@ class StvSource:
                 parsed.path.rstrip('/').rsplit('/', 1)[-1] in (cid, cid + '.html', cid + '.htm'))
             if parsed.hostname in ('sangtacviet.com', 'sangtacviet.vip'):
                 origin_matches = origin_matches and parsed.path == '/truyen/' + host + '/1/' + book + '/' + cid + '/'
+        if host == 'ciweimao' and origin in ('', None):
+            # This provider omits origin; generated paragraph-comment links carry the actual chapter_id.
+            chapter_ids = {ids[0] if len(ids) == 1 else None for _, ids in _ciweimao_comments(_html(payload.get('data')))}
+            origin_matches = chapter_ids == {cid}
         if (str(payload.get('bookid')) != book or payload.get('bookhost') != host or not origin_matches
                 or cid not in self.tocs[(host, book)]):
             raise SourceError('Chưa xác minh được đúng nguồn/truyện/chương từ phản hồi Sáng Tác Việt; không lưu nội dung không chắc chắn.', code='parse_error')
 
     def _clean(self, markup, url):
         root = _html(markup)
+        if urlsplit(url).path.startswith('/truyen/ciweimao/'):
+            for counter, _ in list(_ciweimao_comments(root)):
+                counter.parent.children.remove(counter)
         for token in root.select('i[t][h]'):
             token.tag = 'span'
         clean = sanitize_html(root.inner_html(), url)
