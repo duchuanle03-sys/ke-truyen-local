@@ -212,7 +212,11 @@ class StvSource:
         if urlsplit(url).path.startswith('/truyen/ciweimao/'):
             for counter, _ in list(_ciweimao_comments(root)):
                 counter.parent.children.remove(counter)
-        for token in root.select('i[t][h]'):
+            # The source's Ciweimao preprocess removes attribute-free spans before rendering.
+            for noise in list(root.select('span')):
+                if not noise.attrs:
+                    noise.parent.children.remove(noise)
+        for token in root.select('i[t][h], i[t][v]'):
             token.tag = 'span'
         clean = sanitize_html(root.inner_html(), url)
         text = html_to_text(clean)

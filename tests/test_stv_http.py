@@ -101,6 +101,32 @@ class StvHttpTests(unittest.TestCase):
         self.assertEqual(result['html'].count('<p>'), 2)
         self.assertNotIn('num-link', result['html'])
 
+    def test_translation_tokens_are_not_italic_but_real_emphasis_is_preserved(self):
+        data = ('<p><i t="中文" v="từ điển" p="n">Tiếng Việt</i> '
+                '<i t="词" h="hash">rõ ràng</i>.</p>'
+                '<p><i>Chữ nghiêng có chủ ý.</i> <em>Nhấn mạnh.</em></p>')
+        for host in ('ciweimao', 'qidian'):
+            origin = 'https://wap.ciweimao.com/chapter/901' if host == 'ciweimao' else 'https://m.qidian.com/book/123/901.html'
+            source, _ = self.source(TOC, '<div>page</div>', chapter(bookhost=host, origin=origin, data=data))
+            with self.subTest(host=host):
+                result = source.chapter(CHAPTER.replace('/qidian/', '/' + host + '/'))
+                self.assertIn('<span>Tiếng Việt</span> <span>rõ ràng</span>.', result['html'])
+                self.assertIn('<i>Chữ nghiêng có chủ ý.</i> <em>Nhấn mạnh.</em>', result['html'])
+
+    def test_ciweimao_applies_source_plain_span_cleanup_before_sanitizing_and_tts(self):
+        data = ('<p><span style="color:gray">Thông báo nguồn.</span></p>'
+                '<p><i t="概率" v="tỉ lệ" p="n">Tỉ lệ</i> 99.9%?<span>AbCdE9</span>'
+                '<a class="num-link" href="https://wap.ciweimao.com/chapter/get_par_tsu_list?chapter_id=901">4</a></p>'
+                '<p><span class="note">Ghi chú còn nguyên.</span></p>')
+        source, _ = self.source(TOC, '<div>page</div>', chapter(bookhost='ciweimao', origin='', data=data))
+        result = source.chapter(CHAPTER.replace('/qidian/', '/ciweimao/'))
+        self.assertEqual(result['text'], 'Thông báo nguồn.\nTỉ lệ 99.9%?\nGhi chú còn nguyên.')
+        self.assertNotIn('AbCdE9', result['html'])
+        self.assertIn('<span>Tỉ lệ</span>', result['html'])
+        self.assertEqual(result['html'].count('<p>'), 3)
+        source, _ = self.source(TOC, '<div>page</div>', chapter(data='<p><span>Văn bản thường.</span></p>'))
+        self.assertEqual(source.chapter(CHAPTER)['text'], 'Văn bản thường.')
+
     def test_ciweimao_missing_origin_does_not_accept_wrong_ambiguous_or_forged_ids(self):
         url = BOOK.replace('/qidian/', '/ciweimao/') + '901/'
         link = '<a class="num-link" href="https://wap.ciweimao.com/chapter/get_par_tsu_list?chapter_id=901&amp;data-pgid=1">0</a>'
