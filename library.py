@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import sqlite3
 import stat
@@ -20,6 +21,8 @@ from htmltools import parse_html, safe_remote_url
 MAX_JSON = 32 * 1024 * 1024
 MAX_BACKUP = 512 * 1024 * 1024
 TRASH_RETENTION = 30 * 24 * 60 * 60
+_ASSET_NAMES = {'files': r'[0-9a-f]{64}\.[a-z0-9]+',
+                'images': r'[0-9a-f]{64}(?:\.[0-9a-f]{32}\.tmp)?'}
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False)
@@ -78,6 +81,8 @@ class Store:
         self._asset_lock = threading.RLock()
         # shortcut: in-flight leases cover one server; share leases before supporting multiple servers per library.
         self._active_assets = Counter()
+        self._asset_inventory = None
+        self._inventory_retry_at = 0
         with self.db() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""
@@ -121,30 +126,48 @@ class Store:
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             first = not db.execute("SELECT 1 FROM sqlite_master WHERE name='asset_refs'").fetchone()
+            for name in ('asset_book_insert', 'asset_book_update', 'asset_book_path',
+                         'asset_chapter_insert', 'asset_chapter_update'):
+                trigger = db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", (name,)).fetchone()
+                if trigger and 'INSERT OR REPLACE INTO asset_pending' in trigger[0]:
+                    db.execute('DROP TRIGGER ' + name)
             for sql in (
                 'CREATE TABLE IF NOT EXISTS asset_refs (book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, idx INTEGER NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY(book_id,idx,kind,name))',
                 'CREATE INDEX IF NOT EXISTS asset_lookup ON asset_refs(kind,name)',
                 'CREATE TABLE IF NOT EXISTS asset_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, idx INTEGER NOT NULL, blocked INTEGER NOT NULL DEFAULT 0, UNIQUE(book_id,idx))',
                 'CREATE INDEX IF NOT EXISTS asset_pending_work ON asset_pending(blocked,id)',
-                "CREATE TABLE IF NOT EXISTS asset_index_state (id INTEGER PRIMARY KEY CHECK(id=1), book_id TEXT NOT NULL DEFAULT '', idx INTEGER NOT NULL DEFAULT -1, complete INTEGER NOT NULL DEFAULT 0, cleanup_requested INTEGER NOT NULL DEFAULT 0, cleanup_completed INTEGER NOT NULL DEFAULT 0)",
-                "CREATE TRIGGER IF NOT EXISTS asset_book_insert AFTER INSERT ON books BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) VALUES(NEW.id,-1); END",
-                "CREATE TRIGGER IF NOT EXISTS asset_book_update AFTER UPDATE OF path,cover ON books WHEN NEW.path IS NOT OLD.path OR NEW.cover IS NOT OLD.cover BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) VALUES(NEW.id,-1); END",
-                'CREATE TRIGGER IF NOT EXISTS asset_book_delete AFTER DELETE ON books BEGIN UPDATE asset_index_state SET cleanup_requested=cleanup_requested+1 WHERE id=1; END',
-                "CREATE TRIGGER IF NOT EXISTS asset_book_path AFTER UPDATE OF path ON books WHEN NEW.path IS NOT OLD.path BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) SELECT book_id,idx FROM chapters WHERE book_id=NEW.id; END",
-                "CREATE TRIGGER IF NOT EXISTS asset_chapter_insert AFTER INSERT ON chapters WHEN NEW.html!='' OR NEW.original_html IS NOT NULL OR NEW.images!='[]' BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx); END",
-                "CREATE TRIGGER IF NOT EXISTS asset_chapter_update AFTER UPDATE OF html,original_html,images ON chapters WHEN NEW.html IS NOT OLD.html OR NEW.original_html IS NOT OLD.original_html OR NEW.images IS NOT OLD.images BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx); END",
+                "CREATE TABLE IF NOT EXISTS asset_index_state (id INTEGER PRIMARY KEY CHECK(id=1), book_id TEXT NOT NULL DEFAULT '', idx INTEGER NOT NULL DEFAULT -1, complete INTEGER NOT NULL DEFAULT 0)",
+                'CREATE TABLE IF NOT EXISTS asset_gc_candidates (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, name TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1, retry_at REAL NOT NULL DEFAULT 0, UNIQUE(kind,name))',
+                'CREATE INDEX IF NOT EXISTS asset_gc_due ON asset_gc_candidates(retry_at,id)',
+                "CREATE TRIGGER IF NOT EXISTS asset_book_insert AFTER INSERT ON books BEGIN INSERT INTO asset_pending(book_id,idx) VALUES(NEW.id,-1) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END",
+                "CREATE TRIGGER IF NOT EXISTS asset_book_update AFTER UPDATE OF path,cover ON books WHEN NEW.path IS NOT OLD.path OR NEW.cover IS NOT OLD.cover BEGIN INSERT INTO asset_pending(book_id,idx) VALUES(NEW.id,-1) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END",
+                'CREATE TRIGGER IF NOT EXISTS asset_ref_gc BEFORE DELETE ON asset_refs BEGIN INSERT INTO asset_gc_candidates(kind,name) VALUES(OLD.kind,OLD.name) ON CONFLICT(kind,name) DO UPDATE SET generation=generation+1,retry_at=0; END',
+                "CREATE TRIGGER IF NOT EXISTS asset_book_path AFTER UPDATE OF path ON books WHEN NEW.path IS NOT OLD.path BEGIN INSERT INTO asset_pending(book_id,idx) SELECT book_id,idx FROM chapters WHERE book_id=NEW.id ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END",
+                "CREATE TRIGGER IF NOT EXISTS asset_chapter_insert AFTER INSERT ON chapters WHEN NEW.html!='' OR NEW.original_html IS NOT NULL OR NEW.images!='[]' BEGIN INSERT INTO asset_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END",
+                "CREATE TRIGGER IF NOT EXISTS asset_chapter_update AFTER UPDATE OF html,original_html,images ON chapters WHEN NEW.html IS NOT OLD.html OR NEW.original_html IS NOT OLD.original_html OR NEW.images IS NOT OLD.images BEGIN INSERT INTO asset_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END",
                 'CREATE TRIGGER IF NOT EXISTS asset_chapter_delete AFTER DELETE ON chapters BEGIN DELETE FROM asset_refs WHERE book_id=OLD.book_id AND idx=OLD.idx; DELETE FROM asset_pending WHERE book_id=OLD.book_id AND idx=OLD.idx; END',
             ):
                 db.execute(sql)
+            db.execute('DROP TRIGGER IF EXISTS asset_book_delete')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(asset_index_state)')}
+            for column in ('cleanup_requested', 'cleanup_completed'):
+                if column in columns:
+                    db.execute('ALTER TABLE asset_index_state DROP COLUMN ' + column)
+            for column in ('inventory_files', 'inventory_images'):
+                if column not in columns:
+                    db.execute('ALTER TABLE asset_index_state ADD COLUMN ' + column + ' INTEGER NOT NULL DEFAULT 0')
             if first:
                 db.execute('INSERT OR IGNORE INTO asset_pending(book_id,idx) SELECT id,-1 FROM books')
                 db.execute('INSERT OR REPLACE INTO asset_index_state(id) VALUES(1)')
 
     @staticmethod
     def _save_asset_refs(db, book_id, index, references):
-        db.execute('DELETE FROM asset_refs WHERE book_id=? AND idx=?', (book_id, index))
+        old = {(row['kind'], row['name']) for row in db.execute(
+            'SELECT kind,name FROM asset_refs WHERE book_id=? AND idx=?', (book_id, index))}
+        db.executemany('DELETE FROM asset_refs WHERE book_id=? AND idx=? AND kind=? AND name=?',
+                       ((book_id, index, kind, name) for kind, name in old - references))
         db.executemany('INSERT INTO asset_refs(book_id,idx,kind,name) VALUES(?,?,?,?)',
-                       ((book_id, index, kind, name) for kind, name in references))
+                       ((book_id, index, kind, name) for kind, name in references - old))
 
     def _index_book_assets(self, db, book_id):
         row = db.execute('SELECT path,cover,-1 AS idx FROM books WHERE id=?', (book_id,)).fetchone()
@@ -218,19 +241,6 @@ class Store:
         with self.db() as db:
             return (bool(db.execute('SELECT complete FROM asset_index_state WHERE id=1').fetchone()[0])
                     and not db.execute('SELECT 1 FROM asset_pending LIMIT 1').fetchone())
-
-    def request_cleanup(self):
-        with self.db() as db:
-            db.execute('UPDATE asset_index_state SET cleanup_requested=cleanup_requested+1 WHERE id=1')
-
-    def pending_cleanup(self):
-        with self.db() as db:
-            row = db.execute('SELECT cleanup_requested,cleanup_completed FROM asset_index_state WHERE id=1').fetchone()
-            return row['cleanup_requested'] if row['cleanup_requested'] > row['cleanup_completed'] else 0
-
-    def complete_cleanup(self, generation):
-        with self.db() as db:
-            db.execute('UPDATE asset_index_state SET cleanup_completed=MAX(cleanup_completed,?) WHERE id=1', (generation,))
 
     @contextlib.contextmanager
     def db(self):
@@ -507,73 +517,187 @@ class Store:
                 if not self._active_assets[path]:
                     del self._active_assets[path]
 
-    def cleanup_file(self, path):
+    def _asset_path(self, path):
         path = Path(path)
         kind = path.parent.name
-        patterns = {'files': r'[0-9a-f]{64}\.[a-z0-9]+',
-                    'images': r'[0-9a-f]{64}(?:\.[0-9a-f]{32}\.tmp)?'}
-        if kind not in patterns or path.parent != self.data_dir / kind:
-            return True
-        match = re.fullmatch('(' + patterns[kind] + r')(\.[0-9a-f]{32}\.gc)?', path.name)
-        if not match:
-            return True
-        asset = path.parent / (match[1][:64] if kind == 'images' else match[1])
-        try:
-            with self.db() as db:
-                # Wait for a writer without holding the asset-registration lock.
-                db.execute('BEGIN IMMEDIATE')
-                with self._asset_lock:
-                    if (not db.execute('SELECT complete FROM asset_index_state WHERE id=1').fetchone()[0]
-                            or db.execute('SELECT 1 FROM asset_pending LIMIT 1').fetchone()):
-                        return False
-                    if asset in self._active_assets or db.execute(
-                            'SELECT 1 FROM asset_refs WHERE kind=? AND name=? LIMIT 1', (kind, path.name)).fetchone():
-                        return True
-                    directory = path.parent
-                    folder = directory.lstat()
-                    info = path.lstat()
-                    if (not stat.S_ISDIR(folder.st_mode) or getattr(folder, 'st_file_attributes', 0) & 0x400
-                            or directory.resolve() != directory or not stat.S_ISREG(info.st_mode)
-                            or getattr(info, 'st_file_attributes', 0) & 0x400 or path.resolve().parent != directory):
-                        return True
-                    staged = path if match[2] else path.with_name(path.name + '.' + uuid.uuid4().hex + '.gc')
-                    if staged != path:
-                        path.rename(staged)
-            # Unlinking can be slow on Windows; no database or asset lock is held here.
-            staged.unlink()
-        except FileNotFoundError:
-            pass
-        except (OSError, RuntimeError):
-            logging.getLogger(__name__).warning('Cannot remove unused asset %s', path, exc_info=True)
-        except sqlite3.Error:
-            logging.getLogger(__name__).warning('Skipping file cleanup: cannot verify asset index', exc_info=True)
-            return False
-        return True
+        if kind not in _ASSET_NAMES or path.parent != self.data_dir / kind:
+            return None
+        match = re.fullmatch('(' + _ASSET_NAMES[kind] + r')(\.[0-9a-f]{32}\.gc)?', path.name)
+        return (path, kind, match[1], bool(match[2])) if match else None
 
-    def cleanup_files(self, stop=None):
-        if stop is not None and stop.is_set():
-            return False
-        if not self.asset_index_ready():
-            logging.getLogger(__name__).warning('Skipping file cleanup: asset references are not indexed yet')
-            return False
-        for name in ('files', 'images'):
-            directory = self.data_dir / name
-            try:
+    def queue_assets(self, paths):
+        keys = {(item[1], item[0].name) for path in paths if (item := self._asset_path(path))}
+        if keys:
+            with self.db() as db:
+                db.executemany('INSERT INTO asset_gc_candidates(kind,name) VALUES(?,?) '
+                    'ON CONFLICT(kind,name) DO UPDATE SET generation=generation+1,retry_at=0', keys)
+
+    def close_inventory(self):
+        if self._asset_inventory is not None:
+            self._asset_inventory[1].close()
+            self._asset_inventory = None
+
+    def inventory_assets(self, limit=256, stop=None):
+        # Upgrade recovery only. Folder completion is durable; an interrupted folder can be replayed safely.
+        if (stop is not None and stop.is_set()) or time.monotonic() < self._inventory_retry_at:
+            return 0
+        with self.db() as db:
+            state = db.execute('SELECT inventory_files,inventory_images FROM asset_index_state WHERE id=1').fetchone()
+        kind = next((name for name in ('files', 'images') if not state['inventory_' + name]), None)
+        if kind is None:
+            self.close_inventory()
+            return 0
+        paths, exhausted = [], False
+        try:
+            if self._asset_inventory is None or self._asset_inventory[0] != kind:
+                self.close_inventory()
+                directory = self.data_dir / kind
                 info = directory.lstat()
                 if (not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400
                         or directory.resolve() != directory):
-                    continue
-                # Directory enumeration and all potentially slow I/O stay outside the locks.
-                for path in directory.iterdir():
+                    exhausted = True
+                else:
+                    self._asset_inventory = (kind, os.scandir(directory))
+            if not exhausted:
+                for _ in range(limit):
                     if stop is not None and stop.is_set():
+                        self.close_inventory()
+                        return 0
+                    entry = next(self._asset_inventory[1], None)
+                    if entry is None:
+                        exhausted = True
+                        break
+                    item = self._asset_path(Path(entry.path))
+                    if item:
+                        paths.append((kind, item[0].name))
+        except FileNotFoundError:
+            exhausted = True
+        except OSError:
+            self.close_inventory()
+            self._inventory_retry_at = time.monotonic() + 30
+            logging.getLogger(__name__).warning('Cannot inventory asset directory %s', kind, exc_info=True)
+            return 0
+        try:
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                db.executemany('INSERT OR IGNORE INTO asset_gc_candidates(kind,name) '
+                    'SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM asset_refs WHERE kind=? AND name=?)',
+                    ((kind, name, kind, name) for kind, name in paths))
+                if exhausted:
+                    db.execute('UPDATE asset_index_state SET inventory_' + kind + '=1 WHERE id=1')
+        except sqlite3.Error:
+            # Rewind the folder if enqueueing failed after advancing its filesystem iterator.
+            self.close_inventory()
+            raise
+        if exhausted:
+            self.close_inventory()
+        return max(1, len(paths))
+
+    @staticmethod
+    def _regular_asset(path):
+        directory = path.parent
+        folder, info = directory.lstat(), path.lstat()
+        return (stat.S_ISDIR(folder.st_mode) and not getattr(folder, 'st_file_attributes', 0) & 0x400
+                and directory.resolve() == directory and stat.S_ISREG(info.st_mode)
+                and not getattr(info, 'st_file_attributes', 0) & 0x400 and path.resolve().parent == directory)
+
+    @staticmethod
+    def _retry_asset(db, row, seconds):
+        db.execute('UPDATE asset_gc_candidates SET retry_at=? WHERE id=? AND generation=?',
+                   (time.time() + seconds, row['id'], row['generation']))
+
+    def _cleanup_candidate(self, row, db):
+        path = self.data_dir / row['kind'] / row['name']
+        item = self._asset_path(path)
+        if item is None:
+            with db:
+                db.execute('DELETE FROM asset_gc_candidates WHERE id=? AND generation=?', (row['id'], row['generation']))
+            return True
+        _, kind, original_name, legacy_stage = item
+        original = path.parent / original_name
+        asset = path.parent / (original_name[:64] if kind == 'images' else original_name)
+        # A stable candidate ID recovers a rename even if the process exits before SQLite commits.
+        staged = path if legacy_stage else path.with_name(path.name + '.gc-' + str(row['id']))
+        try:
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                with self._asset_lock:
+                    current = db.execute('SELECT 1 FROM asset_gc_candidates WHERE id=? AND generation=?',
+                                         (row['id'], row['generation'])).fetchone()
+                    if not current:
+                        return True
+                    if (not db.execute('SELECT complete FROM asset_index_state WHERE id=1').fetchone()[0]
+                            or db.execute('SELECT 1 FROM asset_pending LIMIT 1').fetchone()):
                         return False
-                    if not self.cleanup_file(path):
-                        return False
-            except FileNotFoundError:
-                continue
-            except (OSError, RuntimeError):
-                logging.getLogger(__name__).warning('Cannot inspect asset directory %s', directory, exc_info=True)
+                    if asset in self._active_assets:
+                        self._retry_asset(db, row, 1)
+                        return True
+                    referenced = db.execute('SELECT 1 FROM asset_refs WHERE kind=? AND name=? LIMIT 1',
+                                            (kind, original_name)).fetchone()
+                    if referenced:
+                        if staged.exists() and not original.exists() and self._regular_asset(staged):
+                            staged.rename(original)
+                        if not staged.exists():
+                            db.execute('DELETE FROM asset_gc_candidates WHERE id=? AND generation=?',
+                                       (row['id'], row['generation']))
+                            return True
+                    elif not staged.exists():
+                        if not path.exists():
+                            db.execute('DELETE FROM asset_gc_candidates WHERE id=? AND generation=?',
+                                       (row['id'], row['generation']))
+                            return True
+                        if not self._regular_asset(path):
+                            self._retry_asset(db, row, 30)
+                            return True
+                        path.rename(staged)
+                    if not self._regular_asset(staged):
+                        self._retry_asset(db, row, 30)
+                        return True
+            # Slow deletion never holds a database transaction or the asset-registration lock.
+            staged.unlink()
+            with db:
+                if original != staged and original.exists():
+                    db.execute('UPDATE asset_gc_candidates SET retry_at=0 WHERE id=? AND generation=?',
+                               (row['id'], row['generation']))
+                else:
+                    db.execute('DELETE FROM asset_gc_candidates WHERE id=? AND generation=?',
+                               (row['id'], row['generation']))
+        except FileNotFoundError:
+            with db:
+                self._retry_asset(db, row, 1)
+        except (OSError, RuntimeError):
+            with db:
+                self._retry_asset(db, row, 30)
+            logging.getLogger(__name__).warning('Cannot remove unused asset %s', path, exc_info=True)
         return True
+
+    def cleanup_file(self, path):
+        self.queue_assets((path,))
+        item = self._asset_path(path)
+        if item is None:
+            return True
+        with self.db() as db:
+            row = db.execute('SELECT * FROM asset_gc_candidates WHERE kind=? AND name=?',
+                             (item[1], item[0].name)).fetchone()
+            return self._cleanup_candidate(row, db) if row else True
+
+    def cleanup_files(self, stop=None, limit=32):
+        if stop is not None and stop.is_set():
+            return 0
+        if not self.asset_index_ready():
+            logging.getLogger(__name__).warning('Skipping file cleanup: asset references are not indexed yet')
+            return 0
+        processed = 0
+        with self.db() as db:
+            rows = db.execute('SELECT * FROM asset_gc_candidates WHERE retry_at<=? '
+                              'ORDER BY retry_at,id LIMIT ?', (time.time(), limit)).fetchall()
+            for row in rows:
+                if stop is not None and stop.is_set():
+                    break
+                if not self._cleanup_candidate(row, db):
+                    break
+                processed += 1
+        return processed
 
     def settings(self, values=None):
         with self.db() as db:

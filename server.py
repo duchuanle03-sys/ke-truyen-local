@@ -68,19 +68,23 @@ class App:
         self._asset_worker.start()
 
     def _maintain_assets(self):
-        while not self._asset_stop.is_set():
-            try:
-                if self.store.index_assets(stop=self._asset_stop):
-                    continue
-                if self._asset_stop.is_set():
-                    break
-                generation = self.store.pending_cleanup()
-                if generation and self.store.asset_index_ready():
-                    if self.store.cleanup_files(self._asset_stop):
-                        self.store.complete_cleanup(generation)
-            except Exception:
-                logging.exception('Cannot maintain asset index; will retry.')
-            self._asset_stop.wait(.25)
+        try:
+            while not self._asset_stop.is_set():
+                try:
+                    if self.store.index_assets(stop=self._asset_stop):
+                        continue
+                    if self._asset_stop.is_set():
+                        break
+                    if self.store.asset_index_ready():
+                        if self.store.inventory_assets(stop=self._asset_stop):
+                            continue
+                        if self.store.cleanup_files(self._asset_stop):
+                            continue
+                except Exception:
+                    logging.exception('Cannot maintain asset index; will retry.')
+                self._asset_stop.wait(.25)
+        finally:
+            self.store.close_inventory()
 
     def close(self):
         self._asset_stop.set()
@@ -132,6 +136,7 @@ class App:
             with self.store.use_asset(path):
                 created = not path.exists()
                 if created:
+                    self.store.queue_assets((path,))
                     path.write_bytes(body)
                 if extension == '.pdf':
                     result = pdfocr.extract_pdf(path)
@@ -150,8 +155,7 @@ class App:
         except Exception:
             # Another import may already be using or have saved the same content-addressed file.
             if created:
-                if not self.store.cleanup_file(path):
-                    self.store.request_cleanup()
+                self.store.cleanup_file(path)
             raise
 
     def trash_book(self, book_id):
@@ -203,6 +207,7 @@ class App:
                 if content_type == "application/octet-stream":
                     raise ValueError("Nguồn trả về dữ liệu không phải ảnh được hỗ trợ.")
                 temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
+                self.store.queue_assets((path, temporary))
                 temporary.write_bytes(body)
                 temporary.replace(path)
         return body, image_type(body)

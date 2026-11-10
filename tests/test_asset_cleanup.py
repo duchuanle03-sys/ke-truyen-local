@@ -2,6 +2,7 @@ import hashlib
 import contextlib
 from pathlib import Path
 import stat
+import sqlite3
 import tempfile
 import threading
 import time
@@ -27,11 +28,13 @@ class AssetCleanupTests(unittest.TestCase):
 
     def upload(self, data=b'uploaded book'):
         path = self.root / 'files' / (hashlib.sha256(data).hexdigest() + '.epub')
+        self.store.queue_assets((path,))
         path.write_bytes(data)
         return path
 
     def image(self, url):
         path = self.root / 'images' / hashlib.sha256(url.encode()).hexdigest()
+        self.store.queue_assets((path,))
         path.write_bytes(b'cached image')
         return path
 
@@ -48,7 +51,13 @@ class AssetCleanupTests(unittest.TestCase):
         store = store or self.store
         while not store.asset_index_ready() and store.index_assets():
             pass
-        return store.cleanup_files()
+        if not store.asset_index_ready():
+            return store.cleanup_files()
+        while store.inventory_assets():
+            pass
+        while store.cleanup_files():
+            pass
+        return store.asset_index_ready()
 
     def test_soft_delete_keeps_assets_until_the_last_shared_book_is_permanently_deleted(self):
         path = self.upload()
@@ -153,7 +162,7 @@ class AssetCleanupTests(unittest.TestCase):
             self.purge('victim')
         self.assertTrue(busy.exists())
         self.assertFalse(free.exists())
-        self.store.cleanup_files()
+        self.store.cleanup_file(busy)
         self.assertFalse(busy.exists())
 
     def test_reparse_directory_and_link_entries_are_not_followed(self):
@@ -180,6 +189,7 @@ class AssetCleanupTests(unittest.TestCase):
         path = self.upload()
         cache = self.image('https://cdn.example/active.jpg')
         temporary = cache.with_suffix('.' + 'b' * 32 + '.tmp')
+        self.store.queue_assets((temporary,))
         temporary.write_bytes(b'in progress')
         with self.store.use_asset(path), self.store.use_asset(cache):
             with self.store.use_asset(path):
@@ -188,7 +198,9 @@ class AssetCleanupTests(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertTrue(cache.exists())
             self.assertTrue(temporary.exists())
-        self.store.cleanup_files()
+        with patch('library.time.time', return_value=time.time() + 2):
+            while self.store.cleanup_files():
+                pass
         self.assertFalse(path.exists())
         self.assertFalse(cache.exists())
         self.assertFalse(temporary.exists())
@@ -373,7 +385,7 @@ class AssetCleanupTests(unittest.TestCase):
         entered, release, writable = threading.Event(), threading.Event(), threading.Event()
         unlink = Path.unlink
         def slow(path, *args, **kwargs):
-            if path.suffix == '.gc':
+            if '.gc-' in path.name:
                 entered.set()
                 if not release.wait(5):
                     raise RuntimeError('unlink timed out')
@@ -435,7 +447,10 @@ class AssetCleanupTests(unittest.TestCase):
         self.assertTrue(upgraded.asset_index_ready())
         with patch('library.parse_html', side_effect=AssertionError('Index must survive restart')):
             reopened = Store(self.root)
-            self.assertTrue(reopened.cleanup_files())
+            while reopened.inventory_assets():
+                pass
+            while reopened.cleanup_files():
+                pass
         self.assertTrue(cache.exists())
         self.assertFalse(orphan.exists())
 
@@ -505,7 +520,7 @@ class AssetCleanupTests(unittest.TestCase):
                     app.close()
         self.assertEqual(len(calls), 1)
 
-    def test_restart_resumes_cleanup_requested_before_process_exit(self):
+    def test_restart_resumes_persistent_candidates_after_process_exit(self):
         orphan = self.upload()
         self.book('victim')
         self.store.trash_book('victim')
@@ -518,12 +533,157 @@ class AssetCleanupTests(unittest.TestCase):
             time.sleep(.02)
         self.assertFalse(orphan.exists())
 
-    def test_finishing_one_sweep_does_not_erase_a_new_cleanup_request(self):
-        self.book('victim')
-        self.store.trash_book('victim')
-        self.store.purge_book('victim')
-        generation = self.store.pending_cleanup()
-        self.store.request_cleanup()
-        self.store.complete_cleanup(generation)
+    def test_finishing_one_candidate_does_not_erase_a_new_file_generation(self):
+        path = self.upload()
+        entered, release = threading.Event(), threading.Event()
+        unlink = Path.unlink
+        def slow(path, *args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('unlink timed out')
+            return unlink(path, *args, **kwargs)
+        with patch.object(Path, 'unlink', slow):
+            worker = threading.Thread(target=self.store.cleanup_files)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.store.queue_assets((path,))
+                path.write_bytes(b'new generation')
+            finally:
+                release.set()
+                worker.join(6)
+        self.assertEqual(path.read_bytes(), b'new generation')
         reopened = Store(self.root)
-        self.assertGreater(reopened.pending_cleanup(), generation)
+        self.assertGreater(reopened.cleanup_files(), 0)
+        self.assertFalse(path.exists())
+
+    def test_normal_delete_only_collects_affected_candidates_without_directory_scan(self):
+        affected = self.image('https://cdn.example/affected.jpg')
+        untouched = self.image('https://cdn.example/untouched.jpg')
+        self.book('victim', cover='https://cdn.example/affected.jpg')
+        self.book('keep', cover='https://cdn.example/untouched.jpg')
+        self.collect()
+        self.store.trash_book('victim')
+        with patch('os.scandir', side_effect=AssertionError('Normal GC scanned the library')), \
+             patch.object(Path, 'iterdir', side_effect=AssertionError('Normal GC enumerated assets')):
+            self.store.purge_book('victim')
+            while self.store.cleanup_files():
+                pass
+        self.assertFalse(affected.exists())
+        self.assertTrue(untouched.exists())
+
+    def test_unindexed_book_deletion_does_not_lose_created_image_candidates(self):
+        app = App(self.root)
+        self.addCleanup(app.close)
+        app._asset_stop.set()
+        app._asset_worker.join(2)
+        self.collect(app.store)
+        url = 'https://cdn.example/not-indexed.jpg'
+        app.store.upsert_book({'id': 'victim', 'name': 'victim'},
+                             [{'html': '<p><img src="' + url + '"></p>'}])
+        png = b'\x89PNG\r\n\x1a\nsynthetic image'
+        with patch('server.safe_fetch_bytes', return_value=png):
+            app.image(url)
+        path = app.image_dir / hashlib.sha256(url.encode()).hexdigest()
+        with app.store.db() as db:
+            self.assertTrue(db.execute('SELECT 1 FROM asset_gc_candidates WHERE kind=? AND name=?',
+                                       ('images', path.name)).fetchone())
+        app.trash_book('victim')
+        app.purge_book('victim')
+        self.collect(app.store)
+        self.assertFalse(path.exists())
+
+    def test_candidate_enqueue_rolls_back_with_book_deletion(self):
+        path = self.upload()
+        self.book('keep', path)
+        self.collect()
+        self.store.trash_book('keep')
+        purge = self.store._purge
+        def fail(db, book_id):
+            purge(db, book_id)
+            raise RuntimeError('rollback')
+        with patch.object(self.store, '_purge', side_effect=fail), self.assertRaises(RuntimeError):
+            self.store.purge_book('keep')
+        with self.store.db() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM asset_gc_candidates').fetchone()[0], 0)
+        self.assertTrue(path.exists())
+
+    def test_crash_after_rename_before_commit_recovers_without_directory_scan(self):
+        path = self.upload()
+        rename = Path.rename
+        def crash(source, target):
+            rename(source, target)
+            raise sqlite3.OperationalError('simulated process interruption')
+        with patch.object(Path, 'rename', crash), self.assertRaises(sqlite3.OperationalError):
+            self.store.cleanup_files()
+        self.assertFalse(path.exists())
+        reopened = Store(self.root)
+        with patch('os.scandir', side_effect=AssertionError('Recovery scanned directories')):
+            self.assertGreater(reopened.cleanup_files(), 0)
+        self.assertEqual(list((self.root / 'files').iterdir()), [])
+
+    def test_locked_staged_file_remains_queued_and_is_retried_after_restart(self):
+        path = self.upload()
+        with patch.object(Path, 'unlink', side_effect=PermissionError('locked')), self.assertLogs('library', level='WARNING'):
+            self.store.cleanup_files()
+        self.assertFalse(path.exists())
+        staged = list((self.root / 'files').glob('*.gc-*'))
+        self.assertEqual(len(staged), 1)
+        self.assertEqual(staged[0].read_bytes(), b'uploaded book')
+        reopened = Store(self.root)
+        with patch('library.time.time', return_value=time.time() + 31):
+            self.assertGreater(reopened.cleanup_files(), 0)
+        self.assertEqual(list((self.root / 'files').iterdir()), [])
+
+    def test_inventory_replays_a_batch_when_its_database_transaction_fails(self):
+        orphans = [self.root / 'images' / hashlib.sha256(str(i).encode()).hexdigest() for i in range(2)]
+        for path in orphans:
+            path.write_bytes(b'legacy orphan')
+        self.store.inventory_assets(limit=1)  # Complete the empty files folder first.
+        with self.store.db() as db:
+            db.execute("CREATE TRIGGER fail_inventory BEFORE INSERT ON asset_gc_candidates BEGIN SELECT RAISE(ABORT,'injected'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.inventory_assets(limit=1)
+        with self.store.db() as db:
+            db.execute('DROP TRIGGER fail_inventory')
+        self.collect()
+        self.assertTrue(all(not path.exists() for path in orphans))
+
+    def test_path_refresh_replaces_an_existing_pending_chapter_token(self):
+        self.book('keep', 'https://cdn.example/old/', chapters=[{'html': '<p><img src="page.jpg"></p>'}])
+        with self.store.db() as db:
+            old = db.execute('SELECT id FROM asset_pending WHERE book_id=? AND idx=0', ('keep',)).fetchone()[0]
+            db.execute('UPDATE asset_pending SET blocked=1 WHERE book_id=? AND idx=0', ('keep',))
+            db.execute('DROP TRIGGER asset_book_path')
+            db.execute('CREATE TRIGGER asset_book_path AFTER UPDATE OF path ON books WHEN NEW.path IS NOT OLD.path BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) SELECT book_id,idx FROM chapters WHERE book_id=NEW.id; END')
+        self.store = Store(self.root)  # Upgrade the trigger from an existing library.
+        self.book('keep', 'https://cdn.example/new/')
+        with self.store.db() as db:
+            new = db.execute('SELECT id,blocked FROM asset_pending WHERE book_id=? AND idx=0', ('keep',)).fetchone()
+        self.assertGreater(new['id'], old)
+        self.assertEqual(new['blocked'], 0)
+        self.collect()
+        with self.store.db() as db:
+            names = {row[0] for row in db.execute("SELECT name FROM asset_refs WHERE kind='images'")}
+        self.assertEqual(names, {hashlib.sha256(b'https://cdn.example/new/page.jpg').hexdigest()})
+
+    def test_upgrade_inventories_legacy_orphans_once_and_preserves_shared_assets(self):
+        live = self.image('https://cdn.example/live.jpg')
+        self.book('keep', cover='https://cdn.example/live.jpg')
+        self.collect()
+        orphan = self.root / 'files' / ('e' * 64 + '.epub')
+        orphan.write_bytes(b'old orphan')
+        with self.store.db() as db:
+            db.execute('DROP TRIGGER asset_ref_gc')
+            db.execute('DROP TABLE asset_gc_candidates')
+            for column in ('inventory_files', 'inventory_images'):
+                db.execute('ALTER TABLE asset_index_state DROP COLUMN ' + column)
+            db.execute('ALTER TABLE asset_index_state ADD COLUMN cleanup_requested INTEGER NOT NULL DEFAULT 4')
+            db.execute('ALTER TABLE asset_index_state ADD COLUMN cleanup_completed INTEGER NOT NULL DEFAULT 1')
+            db.execute('CREATE TRIGGER asset_book_delete AFTER DELETE ON books BEGIN UPDATE asset_index_state SET cleanup_requested=cleanup_requested+1 WHERE id=1; END')
+        upgraded = Store(self.root)
+        self.collect(upgraded)
+        self.assertFalse(orphan.exists())
+        self.assertTrue(live.exists())
+        with patch('os.scandir', side_effect=AssertionError('Repeated legacy inventory')):
+            self.collect(Store(self.root))
