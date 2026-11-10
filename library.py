@@ -1,15 +1,21 @@
 """Private local library. Imports never write to the source backup."""
 import contextlib
+from collections import Counter
 import hashlib
 import json
+import logging
 import math
+import re
 import sqlite3
 import stat
+import threading
 import time
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+
+from htmltools import parse_html, safe_remote_url
 
 MAX_JSON = 32 * 1024 * 1024
 MAX_BACKUP = 512 * 1024 * 1024
@@ -37,6 +43,9 @@ class Store:
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.data_dir / "library.sqlite3"
+        self._asset_lock = threading.RLock()
+        # shortcut: in-flight leases cover one server; share leases before supporting multiple servers per library.
+        self._active_assets = Counter()
         with self.db() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""
@@ -322,6 +331,7 @@ class Store:
             if not row['trashed_at']:
                 raise ValueError('Chỉ xóa vĩnh viễn truyện đã nằm trong thùng rác.')
             self._purge(db, book_id)
+        self.cleanup_files()
 
     def purge_expired(self, now=None, skip_ids=()):
         cutoff = (time.time() if now is None else now) - TRASH_RETENTION
@@ -332,7 +342,90 @@ class Store:
                    if row['id'] not in skipped]
             for book_id in ids:
                 self._purge(db, book_id)
+        if ids:
+            self.cleanup_files()
         return ids
+
+    @contextlib.contextmanager
+    def use_asset(self, path):
+        path = Path(path).resolve()
+        with self._asset_lock:
+            self._active_assets[path] += 1
+        try:
+            yield
+        finally:
+            with self._asset_lock:
+                self._active_assets[path] -= 1
+                if not self._active_assets[path]:
+                    del self._active_assets[path]
+
+    def cleanup_files(self):
+        # Purge commits first; a separate write lock keeps references stable during collection.
+        try:
+            with self._asset_lock, self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                files, images = set(), set()
+
+                def image_reference(value, base):
+                    if not isinstance(value, str):
+                        raise ValueError('Invalid image reference')
+                    if not value or value.startswith('data:'):
+                        return
+                    parsed = urlsplit(value)
+                    urls = (parse_qs(parsed.query).get('url', []) if parsed.path == '/api/image' and
+                            (not parsed.netloc or parsed.hostname in ('127.0.0.1', 'localhost', '::1')) else [value])
+                    for url in urls:
+                        checked = safe_remote_url(url, base)
+                        if checked:
+                            images.add(hashlib.sha256(checked.encode()).hexdigest())
+
+                for row in db.execute('SELECT path,cover FROM books'):
+                    files.add(row['path'].replace('\\', '/').rsplit('/', 1)[-1].lower())
+                    image_reference(row['cover'], row['path'])
+                for row in db.execute('SELECT c.html,c.original_html,c.images,b.path FROM chapters c JOIN books b ON b.id=c.book_id'):
+                    values = json.loads(row['images'])
+                    if not isinstance(values, list):
+                        raise ValueError('Invalid chapter images')
+                    for value in values:
+                        image_reference(value, row['path'])
+                    for markup in (row['html'], row['original_html']):
+                        if markup:
+                            for node in parse_html(markup).select('img'):
+                                image_reference(node.get('data-original') or node.get('data-src') or node.get('src'), row['path'])
+
+                for name, pattern, referenced in (
+                        ('files', r'[0-9a-f]{64}\.[a-z0-9]+', files),
+                        ('images', r'([0-9a-f]{64})(\.[0-9a-f]{32}\.tmp)?', images)):
+                    directory = self.data_dir / name
+                    try:
+                        info = directory.lstat()
+                        if (not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400
+                                or directory.resolve() != directory):
+                            continue
+                        paths = list(directory.iterdir())
+                    except FileNotFoundError:
+                        continue
+                    except (OSError, RuntimeError):
+                        logging.getLogger(__name__).warning('Cannot inspect asset directory %s', directory, exc_info=True)
+                        continue
+                    for path in paths:
+                        match = re.fullmatch(pattern, path.name)
+                        if not match:
+                            continue
+                        asset = directory / (match[1] if name == 'images' else path.name)
+                        if asset in self._active_assets or (path.name in referenced):
+                            continue
+                        try:
+                            info = path.lstat()
+                            if (stat.S_ISREG(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & 0x400
+                                    and path.resolve().parent == directory):
+                                path.unlink()
+                        except FileNotFoundError:
+                            pass
+                        except (OSError, RuntimeError):
+                            logging.getLogger(__name__).warning('Cannot remove unused asset %s', path, exc_info=True)
+        except (sqlite3.Error, ValueError, TypeError, RecursionError):
+            logging.getLogger(__name__).warning('Skipping file cleanup: cannot verify library references', exc_info=True)
 
     def settings(self, values=None):
         with self.db() as db:

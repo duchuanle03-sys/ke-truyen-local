@@ -107,29 +107,31 @@ class App:
             raise ValueError("Tên tệp không hợp lệ.")
         key = hashlib.sha256(body).hexdigest()
         path = self.uploads / (key + extension)
-        created = not path.exists()
-        if created:
-            path.write_bytes(body)
+        created = False
         try:
-            if extension == '.pdf':
-                result = pdfocr.extract_pdf(path)
-            elif extension in legacy_formats.SUPPORTED_EXTENSIONS:
-                result = legacy_formats.import_legacy(path)
-            else:
-                result = documents.import_document(path)
+            with self.store.use_asset(path):
+                created = not path.exists()
+                if created:
+                    path.write_bytes(body)
+                if extension == '.pdf':
+                    result = pdfocr.extract_pdf(path)
+                elif extension in legacy_formats.SUPPORTED_EXTENSIONS:
+                    result = legacy_formats.import_legacy(path)
+                else:
+                    result = documents.import_document(path)
+                book = dict(result["book"], source="file", path=str(path))
+                if book.get("name") in (key, path.stem) or not book.get("name"):
+                    book["name"] = Path(clean_name).stem
+                saved = self.store.upsert_book(book, result["chapters"])
+                saved = self.store.restore_book(saved['id']) if saved['trashed_at'] else saved
+                if result.get('warnings'):
+                    saved['warnings'] = result['warnings']
+                return saved
         except Exception:
-            # An unsupported upload is not a successful library import.
+            # Another import may already be using or have saved the same content-addressed file.
             if created:
-                path.unlink(missing_ok=True)
+                self.store.cleanup_files()
             raise
-        book = dict(result["book"], source="file", path=str(path))
-        if book.get("name") in (key, path.stem) or not book.get("name"):
-            book["name"] = Path(clean_name).stem
-        saved = self.store.upsert_book(book, result["chapters"])
-        saved = self.store.restore_book(saved['id']) if saved['trashed_at'] else saved
-        if result.get('warnings'):
-            saved['warnings'] = result['warnings']
-        return saved
 
     def trash_book(self, book_id):
         with self.lock:
@@ -160,27 +162,28 @@ class App:
         url = validate_public_url(url, resolve=False)
         key = hashlib.sha256(url.encode()).hexdigest()
         path = self.image_dir / key
-        if path.exists():
-            body = path.read_bytes()
-        else:
-            if referer:
-                referer = validate_public_url(referer, resolve=False)
-            try:
-                body = safe_fetch_bytes(url, headers={"Referer": referer, "Accept": "image/*"})
-            except SourceError as error:
-                if (error.code != 'http_error' or error.http_status != 403
-                        or (urlsplit(referer).hostname or '').removeprefix('www.') not in ('sangtacviet.com', 'sangtacviet.vip')):
-                    raise
-                # STV's cover uses no-referrer; browsers also upgrade its mixed-content image to HTTPS.
-                body = safe_fetch_bytes(urlsplit(url)._replace(scheme='https').geturl(), headers={"Accept": "image/*"})
-            if len(body) > 20 * 1024 * 1024:
-                raise ValueError("Ảnh vượt giới hạn 20 MiB.")
-            content_type = image_type(body)
-            if content_type == "application/octet-stream":
-                raise ValueError("Nguồn trả về dữ liệu không phải ảnh được hỗ trợ.")
-            temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
-            temporary.write_bytes(body)
-            temporary.replace(path)
+        with self.store.use_asset(path):
+            if path.exists():
+                body = path.read_bytes()
+            else:
+                if referer:
+                    referer = validate_public_url(referer, resolve=False)
+                try:
+                    body = safe_fetch_bytes(url, headers={"Referer": referer, "Accept": "image/*"})
+                except SourceError as error:
+                    if (error.code != 'http_error' or error.http_status != 403
+                            or (urlsplit(referer).hostname or '').removeprefix('www.') not in ('sangtacviet.com', 'sangtacviet.vip')):
+                        raise
+                    # STV's cover uses no-referrer; browsers also upgrade its mixed-content image to HTTPS.
+                    body = safe_fetch_bytes(urlsplit(url)._replace(scheme='https').geturl(), headers={"Accept": "image/*"})
+                if len(body) > 20 * 1024 * 1024:
+                    raise ValueError("Ảnh vượt giới hạn 20 MiB.")
+                content_type = image_type(body)
+                if content_type == "application/octet-stream":
+                    raise ValueError("Nguồn trả về dữ liệu không phải ảnh được hỗ trợ.")
+                temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
+                temporary.write_bytes(body)
+                temporary.replace(path)
         return body, image_type(body)
 
     def cover(self, book_id):
@@ -191,10 +194,12 @@ class App:
             # Mobile exports retain old CDN URLs; refresh only the cover, never the reading state or TOC.
             try:
                 metadata = self.sources.cover(book['source'], book['path'])
-                body = self.image(metadata['cover'], metadata['path'])
+                url = validate_public_url(metadata['cover'], resolve=False)
+                with self.store.use_asset(self.image_dir / hashlib.sha256(url.encode()).hexdigest()):
+                    body = self.image(url, metadata['path'])
+                    self.store.update_book(book_id, {'cover': metadata['cover']})
             except ValueError as error:
                 raise ValueError('Không tải được bìa cũ hoặc bìa trên trang nguồn: ' + str(error)) from original
-            self.store.update_book(book_id, {'cover': metadata['cover']})
             return body
 
     def shortcut(self, book_id, port):

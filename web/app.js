@@ -359,7 +359,7 @@ async function openTrash() {
 
 function confirmPurge(book) {
   const error = el('p', { class: 'inline-error', role: 'alert', hidden: true });
-  const dialog = showDialog('Xóa vĩnh viễn truyện?', [el('h3', { text: book.name }), el('p', { text: 'Truyện, tiến độ đọc, ghi chú/dấu trang và nội dung chương đã lưu trong app sẽ bị xóa. Sau đó không thể khôi phục từ Thùng rác.' }), el('p', { class: 'muted small', text: 'Bộ xuất điện thoại, tệp nhập gốc, từ điển và cache ảnh dùng chung được giữ.' }), error]);
+  const dialog = showDialog('Xóa vĩnh viễn truyện?', [el('h3', { text: book.name }), el('p', { text: 'Truyện, tiến độ đọc, ghi chú/dấu trang và nội dung chương đã lưu trong app sẽ bị xóa. Bản sao tệp nhập và ảnh cache không còn truyện nào dùng cũng sẽ được dọn. Sau đó không thể khôi phục từ Thùng rác.' }), el('p', { class: 'muted small', text: 'Bộ xuất điện thoại, tệp nhập gốc bên ngoài app, từ điển và tệp/ảnh dùng chung được giữ.' }), error]);
   const token = showDialog.token;
   dialog.actions.append(el('button', { class: 'button', text: 'Hủy', onclick: openTrash }), el('button', { class: 'button danger', text: 'Xác nhận xóa vĩnh viễn', onclick: async (event) => {
     event.currentTarget.disabled = true; error.hidden = true;
