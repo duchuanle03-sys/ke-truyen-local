@@ -132,6 +132,82 @@ class Store:
             if 'trashed_at' not in {row[1] for row in db.execute('PRAGMA table_info(books)')}:
                 db.execute('ALTER TABLE books ADD COLUMN trashed_at REAL NOT NULL DEFAULT 0')
         self._init_asset_index()
+        self._init_search_index()
+
+    def _init_search_index(self):
+        if sqlite3.sqlite_version_info < (3, 35, 0):
+            raise ValueError('Tìm kiếm cần SQLite 3.35 trở lên có FTS5/trigram. Hãy cập nhật Python.')
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('CREATE TABLE IF NOT EXISTS chapter_search_docs (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL, idx INTEGER NOT NULL, scope TEXT NOT NULL, literal_check INTEGER NOT NULL, text TEXT NOT NULL, UNIQUE(book_id,idx), FOREIGN KEY(book_id,idx) REFERENCES chapters(book_id,idx) ON DELETE CASCADE)')
+            db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chapter_search_fts USING fts5(scope,text,content='chapter_search_docs',content_rowid='id',tokenize='trigram case_sensitive 1')")
+            db.execute('CREATE TABLE IF NOT EXISTS chapter_search_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL, idx INTEGER NOT NULL, UNIQUE(book_id,idx), FOREIGN KEY(book_id,idx) REFERENCES chapters(book_id,idx) ON DELETE CASCADE)')
+            db.execute("CREATE TABLE IF NOT EXISTS chapter_search_state (id INTEGER PRIMARY KEY CHECK(id=1), book_id TEXT NOT NULL DEFAULT '', idx INTEGER NOT NULL DEFAULT -1, complete INTEGER NOT NULL DEFAULT 0)")
+            db.execute('INSERT OR IGNORE INTO chapter_search_state(id) VALUES(1)')
+            for sql in (
+                "CREATE TRIGGER IF NOT EXISTS search_doc_insert AFTER INSERT ON chapter_search_docs BEGIN INSERT INTO chapter_search_fts(rowid,scope,text) VALUES(NEW.id,NEW.scope,NEW.text); END",
+                "CREATE TRIGGER IF NOT EXISTS search_doc_delete AFTER DELETE ON chapter_search_docs BEGIN INSERT INTO chapter_search_fts(chapter_search_fts,rowid,scope,text) VALUES('delete',OLD.id,OLD.scope,OLD.text); END",
+                "CREATE TRIGGER IF NOT EXISTS search_doc_update AFTER UPDATE OF text ON chapter_search_docs WHEN NEW.text IS NOT OLD.text BEGIN INSERT INTO chapter_search_fts(chapter_search_fts,rowid,scope,text) VALUES('delete',OLD.id,OLD.scope,OLD.text); INSERT INTO chapter_search_fts(rowid,scope,text) VALUES(NEW.id,NEW.scope,NEW.text); END",
+                "CREATE TRIGGER IF NOT EXISTS search_chapter_insert AFTER INSERT ON chapters WHEN NEW.downloaded=1 BEGIN INSERT INTO chapter_search_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id; END",
+                "CREATE TRIGGER IF NOT EXISTS search_chapter_update AFTER UPDATE OF text,downloaded ON chapters WHEN NEW.text IS NOT OLD.text OR NEW.downloaded IS NOT OLD.downloaded BEGIN INSERT INTO chapter_search_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id; END",
+            ):
+                db.execute(sql)
+
+    def index_search(self, limit=8, stop=None):
+        if stop is not None and stop.is_set():
+            return 0
+        seeded = 0
+        with self.db() as db:
+            state = db.execute('SELECT * FROM chapter_search_state WHERE id=1').fetchone()
+            if not state['complete']:
+                db.execute('BEGIN IMMEDIATE')
+                state = db.execute('SELECT * FROM chapter_search_state WHERE id=1').fetchone()
+                if not state['complete']:
+                    owners = db.execute('SELECT book_id,idx,downloaded FROM chapters WHERE (book_id,idx)>(?,?) ORDER BY book_id,idx LIMIT 256',
+                                        (state['book_id'], state['idx'])).fetchall()
+                    db.executemany('INSERT OR IGNORE INTO chapter_search_pending(book_id,idx) SELECT ?,? '
+                        'WHERE NOT EXISTS(SELECT 1 FROM chapter_search_docs WHERE book_id=? AND idx=?)',
+                        ((row['book_id'], row['idx'], row['book_id'], row['idx']) for row in owners if row['downloaded']))
+                    if owners:
+                        db.execute('UPDATE chapter_search_state SET book_id=?,idx=? WHERE id=1',
+                                   (owners[-1]['book_id'], owners[-1]['idx']))
+                    if len(owners) < 256:
+                        db.execute('UPDATE chapter_search_state SET complete=1 WHERE id=1')
+                    seeded = len(owners)
+        with self.db() as db:
+            owners = db.execute('SELECT * FROM chapter_search_pending ORDER BY id LIMIT ?', (limit,)).fetchall()
+        indexed, characters = [], 0
+        with self.db() as db:
+            for owner in owners:
+                if stop is not None and stop.is_set():
+                    return 0
+                cursor = db.execute('SELECT c.text,c.downloaded FROM chapter_search_pending p JOIN chapters c '
+                                    'ON c.book_id=p.book_id AND c.idx=p.idx WHERE p.id=?', (owner['id'],))
+                row = cursor.fetchone()
+                cursor.close()
+                if row is not None:
+                    # shortcut: one oversized chapter is indexed atomically; partition it if write-latency measurements require it.
+                    normalized = row['text'].casefold() if row['downloaded'] else None
+                    indexed.append((owner, normalized))
+                    characters += len(normalized or '')
+                    if characters >= 256 * 1024:
+                        break
+        if stop is not None and stop.is_set():
+            return 0
+        if indexed:
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                for owner, normalized in indexed:
+                    # A replaced pending ID rejects content changed while normalization was outside the transaction.
+                    if not db.execute('DELETE FROM chapter_search_pending WHERE id=?', (owner['id'],)).rowcount:
+                        continue
+                    if normalized is None:
+                        db.execute('DELETE FROM chapter_search_docs WHERE book_id=? AND idx=?', (owner['book_id'], owner['idx']))
+                    else:
+                        db.execute('INSERT INTO chapter_search_docs(book_id,idx,scope,literal_check,text) VALUES(?,?,?,?,?) '
+                            'ON CONFLICT(book_id,idx) DO UPDATE SET literal_check=excluded.literal_check,text=excluded.text',
+                            (owner['book_id'], owner['idx'], hashlib.sha256(owner['book_id'].encode()).hexdigest(), int('\x00' in normalized), normalized))
+        return seeded + len(owners)
 
     def _init_asset_index(self):
         with self.db() as db:
@@ -826,24 +902,57 @@ class Store:
         with self.db() as db:
             db.execute("DELETE FROM notes WHERE id=?", (note_id,))
 
-    def search_content(self, book_id, query):
-        if not query.strip():
+    def search_content(self, book_id, query, after=-1, limit=100):
+        if not isinstance(query, str) or not query.strip():
             raise ValueError("Nhập cụm từ cần tìm.")
-        book = self.get_book(book_id)
+        if len(query) > 500 or '\x00' in query:
+            raise ValueError('Cụm từ tối đa 500 ký tự và không chứa ký tự NUL.')
+        after, limit = int(after), min(100, max(1, int(limit)))
+        if not -1 <= after < 2**63:
+            raise ValueError('Vị trí phân trang không hợp lệ.')
         term = query.casefold()
-        results = []
-        searched = 0
         with self.db() as db:
-            for row in db.execute("SELECT idx,title,text,downloaded FROM chapters WHERE book_id=? ORDER BY idx",
-                                  (book_id,)):
-                if not row["downloaded"]:
-                    continue
-                searched += 1
-                at = row["text"].casefold().find(term)
-                if at >= 0:
-                    results.append({"index": row["idx"], "title": row["title"],
-                                    "snippet": row["text"][max(0, at - 70):at + len(query) + 120]})
-        return {"results": results, "searched": searched, "total": book["chapter_count"]}
+            db.execute('BEGIN')
+            book = db.execute('SELECT chapter_count FROM books WHERE id=?', (book_id,)).fetchone()
+            if book is None:
+                raise KeyError('Không tìm thấy truyện.')
+            state = db.execute('SELECT * FROM chapter_search_state WHERE id=1').fetchone()
+            seeded = (state['complete'] or state['book_id'] > book_id or
+                      (state['book_id'] == book_id and not db.execute(
+                          'SELECT 1 FROM chapters WHERE book_id=? AND idx>? LIMIT 1', (book_id, state['idx'])).fetchone()))
+            indexing = (not seeded or bool(db.execute(
+                'SELECT 1 FROM chapter_search_pending WHERE book_id=? LIMIT 1', (book_id,)).fetchone()))
+            clean = 'NOT EXISTS(SELECT 1 FROM chapter_search_pending p WHERE p.book_id=d.book_id AND p.idx=d.idx)'
+            searched = db.execute('SELECT count(*) FROM chapter_search_docs d WHERE d.book_id=? AND ' + clean, (book_id,)).fetchone()[0]
+            if len(term) >= 3:
+                scope = hashlib.sha256(book_id.encode()).hexdigest()
+                match = 'scope:"' + scope + '" AND text:"' + term.replace('"', '""') + '"'
+                # The trigram tokenizer skips NULs; only affected documents need a literal residual check.
+                source, condition, parameters = ('chapter_search_fts CROSS JOIN chapter_search_docs d ON d.id=chapter_search_fts.rowid',
+                    'chapter_search_fts MATCH ? AND (d.literal_check=0 OR instr(d.text,?)>0) AND ', (match, term))
+            else:
+                # shortcut: one/two-character queries scan only this book's normalized index; index short grams if measured demand justifies their disk cost.
+                source, condition, parameters = 'chapter_search_docs d', 'instr(d.text,?)>0 AND ', (term,)
+            rows = db.execute('WITH hits AS MATERIALIZED (SELECT d.book_id,d.idx FROM ' + source + ' WHERE ' + condition +
+                'd.book_id=? AND d.idx>? AND ' + clean + ' ORDER BY d.idx LIMIT ?) '
+                'SELECT c.idx,c.title,c.text FROM hits JOIN chapters c ON c.book_id=hits.book_id AND c.idx=hits.idx '
+                'WHERE c.downloaded=1 ORDER BY c.idx', (*parameters, book_id, after, limit + 1)).fetchall()
+        results = []
+        for row in rows[:limit]:
+            text = row['text']
+            folded = text.casefold()
+            at = folded.find(term)
+            if len(folded) != len(text):
+                position = 0
+                for i, character in enumerate(text):
+                    position += len(character.casefold())
+                    if position > at:
+                        at = i
+                        break
+            results.append({'index': row['idx'], 'title': row['title'],
+                            'snippet': text[max(0, at - 70):at + len(term) + 120]})
+        return {'results': results, 'searched': searched, 'total': book['chapter_count'],
+                'indexing': indexing, 'next_index': rows[limit - 1]['idx'] if len(rows) > limit else None}
 
     def import_backup(self, source):
         source = Path(source).expanduser().resolve()

@@ -44,6 +44,18 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(body), [])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
 
+    def test_book_search_api_passes_the_chapter_cursor_and_index_status(self):
+        store = self.server.app.store
+        store.upsert_book({'id': 'search-test', 'name': 'Search test'},
+                          [{'title': str(i), 'text': 'Shared phrase'} for i in range(205)])
+        while store.index_search():
+            pass
+        status, body, _ = self.request('/api/books/search-test/search?q=Shared+phrase&after=99')
+        result = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual((result['results'][0]['index'], len(result['results']), result['next_index']), (100, 100, 199))
+        self.assertFalse(result['indexing'])
+
     def test_second_server_on_same_port_fails_without_changing_running_library(self):
         self.server.app.store.upsert_book({'id': 'keep', 'name': 'Keep'},
                                          [{'title': 'One', 'text': 'Keep this chapter'}])

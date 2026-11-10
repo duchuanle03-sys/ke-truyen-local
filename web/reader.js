@@ -469,21 +469,41 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     const form = el('form', {}, [el('div', { class: 'search-reader-bar' }, [query, button('Tìm', () => {})]), scope]);
     form.querySelector('button').type = 'submit';
     const dialog = showDialog('Tìm trong nội dung', [form, el('p', { class: 'muted small', text: 'Tìm toàn truyện chỉ xét chương đã có nội dung. Kết quả luôn cho biết số chương đã tìm.' }), result, controls]);
-    let hits = [], selected = -1;
+    let hits = [], selected = -1, searchGeneration = 0;
     form.onsubmit = async (event) => {
       event.preventDefault();
+      const generation = ++searchGeneration, term = query.value.trim();
       clearSearch(); result.replaceChildren(); controls.replaceChildren();
-      if (!query.value.trim()) return;
+      if (!term) return;
       if (scope.value === 'book') {
-        result.append(el('p', { text: 'Đang tìm trong nội dung đã tải…' }));
-        try {
-          const found = await api(path(`/search?${new URLSearchParams({ q: query.value.trim() })}`));
-          result.replaceChildren(el('p', { class: 'inline-info', text: `Đã tìm ${found.searched}/${found.total} chương. ${found.searched < found.total ? 'Các chương chưa tải chưa được tìm kiếm.' : 'Đã xét toàn bộ nội dung hiện có.'}` }));
-          if (!found.results?.length) result.append(el('p', { text: 'Không có kết quả trong phạm vi đã tìm.' }));
-          for (const hit of found.results || []) result.append(el('button', { class: 'whole-book-result', onclick: async () => { dialog.close(); await loadChapter(hit.index); highlightSearch(query.value.trim()); } }, [el('strong', { text: hit.title || `Chương ${hit.index + 1}` }), el('p', { text: hit.snippet || '' })]));
-        } catch (error) { result.replaceChildren(el('p', { class: 'inline-error', text: error.message })); }
+        const info = el('p', { class: 'inline-info', text: 'Đang tìm trong nội dung đã tải…' });
+        const list = el('div');
+        result.append(info, list);
+        let after = -1, loading = false;
+        async function loadMore() {
+          if (loading) return;
+          loading = true;
+          controls.replaceChildren(el('p', { text: 'Đang tìm…' }));
+          try {
+            const found = await api(path(`/search?${new URLSearchParams({ q: term, after })}`));
+            if (generation !== searchGeneration || !dialog.body.closest('dialog')?.open) return;
+            info.textContent = found.indexing
+              ? `Đang chuẩn bị tìm kiếm nền: ${found.searched}/${found.total} chương sẵn sàng. Hãy tìm lại sau để cập nhật kết quả.`
+              : `Đã tìm ${found.searched}/${found.total} chương. ${found.searched < found.total ? 'Các chương chưa tải chưa được tìm kiếm.' : 'Đã xét toàn bộ nội dung hiện có.'}`;
+            for (const hit of found.results || []) list.append(el('button', { class: 'whole-book-result', onclick: async () => { dialog.close(); await loadChapter(hit.index); highlightSearch(term); } }, [el('strong', { text: hit.title || `Chương ${hit.index + 1}` }), el('p', { text: hit.snippet || '' })]));
+            if (!list.children.length) list.append(el('p', { text: 'Không có kết quả trong phạm vi đã tìm.' }));
+            controls.replaceChildren();
+            if (found.next_index != null) {
+              after = found.next_index;
+              controls.append(button('Xem thêm kết quả', loadMore));
+            }
+          } catch (error) {
+            if (generation === searchGeneration && dialog.body.closest('dialog')?.open) controls.replaceChildren(el('p', { class: 'inline-error', text: error.message }), button('Thử lại', loadMore));
+          } finally { loading = false; }
+        }
+        await loadMore();
       } else {
-        hits = highlightSearch(query.value.trim()); selected = -1;
+        hits = highlightSearch(term); selected = -1;
         const count = el('p', { class: 'muted', text: `${hits.length} kết quả trong chương đang đọc.` }); result.append(count);
         function jump(direction) {
           if (!hits.length) return;

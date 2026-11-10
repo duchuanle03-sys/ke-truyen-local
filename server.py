@@ -160,7 +160,10 @@ class App:
         try:
             while not self._asset_stop.is_set():
                 try:
-                    if self.store.index_assets(stop=self._asset_stop):
+                    assets = self.store.index_assets(stop=self._asset_stop)
+                    search = self.store.index_search(stop=self._asset_stop)
+                    if assets or search:
+                        self._asset_stop.wait(.01)
                         continue
                     if self._asset_stop.is_set():
                         break
@@ -729,7 +732,7 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "update" and method == "POST":
                     return self._reply(200, store.update_book(book_id, self._json()))
                 if action == "search" and method == "GET":
-                    return self._reply(200, store.search_content(book_id, q.get("q", "")))
+                    return self._reply(200, store.search_content(book_id, q.get("q", ""), int(q.get('after', -1))))
                 if action == "download" and method == "POST":
                     body = self._json()
                     return self._reply(200, self.app.download(book_id, body.get("start", 0), body.get("count", -1)))
