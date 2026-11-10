@@ -11,7 +11,7 @@ import socket
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
@@ -61,11 +61,58 @@ class App:
         self.jobs = {}
         self.lock = threading.RLock()
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="chapter-download")
+        self._download_futures = {}
+        self._download_stop = threading.Event()
+        self._download_wake = threading.Event()
+        self.store.recover_downloads()
         self._asset_stop = threading.Event()
         self._next_trash_cleanup = 0
         self.cleanup_trash()
         self._asset_worker = threading.Thread(target=self._maintain_assets, name='asset-maintenance', daemon=True)
         self._asset_worker.start()
+        self._download_worker = threading.Thread(target=self._maintain_downloads, name='download-queue', daemon=True)
+        self._download_worker.start()
+        self._download_wake.set()
+
+    def _cache_job(self, job):
+        self.jobs[job['id']] = job
+        # SQLite owns the full queue/history; retain only a bounded live view in RAM.
+        for key in list(self.jobs):
+            if len(self.jobs) <= 100:
+                break
+            if key not in self._download_futures:
+                del self.jobs[key]
+        return job
+
+    def _schedule_downloads(self):
+        with self.lock:
+            if self._download_stop.is_set():
+                return
+            self._download_futures = {key: future for key, future in self._download_futures.items() if not future.done()}
+            slots = 2 - len(self._download_futures)
+            if slots:
+                for saved in self.store.queued_downloads(tuple(self._download_futures), slots):
+                    job = self._cache_job(self.jobs.get(saved['id'], saved))
+                    future = self.executor.submit(self._download, job)
+                    self._download_futures[job['id']] = future
+                    future.add_done_callback(lambda _: self._download_wake.set())
+
+    def _maintain_downloads(self):
+        while not self._download_stop.is_set():
+            self._download_wake.wait()
+            self._download_wake.clear()
+            try:
+                self._schedule_downloads()
+            except Exception:
+                logging.exception('Cannot dispatch persisted downloads; will retry.')
+                if not self._download_stop.wait(1):
+                    self._download_wake.set()
+
+    def list_jobs(self, offset=0):
+        with self.lock:
+            page = self.store.download_jobs(offset)
+            page['jobs'] = [dict(self.jobs.get(job['id'], job)) for job in page['jobs']]
+            return page
 
     def _maintain_assets(self):
         try:
@@ -87,13 +134,20 @@ class App:
             self.store.close_inventory()
 
     def close(self):
+        with self.lock:
+            if self._download_stop.is_set():
+                return
+            self._download_stop.set()
+            self._download_wake.set()
+            for job in self.jobs.values():
+                self.store.save_download(job)
+        self._download_worker.join(timeout=1)
         self._asset_stop.set()
         self._asset_worker.join(timeout=1)
-        for job in self.jobs.values():
-            job["cancelled"] = True
         self.executor.shutdown(wait=False, cancel_futures=True)
         if callable(getattr(self.sources, 'close', None)):
             self.sources.close()
+        wait(tuple(self._download_futures.values()), timeout=1)
         self.qt.close()
 
     def chapter(self, book_id, index):
@@ -161,14 +215,15 @@ class App:
     def trash_book(self, book_id):
         with self.lock:
             book = self.store.trash_book(book_id)
-            for job in self.jobs.values():
-                if job['book_id'] == book_id and job['status'] in ('queued', 'running', 'paused', 'verification_required'):
-                    job['cancelled'] = True
+            saved = self.store.active_download(book_id)
+            if saved:
+                job = self._cache_job(self.jobs.get(saved['id'], saved))
+                self._cancel_download(job)
         return book
 
     def purge_book(self, book_id):
         with self.lock:
-            if any(job['book_id'] == book_id and job['status'] in ('queued', 'running', 'paused', 'verification_required') for job in self.jobs.values()):
+            if self.store.active_download(book_id):
                 raise ValueError('Đang dừng tác vụ tải của truyện. Hãy thử lại sau khi tác vụ dừng.')
             self.store.purge_book(book_id)
             self.jobs = {key: job for key, job in self.jobs.items() if job['book_id'] != book_id}
@@ -179,7 +234,7 @@ class App:
             return
         self._next_trash_cleanup = time.monotonic() + 60
         with self.lock:
-            active = {job['book_id'] for job in self.jobs.values() if job['status'] in ('queued', 'running', 'paused', 'verification_required')}
+            active = self.store.active_download_books()
             removed = set(self.store.purge_expired(skip_ids=active))
             self.jobs = {key: job for key, job in self.jobs.items() if job['book_id'] not in removed}
 
@@ -258,21 +313,35 @@ class App:
         with self.lock:
             if self.store.get_book(book_id)['trashed_at']:
                 raise ValueError('Hãy khôi phục truyện khỏi thùng rác trước khi tải.')
-            if any(j["book_id"] == book_id and j["status"] in ("queued", "running", "paused", "verification_required") for j in self.jobs.values()):
+            if self._download_stop.is_set():
+                raise ValueError('Máy chủ đang dừng; tác vụ đã lưu sẽ tiếp tục khi mở lại.')
+            if self.store.active_download(book_id):
                 raise ValueError("Truyện đang có trong hàng đợi tải.")
             job = {"id": uuid.uuid4().hex, "book_id": book_id, "name": book["name"],
                    "start": start, "end": end, "total": end - start, "completed": 0,
                    "status": "queued", "error": "", "cancelled": False, "captcha": None}
-            self.jobs[job["id"]] = job
-        self.executor.submit(self._download, job)
+            self.store.create_download(job)
+            self._cache_job(job)
+            self._schedule_downloads()
         return dict(job)
 
     def _download(self, job):
+        checkpoint_completed, checkpoint_time = job['completed'], time.monotonic()
         try:
-            job["status"] = "running"
-            for index in range(job["start"], job["end"]):
+            with self.lock:
+                if self._download_stop.is_set():
+                    return
+                if job['cancelled']:
+                    job['status'] = 'cancelled'
+                    return
+                job["status"] = "running"
+                self.store.save_download(job)
+            for index in range(job["start"] + job['completed'], job["end"]):
                 while job["status"] == "paused" and not job["cancelled"]:
-                    time.sleep(.2)
+                    if self._download_stop.wait(.2):
+                        return
+                if self._download_stop.is_set():
+                    return
                 if job["cancelled"]:
                     job["status"] = "cancelled"
                     return
@@ -285,49 +354,92 @@ class App:
                         verification = error.verification
                         if not verification:
                             raise
-                        job.update(status='verification_required', error=str(error), captcha=error.captcha)
+                        with self.lock:
+                            if self._download_stop.is_set():
+                                return
+                            job.update(status='verification_required', error=str(error), captcha=error.captcha)
+                            self.store.save_download(job)
                         while not verification['event'].wait(.2):
+                            if self._download_stop.is_set():
+                                return
                             if job['cancelled']:
                                 job['status'] = 'cancelled'
                                 return
+                        if self._download_stop.is_set():
+                            return
                         if job['cancelled']:
                             job['status'] = 'cancelled'
                             return
                         if not verification['verified']:
                             raise SourceError('Đã hủy xác minh. Các chương đã tải vẫn được giữ; có thể thử lại phần còn lại.', code='captcha_cancelled')
-                        job.update(status='running', error='')
-                        job['captcha'] = None
+                        with self.lock:
+                            if self._download_stop.is_set():
+                                return
+                            job.update(status='running', error='', captcha=None)
+                            self.store.save_download(job)
                 for url in raw["images"]:
+                    if self._download_stop.is_set():
+                        return
                     if url.startswith(("http://", "https://")):
                         self.image(url, book["path"])
-                job["completed"] += 1
-            job["status"] = "cancelled" if job['cancelled'] else "completed"
+                with self.lock:
+                    if self._download_stop.is_set():
+                        return
+                    job["completed"] += 1
+                    if job['completed'] - checkpoint_completed >= 10 or time.monotonic() - checkpoint_time >= 2:
+                        self.store.save_download(job)
+                        checkpoint_completed, checkpoint_time = job['completed'], time.monotonic()
+            with self.lock:
+                if not self._download_stop.is_set():
+                    job["status"] = "cancelled" if job['cancelled'] else "completed"
         except Exception as error:
-            job["status"] = "failed"
-            job["error"] = str(error)
-            if isinstance(error, SourceError):
-                job['error_code'] = error.code
-                if isinstance(error, SourceAccessError):
-                    job['access'] = error.access
+            with self.lock:
+                if self._download_stop.is_set():
+                    return
+                job["status"] = "failed"
+                job["error"] = str(error)
+                if isinstance(error, SourceError):
+                    job['error_code'] = error.code
+                    if isinstance(error, SourceAccessError):
+                        job['access'] = error.access
+        finally:
+            with self.lock:
+                # close() persisted the last snapshot; a late request must not overwrite a new server's recovery.
+                if not self._download_stop.is_set():
+                    self.store.save_download(job)
+
+    def _cancel_download(self, job):
+        job['cancelled'] = True
+        future = self._download_futures.get(job['id'])
+        if future is None or future.done():
+            job['status'] = 'cancelled'
+        self.store.save_download(job)
 
     def job_action(self, job_id, action):
         with self.lock:
-            if job_id not in self.jobs:
-                raise KeyError("Không tìm thấy tác vụ.")
-            job = self.jobs[job_id]
+            if self._download_stop.is_set():
+                raise ValueError('Máy chủ đang dừng; hãy mở lại ứng dụng để quản lý tác vụ.')
+            job = self._cache_job(self.jobs.get(job_id) or self.store.download_job(job_id))
             if action == "pause" and job["status"] == "running":
                 job["status"] = "paused"
             elif action == "resume" and job["status"] == "paused":
-                job["status"] = "running"
+                future = self._download_futures.get(job_id)
+                job["status"] = "running" if future and not future.done() else 'queued'
             elif action == "cancel":
-                job["cancelled"] = True
+                self._cancel_download(job)
             elif action == "retry" and job["status"] in ("failed", "cancelled"):
-                return self.download(job["book_id"], job["start"] + job["completed"],
-                                     job["total"] - job["completed"])
+                if job['completed'] < job['total']:
+                    return self.download(job["book_id"], job["start"] + job["completed"],
+                                         job["total"] - job["completed"])
+                job.update(status='completed', cancelled=False)
             elif action == "delete" and job["status"] not in ("running", "queued", "paused", "verification_required"):
                 del self.jobs[job_id]
+                self.store.delete_download(job_id)
+                return dict(job)
             else:
                 raise ValueError("Không thể thực hiện thao tác với trạng thái hiện tại.")
+            self.store.save_download(job)
+            self._schedule_downloads()
             return dict(job)
 
     def capabilities(self):
@@ -613,7 +725,7 @@ class Handler(BaseHTTPRequestHandler):
             store.delete_note(parts[2])
             return self._reply(200, {"deleted": True})
         if path == "/api/jobs" and method == "GET":
-            return self._reply(200, [dict(job) for job in self.app.jobs.values()])
+            return self._reply(200, self.app.list_jobs(int(q.get('offset', 0))))
         if len(parts) == 4 and parts[:2] == ["api", "jobs"] and method == "POST":
             self._json()
             return self._reply(200, self.app.job_action(parts[2], parts[3]))

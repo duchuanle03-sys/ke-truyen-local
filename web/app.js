@@ -483,9 +483,10 @@ function renderDictionary(target, book = null) {
   load();
 }
 
-async function renderSettings() {
+async function renderSettings(jobsOffset = 0) {
+  jobsOffset = Number.isInteger(jobsOffset) ? Math.max(0, jobsOffset) : 0;
   const target = $('settings-page'); target.replaceChildren(el('p', { text: 'Đang kiểm tra công cụ…' }));
-  const results = await Promise.allSettled([api('/api/capabilities'), api('/api/jobs')]);
+  const results = await Promise.allSettled([api('/api/capabilities'), api(`/api/jobs?offset=${jobsOffset}`)]);
   const capabilities = el('section', { class: 'settings-section' }, [el('h2', { text: 'Khả năng trên máy này' }), el('p', { class: 'muted', text: 'Chỉ công cụ phát hiện được mới được ghi nhận sẵn sàng. Giọng đọc được kiểm tra trong trình đọc.' })]);
   if (results[0].status === 'fulfilled') {
     const data = results[0].value;
@@ -503,7 +504,7 @@ async function renderSettings() {
     for (const [label, value] of rows) summary.append(el('dt', { text: label }), el('dd', { text: value }));
     capabilities.append(summary, el('details', {}, [el('summary', { text: 'Chi tiết công cụ phát hiện được' }), reportNode(data)]));
   } else capabilities.append(el('p', { class: 'inline-error', text: results[0].reason.message }));
-  const jobs = el('section', { class: 'settings-section' }, [el('h2', { text: 'Tải nội dung' }), el('button', { class: 'button', text: 'Cập nhật trạng thái', onclick: renderSettings })]);
+  const jobs = el('section', { class: 'settings-section' }, [el('h2', { text: 'Tải nội dung' }), el('p', { class: 'muted small', text: 'Tác vụ được lưu trên máy và tự tiếp tục khi mở lại máy chủ. Tác vụ tạm dừng, đã hủy hoặc bị lỗi vẫn giữ trạng thái để bạn quyết định.' }), el('button', { class: 'button', text: 'Cập nhật trạng thái', onclick: () => renderSettings(jobsOffset) })]);
   if (results[1].status === 'fulfilled') {
     const list = Array.isArray(results[1].value) ? results[1].value : results[1].value.jobs || [];
     if (!list.length) jobs.append(el('p', { class: 'muted', text: 'Chưa có yêu cầu tải. Mở chi tiết sách trên kệ để tải một khoảng chương.' }));
@@ -513,18 +514,22 @@ async function renderSettings() {
       if (job.error) row.append(el('p', { class: 'inline-error', text: job.error }));
       const controls = el('div', { class: 'header-actions' });
       if (job.status === 'verification_required' && job.captcha) controls.append(el('button', { class: 'button primary', text: 'Xác minh CAPTCHA', onclick: async () => {
-        try { await verifyCaptcha(job.captcha); await renderSettings(); }
-        catch (error) { notify(error.message, true); await renderSettings(); }
+        try { await verifyCaptcha(job.captcha); await renderSettings(jobsOffset); }
+        catch (error) { notify(error.message, true); await renderSettings(jobsOffset); }
       } }));
       for (const [action, text, enabled] of [['pause', 'Tạm dừng', job.status === 'running'], ['resume', 'Tiếp tục', job.status === 'paused'], ['retry', 'Thử lại phần còn lại', ['failed', 'cancelled'].includes(job.status)], ['cancel', 'Hủy tải', ['queued', 'running', 'paused', 'verification_required'].includes(job.status)], ['delete', 'Xóa khỏi danh sách', ['completed', 'failed', 'cancelled'].includes(job.status)]]) {
         if (enabled) controls.append(el('button', { class: 'button', text, onclick: async (event) => {
           event.currentTarget.disabled = true;
-          try { await api(`/api/jobs/${encodeURIComponent(job.id)}/${action}`, {}); await renderSettings(); }
+          try { await api(`/api/jobs/${encodeURIComponent(job.id)}/${action}`, {}); await renderSettings(jobsOffset); }
           catch (error) { notify(error.message, true); event.target.disabled = false; }
         } }));
       }
       row.append(controls); jobs.append(row);
     }
+    const pages = el('div', { class: 'header-actions' });
+    if (jobsOffset) pages.append(el('button', { class: 'button', text: 'Tác vụ trước', onclick: () => renderSettings(Math.max(0, jobsOffset - 50)) }));
+    if (results[1].value.next_offset != null) pages.append(el('button', { class: 'button', text: 'Tác vụ tiếp', onclick: () => renderSettings(results[1].value.next_offset) }));
+    jobs.append(pages);
   } else jobs.append(el('p', { class: 'inline-error', text: results[1].reason.message }));
   target.replaceChildren(capabilities, jobs, el('section', { class: 'settings-section' }, [el('h2', { text: 'Dữ liệu thư viện' }), el('p', { class: 'muted', text: 'Thư viện, nội dung và cài đặt mới nằm riêng trong reader-local/user-data. Nhập backup giữ nguyên bộ xuất gốc. Đóng ứng dụng trước khi sao chép thư mục dữ liệu để lưu dự phòng.' }), el('div', { class: 'header-actions' }, [el('button', { class: 'button', text: 'Nhập thư viện hiện có', onclick: importBackup }), el('button', { class: 'button', text: 'Tất cả ghi chú đã lưu', onclick: globalNotesDialog })])]));
 }

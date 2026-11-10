@@ -121,15 +121,29 @@ class TrashHTTPTests(unittest.TestCase):
 
     def test_removal_cancels_only_matching_jobs_and_blocks_new_downloads(self):
         app = self.server.app
-        app.jobs.update({'one': {'book_id': 'test-only', 'status': 'running', 'cancelled': False},
-                         'two': {'book_id': 'other', 'status': 'running', 'cancelled': False}})
-        self.request('/api/books/test-only/trash', 'POST')
-        self.assertTrue(app.jobs['one']['cancelled'])
-        self.assertFalse(app.jobs['two']['cancelled'])
-        self.assertEqual(self.request('/api/books/test-only', 'DELETE')[0], 400)
-        with self.assertRaises(ValueError):
-            app.download('test-only')
-        app.jobs['one']['status'] = 'cancelled'
+        app.store.upsert_book({'id': 'other', 'name': 'Other'}, [{'text': 'Already saved'}])
+        entered = {key: threading.Event() for key in ('test-only', 'other')}
+        release = threading.Event()
+        original = app._chapter_content
+        def block(book, index):
+            entered[book['id']].set()
+            if not release.wait(3):
+                raise TimeoutError('Test did not release a download')
+            return original(book, index)
+        with patch.object(app, '_chapter_content', side_effect=block):
+            one, two = app.download('test-only'), app.download('other')
+            try:
+                self.assertTrue(all(event.wait(2) for event in entered.values()))
+                self.request('/api/books/test-only/trash', 'POST')
+                self.assertTrue(app.jobs[one['id']]['cancelled'])
+                self.assertFalse(app.jobs[two['id']]['cancelled'])
+                self.assertEqual(self.request('/api/books/test-only', 'DELETE')[0], 400)
+                with self.assertRaises(ValueError):
+                    app.download('test-only')
+            finally:
+                release.set()
+                for future in tuple(app._download_futures.values()):
+                    future.result(timeout=3)
         self.assertEqual(self.request('/api/books/test-only', 'DELETE')[0], 200)
 
     def test_maintenance_removes_expired_trash_while_app_runs(self):

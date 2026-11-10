@@ -214,6 +214,67 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(self.app.jobs[job['id']]['completed'], 0)
         self.source.chapter.assert_not_called()
 
+    def test_paused_job_survives_restart_and_resumes_the_same_job(self):
+        entered, release = self.block_first_chapter()
+        job = self.app.download('book')
+        self.assertTrue(entered.wait(2))
+        self.app.job_action(job['id'], 'pause')
+        release.set()
+        self.wait_for(lambda: self.app.jobs[job['id']]['completed'] == 1)
+        self.app.close()
+        self.futures[-1].result(timeout=3)
+        self.app = App(self.tmp.name, self.source)
+        try:
+            resumed = self.app.job_action(job['id'], 'resume')
+        except KeyError:
+            self.fail('The paused download job was lost when the application restarted.')
+        self.assertEqual(resumed['id'], job['id'])
+        self.wait_for(lambda: self.app.jobs[job['id']]['status'] == 'completed')
+        self.assertEqual(self.app.jobs[job['id']]['completed'], 2)
+        self.assertEqual(self.source.chapter.call_args_list, [call('full', url) for url in self.payloads])
+
+    def test_failed_job_survives_restart_and_retry_keeps_the_saved_chapter(self):
+        self.fetch.side_effect = OSError('Image transport unavailable')
+        job = self.app.download('book')
+        self.futures[-1].result(timeout=3)
+        self.assertEqual(self.app.jobs[job['id']]['status'], 'failed')
+        self.app.close()
+        self.fetch.side_effect = None
+        self.app = App(self.tmp.name, self.source)
+        try:
+            retry = self.app.job_action(job['id'], 'retry')
+        except KeyError:
+            self.fail('The failed download and its retry cursor were lost after restart.')
+        self.wait_for(lambda: self.app.jobs[retry['id']]['status'] == 'completed')
+        self.assertEqual(self.source.chapter.call_args_list, [call('full', url) for url in self.payloads])
+
+    def test_restart_finishes_partial_images_without_fetching_saved_parts_again(self):
+        urls = [f'https://cdn.example/partial-{i}.png' for i in range(3)]
+        self.payloads['https://example.com/chapter-0']['images'] = urls
+        entered, release = self.event(), self.event()
+        attempts = collections.Counter()
+        def fetch(url, **kwargs):
+            attempts[url] += 1
+            if url == urls[1]:
+                entered.set()
+                if not release.wait(4):
+                    raise TimeoutError('Test did not release the partial image')
+            return PNG
+        self.fetch.side_effect = fetch
+        job = self.app.download('book')
+        try:
+            self.assertTrue(entered.wait(2))
+            self.app.close()
+        finally:
+            release.set()
+        self.futures[-1].result(timeout=3)
+        self.assertEqual(self.app.store.download_job(job['id'])['completed'], 0)
+        self.assertEqual(attempts[urls[2]], 0)
+        self.app = App(self.tmp.name, self.source)
+        self.wait_for(lambda: self.app.store.download_job(job['id'])['status'] == 'completed')
+        self.assertEqual([attempts[url] for url in urls], [1, 1, 1])
+        self.assertEqual(self.source.chapter.call_args_list, [call('full', url) for url in self.payloads])
+
 
 if __name__ == '__main__':
     unittest.main()

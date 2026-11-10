@@ -21,6 +21,7 @@ from htmltools import parse_html, safe_remote_url
 MAX_JSON = 32 * 1024 * 1024
 MAX_BACKUP = 512 * 1024 * 1024
 TRASH_RETENTION = 30 * 24 * 60 * 60
+_ACTIVE_DOWNLOAD_SQL = "status IN ('queued','running','paused','verification_required')"
 _ASSET_NAMES = {'files': r'[0-9a-f]{64}\.[a-z0-9]+',
                 'images': r'[0-9a-f]{64}(?:\.[0-9a-f]{32}\.tmp)?'}
 
@@ -115,6 +116,16 @@ class Store:
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS groups_list (id TEXT PRIMARY KEY, name TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS legacy (path TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS download_jobs (
+                    id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL, cancelled INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL,
+                    created_at REAL NOT NULL, updated_at REAL NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS download_active_book ON download_jobs(book_id)
+                    WHERE status IN ('queued','running','paused','verification_required');
+                CREATE INDEX IF NOT EXISTS download_queue ON download_jobs(status,created_at,id);
+                CREATE INDEX IF NOT EXISTS download_history ON download_jobs(created_at DESC,id DESC);
+                CREATE INDEX IF NOT EXISTS download_book ON download_jobs(book_id);
                 CREATE INDEX IF NOT EXISTS chapter_book ON chapters(book_id);
                 CREATE INDEX IF NOT EXISTS note_book ON notes(book_id);
             """)
@@ -252,6 +263,76 @@ class Store:
                 yield db
         finally:
             db.close()
+
+    @staticmethod
+    def _download_data(job):
+        # CAPTCHA IDs belong to an in-memory HTTP session; never restore stale challenges or credentials.
+        return _json({key: job[key] for key in ('name', 'start', 'end', 'total', 'completed',
+                                               'error', 'error_code', 'access') if key in job})
+
+    @staticmethod
+    def _download_row(row):
+        job = json.loads(row['data'])
+        job.update(id=row['id'], book_id=row['book_id'], status=row['status'],
+                   cancelled=bool(row['cancelled']), captcha=None)
+        if job['status'] == 'queued':
+            job.update(error='')
+            job.pop('error_code', None)
+            job.pop('access', None)
+        return job
+
+    def create_download(self, job):
+        now = time.time()
+        with self.db() as db:
+            db.execute('INSERT INTO download_jobs(id,book_id,status,cancelled,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+                       (job['id'], job['book_id'], job['status'], job['cancelled'], self._download_data(job), now, now))
+
+    def save_download(self, job):
+        with self.db() as db:
+            # UPDATE cannot resurrect a job deleted while its worker was finishing.
+            db.execute('UPDATE download_jobs SET status=?,cancelled=?,data=?,updated_at=? WHERE id=?',
+                       (job['status'], job['cancelled'], self._download_data(job), time.time(), job['id']))
+
+    def download_job(self, job_id):
+        with self.db() as db:
+            row = db.execute('SELECT * FROM download_jobs WHERE id=?', (job_id,)).fetchone()
+        if row is None:
+            raise KeyError('Không tìm thấy tác vụ.')
+        return self._download_row(row)
+
+    def download_jobs(self, offset=0, limit=50):
+        offset, limit = max(0, int(offset)), min(100, max(1, int(limit)))
+        with self.db() as db:
+            rows = db.execute('SELECT * FROM download_jobs ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?',
+                              (limit + 1, offset)).fetchall()
+        return {'jobs': [self._download_row(row) for row in rows[:limit]],
+                'next_offset': offset + limit if len(rows) > limit else None}
+
+    def active_download(self, book_id):
+        with self.db() as db:
+            row = db.execute('SELECT * FROM download_jobs WHERE book_id=? AND ' + _ACTIVE_DOWNLOAD_SQL, (book_id,)).fetchone()
+        return self._download_row(row) if row else None
+
+    def active_download_books(self):
+        with self.db() as db:
+            return {row[0] for row in db.execute('SELECT book_id FROM download_jobs WHERE ' + _ACTIVE_DOWNLOAD_SQL)}
+
+    def queued_downloads(self, exclude=(), limit=2):
+        with self.db() as db:
+            rows = db.execute("SELECT * FROM download_jobs WHERE status='queued' AND id NOT IN (" +
+                              ','.join('?' for _ in exclude) + ') ORDER BY created_at,id LIMIT ?', (*exclude, limit)).fetchall()
+        return [self._download_row(row) for row in rows]
+
+    def recover_downloads(self):
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute("UPDATE download_jobs SET status='cancelled',cancelled=1 WHERE " + _ACTIVE_DOWNLOAD_SQL +
+                       ' AND (cancelled=1 OR EXISTS(SELECT 1 FROM books b WHERE b.id=book_id AND b.trashed_at>0))')
+            db.execute("UPDATE download_jobs SET status='queued' WHERE status IN ('running','verification_required')")
+
+    def delete_download(self, job_id):
+        with self.db() as db:
+            db.execute('DELETE FROM download_jobs WHERE id=?', (job_id,))
 
     def _book(self, row):
         if row is None:
