@@ -288,17 +288,27 @@ class Store:
                        (job['id'], job['book_id'], job['status'], job['cancelled'], self._download_data(job), now, now))
 
     def save_download(self, job):
+        self.save_downloads((job,))
+
+    def save_downloads(self, jobs):
+        now = time.time()
+        values = [(job['status'], job['cancelled'], self._download_data(job), now, job['id']) for job in jobs]
         with self.db() as db:
             # UPDATE cannot resurrect a job deleted while its worker was finishing.
-            db.execute('UPDATE download_jobs SET status=?,cancelled=?,data=?,updated_at=? WHERE id=?',
-                       (job['status'], job['cancelled'], self._download_data(job), time.time(), job['id']))
+            db.executemany('UPDATE download_jobs SET status=?,cancelled=?,data=?,updated_at=? WHERE id=?', values)
 
     def download_job(self, job_id):
-        with self.db() as db:
-            row = db.execute('SELECT * FROM download_jobs WHERE id=?', (job_id,)).fetchone()
-        if row is None:
+        jobs = self.download_jobs_by_ids((job_id,))
+        if job_id not in jobs:
             raise KeyError('Không tìm thấy tác vụ.')
-        return self._download_row(row)
+        return jobs[job_id]
+
+    def download_jobs_by_ids(self, job_ids):
+        if not job_ids:
+            return {}
+        with self.db() as db:
+            rows = db.execute('SELECT * FROM download_jobs WHERE id IN (' + ','.join('?' for _ in job_ids) + ')', job_ids).fetchall()
+        return {row['id']: self._download_row(row) for row in rows}
 
     def download_jobs(self, offset=0, limit=50):
         offset, limit = max(0, int(offset)), min(100, max(1, int(limit)))

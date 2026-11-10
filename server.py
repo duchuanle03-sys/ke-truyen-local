@@ -62,6 +62,7 @@ class App:
         self.lock = threading.RLock()
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="chapter-download")
         self._download_futures = {}
+        self._download_verifications = {}
         self._download_stop = threading.Event()
         self._download_wake = threading.Event()
         self.store.recover_downloads()
@@ -88,6 +89,7 @@ class App:
         with self.lock:
             if self._download_stop.is_set():
                 return
+            self._resume_verified_downloads()
             self._download_futures = {key: future for key, future in self._download_futures.items() if not future.done()}
             slots = 2 - len(self._download_futures)
             if slots:
@@ -96,6 +98,43 @@ class App:
                     future = self.executor.submit(self._download, job)
                     self._download_futures[job['id']] = future
                     future.add_done_callback(lambda _: self._download_wake.set())
+
+    def _resume_verified_downloads(self):
+        ready = []
+        for job_id, verification in self._download_verifications.items():
+            if verification['event'].is_set():
+                ready.append((job_id, verification))
+                if len(ready) == 32:
+                    break
+        saved = self.store.download_jobs_by_ids([job_id for job_id, _ in ready if job_id not in self.jobs])
+        resolved = []
+        for job_id, verification in ready:
+            current = self.jobs.get(job_id) or saved.get(job_id)
+            if current is None:
+                del self._download_verifications[job_id]
+                continue
+            job = dict(current)
+            job['captcha'] = None
+            if not job['cancelled']:
+                if verification['verified']:
+                    job.update(status='paused' if job['status'] == 'paused' else 'queued', error='')
+                    job.pop('error_code', None)
+                    job.pop('access', None)
+                else:
+                    job.update(status='paused' if job['status'] == 'paused' else 'failed',
+                               error='Đã hủy xác minh. Các chương đã tải vẫn được giữ; có thể thử lại phần còn lại.',
+                               error_code='captcha_cancelled')
+            resolved.append(job)
+        if resolved:
+            self.store.save_downloads(resolved)
+            for job in resolved:
+                if job['id'] in self.jobs:
+                    self.jobs[job['id']].update(job)
+                else:
+                    self._cache_job(job)
+                del self._download_verifications[job['id']]
+        if len(ready) == 32:
+            self._download_wake.set()
 
     def _maintain_downloads(self):
         while not self._download_stop.is_set():
@@ -112,6 +151,9 @@ class App:
         with self.lock:
             page = self.store.download_jobs(offset)
             page['jobs'] = [dict(self.jobs.get(job['id'], job)) for job in page['jobs']]
+            for job in page['jobs']:
+                if verification := self._download_verifications.get(job['id']):
+                    job['captcha'] = verification['captcha']
             return page
 
     def _maintain_assets(self):
@@ -139,8 +181,7 @@ class App:
                 return
             self._download_stop.set()
             self._download_wake.set()
-            for job in self.jobs.values():
-                self.store.save_download(job)
+            self.store.save_downloads(self.jobs.values())
         self._download_worker.join(timeout=1)
         self._asset_stop.set()
         self._asset_worker.join(timeout=1)
@@ -334,49 +375,28 @@ class App:
                 if job['cancelled']:
                     job['status'] = 'cancelled'
                     return
-                job["status"] = "running"
+                job.update(status='running', error='', captcha=None)
+                job.pop('error_code', None)
+                job.pop('access', None)
                 self.store.save_download(job)
             for index in range(job["start"] + job['completed'], job["end"]):
-                while job["status"] == "paused" and not job["cancelled"]:
-                    if self._download_stop.wait(.2):
+                with self.lock:
+                    if self._download_stop.is_set() or job['status'] != 'running' or job['cancelled']:
                         return
-                if self._download_stop.is_set():
-                    return
-                if job["cancelled"]:
-                    job["status"] = "cancelled"
-                    return
                 book = self.store.get_book(job["book_id"])
-                while True:
-                    try:
-                        raw = self._chapter_content(book, index)
-                        break
-                    except SourceCaptchaError as error:
-                        verification = error.verification
-                        if not verification:
-                            raise
-                        with self.lock:
-                            if self._download_stop.is_set():
-                                return
-                            job.update(status='verification_required', error=str(error), captcha=error.captcha)
-                            self.store.save_download(job)
-                        while not verification['event'].wait(.2):
-                            if self._download_stop.is_set():
-                                return
-                            if job['cancelled']:
-                                job['status'] = 'cancelled'
-                                return
-                        if self._download_stop.is_set():
+                try:
+                    raw = self._chapter_content(book, index)
+                except SourceCaptchaError as error:
+                    if not error.verification:
+                        raise
+                    with self.lock:
+                        if self._download_stop.is_set() or job['cancelled']:
                             return
-                        if job['cancelled']:
-                            job['status'] = 'cancelled'
-                            return
-                        if not verification['verified']:
-                            raise SourceError('Đã hủy xác minh. Các chương đã tải vẫn được giữ; có thể thử lại phần còn lại.', code='captcha_cancelled')
-                        with self.lock:
-                            if self._download_stop.is_set():
-                                return
-                            job.update(status='running', error='', captcha=None)
-                            self.store.save_download(job)
+                        self._download_verifications[job['id']] = error.verification
+                        job.update(status='paused' if job['status'] == 'paused' else 'verification_required',
+                                   error=str(error), captcha=error.captcha)
+                    # Keep the HTTP verification context, not an occupied download thread.
+                    return
                 for url in raw["images"]:
                     if self._download_stop.is_set():
                         return
@@ -389,6 +409,8 @@ class App:
                     if job['completed'] - checkpoint_completed >= 10 or time.monotonic() - checkpoint_time >= 2:
                         self.store.save_download(job)
                         checkpoint_completed, checkpoint_time = job['completed'], time.monotonic()
+                    if job['status'] != 'running' or job['cancelled']:
+                        return
             with self.lock:
                 if not self._download_stop.is_set():
                     job["status"] = "cancelled" if job['cancelled'] else "completed"
@@ -406,10 +428,15 @@ class App:
             with self.lock:
                 # close() persisted the last snapshot; a late request must not overwrite a new server's recovery.
                 if not self._download_stop.is_set():
+                    if job['cancelled']:
+                        job.update(status='cancelled', captcha=None)
+                        self._download_verifications.pop(job['id'], None)
                     self.store.save_download(job)
 
     def _cancel_download(self, job):
         job['cancelled'] = True
+        job['captcha'] = None
+        self._download_verifications.pop(job['id'], None)
         future = self._download_futures.get(job['id'])
         if future is None or future.done():
             job['status'] = 'cancelled'
@@ -423,8 +450,9 @@ class App:
             if action == "pause" and job["status"] == "running":
                 job["status"] = "paused"
             elif action == "resume" and job["status"] == "paused":
-                future = self._download_futures.get(job_id)
-                job["status"] = "running" if future and not future.done() else 'queued'
+                verification = self._download_verifications.get(job_id)
+                job.update(status='verification_required' if verification else 'queued',
+                           captcha=verification['captcha'] if verification else None)
             elif action == "cancel":
                 self._cancel_download(job)
             elif action == "retry" and job["status"] in ("failed", "cancelled"):
@@ -433,14 +461,22 @@ class App:
                                          job["total"] - job["completed"])
                 job.update(status='completed', cancelled=False)
             elif action == "delete" and job["status"] not in ("running", "queued", "paused", "verification_required"):
-                del self.jobs[job_id]
                 self.store.delete_download(job_id)
+                del self.jobs[job_id]
+                self._download_verifications.pop(job_id, None)
                 return dict(job)
             else:
                 raise ValueError("Không thể thực hiện thao tác với trạng thái hiện tại.")
             self.store.save_download(job)
             self._schedule_downloads()
             return dict(job)
+
+    def captcha(self, source, action, challenge_id, answer=None):
+        try:
+            return self.sources.captcha(source, action, challenge_id, answer)
+        finally:
+            # Verification can resolve or expire a shared session even when the HTTP action raises.
+            self._download_wake.set()
 
     def capabilities(self):
         formats = documents.capabilities()
@@ -638,12 +674,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sources" and method == "GET":
             return self._reply(200, self.app.sources.sources())
         if path == '/api/sources/stv/captcha' and method == 'GET':
-            return self._reply(200, self.app.sources.captcha('stv', 'image', q.get('id')))
+            return self._reply(200, self.app.captcha('stv', 'image', q.get('id')))
         if len(parts) == 5 and parts[:4] == ['api', 'sources', 'stv', 'captcha'] and method == 'POST':
             if parts[4] not in ('refresh', 'verify', 'cancel'):
                 raise KeyError('Không có thao tác CAPTCHA này.')
             body = self._json()
-            return self._reply(200, self.app.sources.captcha('stv', parts[4], body.get('id'), body.get('answer')))
+            return self._reply(200, self.app.captcha('stv', parts[4], body.get('id'), body.get('answer')))
         if len(parts) == 4 and parts[:2] == ["api", "sources"]:
             source, action = parts[2:]
             if action == "search" and method == "GET":

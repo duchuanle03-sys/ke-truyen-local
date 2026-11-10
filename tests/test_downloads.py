@@ -150,7 +150,7 @@ class DownloadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.app.download('book')
         self.app.job_action(job['id'], 'resume')
-        self.futures[-1].result(timeout=3)
+        self.wait_for(lambda: self.app.store.download_job(job['id'])['status'] == 'completed')
         self.assertEqual(self.app.jobs[job['id']]['status'], 'completed')
         self.assertEqual(self.app.jobs[job['id']]['completed'], 2)
 
