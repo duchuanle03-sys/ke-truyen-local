@@ -6,7 +6,7 @@ from pathlib import Path
 import zipfile
 
 from qt import QtDictionary
-from qt_pack import PackError, decode_dictionary, install_pack
+from qt_pack import PackError, _columns, install_pack
 
 
 def dictionary_bytes(entries, trie=False):
@@ -19,19 +19,21 @@ def dictionary_bytes(entries, trie=False):
 
 
 class QtPackTests(unittest.TestCase):
-    def test_decodes_flat_and_trie_dictionaries_without_losing_meaning_variants(self):
+    def test_reads_flat_and_trie_dictionary_columns_without_losing_meaning_variants(self):
         entries = [('刘备', 'Lưu Bị'), ('苹果', 'táo¦quả táo')]
-        self.assertEqual(list(decode_dictionary('HV.dic', dictionary_bytes(entries))), entries)
-        self.assertEqual(list(decode_dictionary('VP.dic', dictionary_bytes(entries, True))), entries)
+        for filename, trie in (('HV.dic', False), ('VP.dic', True)):
+            with self.subTest(filename=filename):
+                self.assertEqual(_columns(filename, dictionary_bytes(entries, trie)),
+                                 (2, ['Lưu Bị', 'táo¦quả táo', '刘备', '苹果']))
 
     def test_rejects_corruption_and_incompatible_rule_grammar(self):
         bad = [struct.pack('>I', 9_000_000), struct.pack('>I', 2) + b'one\ntwo\nkey',
                struct.pack('>I', 1) + b'\xff\nkey']
         for data in bad:
             with self.subTest(data=data[:8]), self.assertRaises(PackError):
-                list(decode_dictionary('HV.dic', data))
+                _columns('HV.dic', data)
         with self.assertRaises(PackError):
-            list(decode_dictionary('Rule.dic', dictionary_bytes([('<n>', '{0}')])) )
+            _columns('Rule.dic', dictionary_bytes([('<n>', '{0}')]))
 
     def test_installs_real_layout_missing_only_reports_bad_rows_and_pending_groups(self):
         with tempfile.TemporaryDirectory() as folder, closing(QtDictionary(folder)) as qt:

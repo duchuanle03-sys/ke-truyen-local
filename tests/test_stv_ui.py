@@ -1,7 +1,5 @@
 """Local-only DOM regression: the CAPTCHA is a synthetic test image, never a live challenge."""
-import base64
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile

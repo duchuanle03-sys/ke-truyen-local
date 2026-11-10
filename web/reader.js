@@ -264,7 +264,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     if (vip && chapters[index]) chapters[index].is_vip = true;
     const auth = error.code === 'auth_required';
     const unverified = !vip && ['vip_locked', 'access_unverified'].includes(error.code);
-    const titles = { network_error: 'Chưa kết nối được nguồn', source_timeout: 'Nguồn phản hồi quá lâu', browser_unavailable: 'Trình duyệt nguồn chưa sẵn sàng', browser_error: 'Chưa kết nối được trình duyệt nguồn', parse_error: 'Chưa nhận diện được nội dung chương', http_error: `Nguồn trả về lỗi HTTP${error.http_status ? ` ${error.http_status}` : ''}` };
+    const titles = { network_error: 'Chưa kết nối được nguồn', source_timeout: 'Nguồn phản hồi quá lâu', parse_error: 'Chưa nhận diện được nội dung chương', http_error: `Nguồn trả về lỗi HTTP${error.http_status ? ` ${error.http_status}` : ''}` };
     const title = vip ? 'Chương VIP chưa thể đọc' : auth ? 'Cần đăng nhập tại website gốc' : unverified ? 'Chưa xác minh quyền truy cập' : titles[error.code] || 'Chưa mở được nội dung';
     const message = vip ? 'Website gốc xác nhận chương VIP và phiên truy cập hiện tại chưa có quyền đọc. Hãy mở đúng chương trên website gốc để kiểm tra quyền truy cập, rồi thử lại.' : auth ? 'Website gốc yêu cầu đăng nhập. Hãy đăng nhập tại website gốc trong cửa sổ được mở, rồi quay lại thử đọc.' : unverified ? 'Chưa xác minh được quyền đọc chương này. Hãy kiểm tra nội dung và phiên đăng nhập trên website gốc, rồi thử lại.' : error.message;
     const target = previousReading();

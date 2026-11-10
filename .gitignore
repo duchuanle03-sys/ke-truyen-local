@@ -3,9 +3,9 @@
 *
 !.gitignore
 !README.md
+!AGENTS.md
 !Start.cmd
 !documents.py
-!browser_source.py
 !htmltools.py
 !legacy_formats.py
 !library.py
@@ -21,7 +21,6 @@
 !stv_http_worker.mjs
 !/web/captcha.js
 !shortcuts.py
-!tts.py
 !/web/
 !/web/app.js
 !/web/index.html
@@ -29,9 +28,7 @@
 !/web/style.css
 !/windows/
 !/windows/pdfocr.ps1
-!/windows/tts.ps1
 !/windows/shortcut.ps1
-!/windows/browser-source.ps1
 !/tests/
 !/tests/test_*.py
 !/tests/fixtures/

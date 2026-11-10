@@ -14,7 +14,7 @@ from http.cookiejar import Cookie, CookieJar
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 
 from htmltools import html_to_text, is_public_ip, parse_html, safe_remote_url, sanitize_html
-from source_errors import SourceError, SourceAccessError
+from source_errors import SourceError
 
 
 _SOURCES = {
@@ -143,10 +143,6 @@ class _PublicFetcher:
                     continue
             return text
         raise SourceError('Nguồn yêu cầu kiểm tra trình duyệt; chưa tải được nội dung')
-
-
-def safe_fetch(url):
-    return _PublicFetcher()(url)
 
 
 def safe_fetch_bytes(url, headers=None, max_bytes=20 * 1024 * 1024):

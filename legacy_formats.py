@@ -15,7 +15,7 @@ import zipfile
 import zlib
 
 from documents import (CHAPTER, DocumentError, MAX_FILE_SIZE, MAX_MEMBER_SIZE,
-                       UnsupportedFormatError, _Archive, _chapter, _html_text,
+                       UnsupportedFormatError, _Archive, _html_text,
                        _image_url, _nodes, _sections, _tag, _text_chapters, _xml)
 
 

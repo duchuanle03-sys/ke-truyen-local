@@ -105,7 +105,7 @@ try {
     check(Math.abs(log.progress.at(-1).position - savedPosition) < .025, 'Previous position was not saved');
     button('Quay về chương trước').click(); await ready();
     check(Math.abs(ratio() - savedPosition) < .025, 'Previous chapter lost saved position');
-    for (const [index, title] of [[2, 'HTTP 403'], [3, 'HTTP 404'], [4, 'Chưa xác minh quyền truy cập'], [5, 'Cần đăng nhập tại website gốc'], [6, 'Chưa xác minh quyền truy cập'], [9, 'Chưa kết nối được nguồn'], [10, 'Chưa nhận diện được nội dung chương'], [11, 'Chưa xác minh quyền truy cập'], [12, 'Chưa nhận diện được nội dung chương'], [13, 'Nguồn phản hồi quá lâu'], [14, 'Trình duyệt nguồn chưa sẵn sàng'], [15, 'Chưa kết nối được trình duyệt nguồn']]) {
+    for (const [index, title] of [[2, 'HTTP 403'], [3, 'HTTP 404'], [4, 'Chưa xác minh quyền truy cập'], [5, 'Cần đăng nhập tại website gốc'], [6, 'Chưa xác minh quyền truy cập'], [9, 'Chưa kết nối được nguồn'], [10, 'Chưa nhận diện được nội dung chương'], [11, 'Chưa xác minh quyền truy cập'], [12, 'Chưa nhận diện được nội dung chương'], [13, 'Nguồn phản hồi quá lâu']]) {
       toc(index); await denied();
       check(!$('.vip-label'), 'Unverified or ordinary error became VIP: ' + index);
       check($('.reader-access-error h2').textContent.includes(title), 'Wrong error screen: ' + index);
@@ -162,13 +162,13 @@ class ReaderAccessTests(unittest.TestCase):
                             return self.reply({'reader': {'qt': 'qt', 'mode': 'paged' if book_id == 'direct' else 'scroll'}})
                         if path in ('/api/groups', '/api/sources'):
                             return self.reply([])
-                        book = {'id': book_id, 'name': 'Thử quyền đọc', 'source': 'file', 'chapter_index': 1 if book_id == 'direct' else 0, 'position': .37, 'chapter_count': 16}
+                        book = {'id': book_id, 'name': 'Thử quyền đọc', 'source': 'file', 'chapter_index': 1 if book_id == 'direct' else 0, 'position': .37, 'chapter_count': 14}
                         if path == '/api/books':
                             return self.reply([book])
                         if path == f'/api/books/{book_id}':
                             return self.reply(book)
                         if path.endswith('/chapters'):
-                            return self.reply([{'index': i, 'title': f'Chương {i + 1}', **({'is_vip': True} if i == 8 else {})} for i in range(16)])
+                            return self.reply([{'index': i, 'title': f'Chương {i + 1}', **({'is_vip': True} if i == 8 else {})} for i in range(14)])
                         if '/chapters/' in path:
                             index = int(path.rsplit('/', 1)[-1])
                             if index in (0, 8):
@@ -183,7 +183,7 @@ class ReaderAccessTests(unittest.TestCase):
                                 time.sleep(.4)
                             if index == 12:
                                 return self.reply('{invalid-json', content_type='application/problem+json')
-                            code = {1: 'vip_locked', 2: 'http_error', 3: 'http_error', 4: 'vip_locked', 5: 'auth_required', 6: 'access_unverified', 7: 'vip_locked', 9: 'network_error', 10: 'parse_error', 11: 'vip_locked', 13: 'source_timeout', 14: 'browser_unavailable', 15: 'browser_error'}[index]
+                            code = {1: 'vip_locked', 2: 'http_error', 3: 'http_error', 4: 'vip_locked', 5: 'auth_required', 6: 'access_unverified', 7: 'vip_locked', 9: 'network_error', 10: 'parse_error', 11: 'vip_locked', 13: 'source_timeout'}[index]
                             status = 503 if index >= 13 else 404 if index == 3 else 403
                             error = {'error': 'Lỗi thử nghiệm', 'code': code, 'http_status': status}
                             if code != 'http_error':

@@ -39,6 +39,8 @@ Bản clone mới có thư viện trống. Dùng **Nhập file**, **Nhập thư 
 
 Dữ liệu được tạo trong `user-data/`. Máy chủ chỉ lắng nghe tại địa chỉ loopback của máy đang chạy. Đọc tệp đã nhập và chương đã tải không cần Internet; tải nội dung mới và giọng TTS online cần mạng.
 
+Khi nhập từ điển ở chế độ thay thế, bản sao trước thay đổi được giữ trong `qt.sqlite3`. `backup_id` trong kết quả nhập dùng cho công cụ khôi phục thủ công `QtDictionary.restore_backup(backup_id)`; giao diện chưa có nút khôi phục này.
+
 Phiên HTTP Sáng Tác Việt và CAPTCHA chỉ nằm trong bộ nhớ, không ghi đáp án, cookie hoặc mật khẩu vào log/thư viện. Khởi động lại app tạo phiên mới và website có thể yêu cầu xác minh lại. Các thư mục `.browser-stv/` từ bản cũ không còn được dùng; vẫn nên giữ riêng tư vì có thể chứa phiên đăng nhập cũ. Chương mới cần mạng; chương đã lưu đọc được khi website không truy cập được.
 
 **Dừng máy chủ rồi sao chép nội dung `user-data/`, loại trừ thư mục `.browser-stv/`, để sao lưu** thư viện, tiến độ, tệp nhập và từ điển. Khôi phục bằng cách chép lại dữ liệu khi máy chủ đang dừng; đăng nhập lại website gốc nếu cần. Có thể chọn thư mục dữ liệu khác bằng `--data-dir`.
@@ -62,7 +64,7 @@ node --check web/captcha.js
 node --check stv_http_worker.mjs
 ```
 
-Node.js cần khi dùng Sáng Tác Việt và kiểm tra JavaScript. Kiểm thử dùng dữ liệu tạm và phản hồi HTTP tổng hợp, không sửa thư viện thật hoặc giải CAPTCHA website. Kiểm thử DOM chỉ mở giao diện cục bộ trong trình duyệt kiểm thử; không dùng trình duyệt để tải nội dung nguồn. Kiểm thử tích hợp OCR/TTS phụ thuộc Windows và các thành phần ngôn ngữ/giọng đã cài.
+Node.js cần khi dùng Sáng Tác Việt và kiểm tra JavaScript. Kiểm thử dùng dữ liệu tạm và phản hồi HTTP tổng hợp, không sửa thư viện thật hoặc giải CAPTCHA website. Kiểm thử DOM chỉ mở giao diện cục bộ trong trình duyệt kiểm thử; không dùng trình duyệt để tải nội dung nguồn. Kiểm thử tích hợp OCR phụ thuộc Windows và các thành phần ngôn ngữ đã cài.
 
 ## Giới hạn
 

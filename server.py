@@ -16,7 +16,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
-from urllib.request import Request, urlopen
 
 import documents
 import legacy_formats

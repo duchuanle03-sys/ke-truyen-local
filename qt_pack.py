@@ -64,13 +64,6 @@ def _columns(filename, data):
     return size, lines
 
 
-def decode_dictionary(filename, data):
-    """Yield the pack's original key/meaning pairs, including alternatives."""
-    size, lines = _columns(filename, data)
-    for index in range(size):
-        yield lines[size + index].removesuffix('\r'), lines[index].removesuffix('\r')
-
-
 def install_pack(dictionary, archive_path):
     """Add missing global entries atomically; retain every existing user edit."""
     path = Path(archive_path)
