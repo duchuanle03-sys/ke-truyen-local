@@ -1,8 +1,10 @@
 import hashlib
+import contextlib
 from pathlib import Path
 import stat
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -19,6 +21,7 @@ class AssetCleanupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.store = Store(self.root)
+        self.store.index_assets()
         for folder in ('files', 'images'):
             (self.root / folder).mkdir()
 
@@ -39,6 +42,13 @@ class AssetCleanupTests(unittest.TestCase):
     def purge(self, book_id):
         self.store.trash_book(book_id)
         self.store.purge_book(book_id)
+        self.collect()
+
+    def collect(self, store=None):
+        store = store or self.store
+        while not store.asset_index_ready() and store.index_assets():
+            pass
+        return store.cleanup_files()
 
     def test_soft_delete_keeps_assets_until_the_last_shared_book_is_permanently_deleted(self):
         path = self.upload()
@@ -50,9 +60,11 @@ class AssetCleanupTests(unittest.TestCase):
         self.assertTrue(path.exists())
         self.assertTrue(cover.exists())
         self.store.purge_book('first')
+        self.collect()
         self.assertEqual(path.read_bytes(), b'uploaded book')
         self.assertEqual(cover.read_bytes(), b'cached image')
         self.store.purge_book('second')
+        self.collect()
         self.assertFalse(path.exists())
         self.assertFalse(cover.exists())
 
@@ -96,6 +108,7 @@ class AssetCleanupTests(unittest.TestCase):
             self.store.trash_book('expired')
             self.store.trash_book('active')
         self.assertEqual(self.store.purge_expired(now=2_000_000_000 + TRASH_RETENTION, skip_ids={'active'}), ['expired'])
+        self.collect()
         self.assertFalse(expired.exists())
         self.assertTrue(active.exists())
 
@@ -123,16 +136,20 @@ class AssetCleanupTests(unittest.TestCase):
         self.assertTrue(orphan.exists())
         with self.assertRaises(KeyError):
             self.store.get_book('victim')
+        with self.store.db() as db:
+            db.execute("UPDATE chapters SET images='[]' WHERE book_id='keep'")
+        self.collect()
+        self.assertFalse(orphan.exists())
 
     def test_busy_asset_does_not_block_other_cleanup_and_can_be_retried(self):
         busy, free = self.upload(b'busy'), self.upload(b'free')
         self.book('victim')
-        unlink = Path.unlink
+        rename = Path.rename
         def remove(path, *args, **kwargs):
             if path == busy:
                 raise PermissionError('in use')
-            return unlink(path, *args, **kwargs)
-        with patch.object(Path, 'unlink', remove), self.assertLogs('library', level='WARNING'):
+            return rename(path, *args, **kwargs)
+        with patch.object(Path, 'rename', remove), self.assertLogs('library', level='WARNING'):
             self.purge('victim')
         self.assertTrue(busy.exists())
         self.assertFalse(free.exists())
@@ -200,6 +217,7 @@ class AssetCleanupTests(unittest.TestCase):
                 self.assertTrue(entered.wait(2))
                 app.trash_book('victim')
                 app.purge_book('victim')
+                app.store.cleanup_files()
             finally:
                 release.set()
                 worker.join(6)
@@ -270,6 +288,7 @@ class AssetCleanupTests(unittest.TestCase):
                 cache = self.image(url)
                 app.trash_book('victim')
                 app.purge_book('victim')
+                app.store.cleanup_files()
                 self.assertTrue(cache.exists())
             finally:
                 release.set()
@@ -283,6 +302,7 @@ class AssetCleanupTests(unittest.TestCase):
         old, new = 'https://cdn.example/dead.jpg', 'https://cdn.example/new.jpg'
         app.store.upsert_book({'id': 'keep', 'name': 'keep', 'source': 'hako',
                                'path': 'https://docln.sbs/truyen/1-book', 'cover': old})
+        self.collect(app.store)
         cache = app.image_dir / hashlib.sha256(new.encode()).hexdigest()
         update = app.store.update_book
         def save(book_id, changes):
@@ -294,5 +314,216 @@ class AssetCleanupTests(unittest.TestCase):
              patch.object(app.sources, 'cover', return_value={'cover': new, 'path': 'https://docln.sbs/truyen/1-book'}), \
              patch.object(app.store, 'update_book', side_effect=save):
             self.assertEqual(app.cover('keep'), (png, 'image/png'))
-        app.store.cleanup_files()
+        self.collect(app.store)
         self.assertEqual(cache.read_bytes(), png)
+
+    def test_indexed_cleanup_does_not_read_or_parse_unrelated_chapter_bodies(self):
+        self.book('keep', chapters=[{'html': '<p>Unrelated body.</p>'} for _ in range(2000)])
+        while self.store.index_assets():
+            pass
+        self.store.progress('keep', 0, .5)
+        self.assertTrue(self.store.asset_index_ready())
+        orphan = self.upload()
+        self.book('victim')
+        db_context = self.store.db
+        @contextlib.contextmanager
+        def checked_db():
+            with db_context() as db:
+                def authorize(action, table, column, *_):
+                    import sqlite3
+                    if action == sqlite3.SQLITE_READ and table == 'chapters' and column in ('html', 'original_html', 'images'):
+                        return sqlite3.SQLITE_DENY
+                    return sqlite3.SQLITE_OK
+                db.set_authorizer(authorize)
+                yield db
+        with patch.object(self.store, 'db', checked_db), patch('library.parse_html', side_effect=AssertionError('HTML must not be parsed during indexed cleanup')):
+            self.purge('victim')
+        self.assertFalse(orphan.exists())
+
+    def test_background_index_parsing_does_not_hold_sqlite_or_asset_locks(self):
+        self.book('keep', chapters=[{'html': '<p>Saved.</p>', 'text': 'Saved.'}])
+        entered, release, writable = threading.Event(), threading.Event(), threading.Event()
+        from htmltools import parse_html
+        def parse(markup):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('parser timed out')
+            return parse_html(markup)
+        def write():
+            self.store.progress('keep', 0, .25)
+            with self.store.use_asset(self.root / 'files' / ('c' * 64 + '.epub')):
+                writable.set()
+        with patch('library.parse_html', side_effect=parse):
+            indexer = threading.Thread(target=self.store.index_assets)
+            indexer.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                writer = threading.Thread(target=write)
+                writer.start()
+                self.assertTrue(writable.wait(1), 'Parsing blocked progress or asset registration')
+            finally:
+                release.set()
+                indexer.join(6)
+                if 'writer' in locals():
+                    writer.join(6)
+
+    def test_slow_file_unlink_does_not_block_writes_or_asset_registration(self):
+        self.book('keep', chapters=[{'text': 'Saved.'}])
+        orphan = self.upload()
+        entered, release, writable = threading.Event(), threading.Event(), threading.Event()
+        unlink = Path.unlink
+        def slow(path, *args, **kwargs):
+            if path.suffix == '.gc':
+                entered.set()
+                if not release.wait(5):
+                    raise RuntimeError('unlink timed out')
+            return unlink(path, *args, **kwargs)
+        def write():
+            self.store.progress('keep', 0, .3)
+            with self.store.use_asset(self.root / 'files' / ('c' * 64 + '.epub')):
+                writable.set()
+        with patch.object(Path, 'unlink', slow):
+            collector = threading.Thread(target=self.store.cleanup_files)
+            collector.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                writer = threading.Thread(target=write)
+                writer.start()
+                self.assertTrue(writable.wait(1), 'File unlink held the database or asset lock')
+            finally:
+                release.set()
+                collector.join(6)
+                if 'writer' in locals():
+                    writer.join(6)
+        self.assertFalse(orphan.exists())
+        self.assertEqual(list((self.root / 'files').iterdir()), [])
+
+    def test_content_changed_during_indexing_cannot_install_stale_references(self):
+        old = self.image('https://cdn.example/old.jpg')
+        new = self.image('https://cdn.example/new.jpg')
+        self.book('keep', chapters=[{'html': '<p><img src="https://cdn.example/old.jpg"></p>'}])
+        from htmltools import parse_html
+        changed = False
+        def parse(markup):
+            nonlocal changed
+            if not changed:
+                changed = True
+                self.store.save_content('keep', 0, {'html': '<p><img src="https://cdn.example/new.jpg"></p>'})
+            return parse_html(markup)
+        with patch('library.parse_html', side_effect=parse):
+            self.collect()
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+
+    def test_legacy_index_migration_is_incremental_safe_and_persistent(self):
+        cache = self.image('https://cdn.example/keep.jpg')
+        orphan = self.upload()
+        self.book('keep', chapters=[{'html': '<p><img src="https://cdn.example/keep.jpg"></p>'}])
+        with self.store.db() as db:
+            names = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'asset_%'")]
+            for name in names:
+                db.execute('DROP TRIGGER "' + name + '"')
+            db.execute('DROP TABLE asset_pending')
+            db.execute('DROP TABLE asset_refs')
+        upgraded = Store(self.root)
+        self.assertFalse(upgraded.asset_index_ready())
+        with self.assertLogs('library', level='WARNING'):
+            self.assertFalse(upgraded.cleanup_files())
+        self.assertTrue(cache.exists() and orphan.exists())
+        while upgraded.index_assets(limit=1):
+            pass
+        self.assertTrue(upgraded.asset_index_ready())
+        with patch('library.parse_html', side_effect=AssertionError('Index must survive restart')):
+            reopened = Store(self.root)
+            self.assertTrue(reopened.cleanup_files())
+        self.assertTrue(cache.exists())
+        self.assertFalse(orphan.exists())
+
+    def test_app_delete_returns_while_legacy_index_is_building_then_collects_in_background(self):
+        self.book('keep', chapters=[{'html': '<p>Saved.</p>', 'text': 'Saved.'}])
+        self.book('victim')
+        orphan = self.upload()
+        entered, release = threading.Event(), threading.Event()
+        from htmltools import parse_html
+        def parse(markup):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('parser timed out')
+            return parse_html(markup)
+        with patch('library.parse_html', side_effect=parse):
+            app = App(self.root)
+            self.addCleanup(app.close)
+            try:
+                self.assertTrue(entered.wait(2))
+                app.trash_book('victim')
+                self.assertTrue(app.purge_book('victim')['deleted'])
+                self.assertTrue(orphan.exists(), 'Collection started before migration was complete')
+                app.store.progress('keep', 0, .2)
+            finally:
+                release.set()
+            deadline = time.monotonic() + 4
+            while orphan.exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+        self.assertFalse(orphan.exists())
+
+    def test_malformed_cover_does_not_rollback_readable_book_import(self):
+        with self.assertLogs('library', level='WARNING'):
+            self.book('keep', cover='http://[', chapters=[{'text': 'Readable text.'}])
+        self.assertEqual(self.store.content('keep', 0)['text'], 'Readable text.')
+        self.assertFalse(self.store.asset_index_ready())
+        self.store.update_book('keep', {'cover': 'https://cdn.example/fixed.jpg'})
+        self.collect()
+        self.assertTrue(self.store.asset_index_ready())
+
+    def test_shutdown_is_bounded_and_cancels_remaining_index_owners(self):
+        self.book('keep', chapters=[{'html': '<p>Saved.</p>'} for _ in range(32)])
+        entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+        from htmltools import parse_html
+        calls = []
+        def parse(markup):
+            calls.append(markup)
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('parser timed out')
+            return parse_html(markup)
+        with patch('library.parse_html', side_effect=parse):
+            app = App(self.root)
+            def close():
+                app.close()
+                closed.set()
+            try:
+                self.assertTrue(entered.wait(2))
+                closer = threading.Thread(target=close)
+                closer.start()
+                self.assertTrue(closed.wait(1.5), 'Shutdown waited for a blocked maintenance operation')
+            finally:
+                release.set()
+                app._asset_worker.join(6)
+                if 'closer' in locals():
+                    closer.join(6)
+                else:
+                    app.close()
+        self.assertEqual(len(calls), 1)
+
+    def test_restart_resumes_cleanup_requested_before_process_exit(self):
+        orphan = self.upload()
+        self.book('victim')
+        self.store.trash_book('victim')
+        self.store.purge_book('victim')
+        self.assertTrue(orphan.exists())
+        app = App(self.root)
+        self.addCleanup(app.close)
+        deadline = time.monotonic() + 3
+        while orphan.exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+        self.assertFalse(orphan.exists())
+
+    def test_finishing_one_sweep_does_not_erase_a_new_cleanup_request(self):
+        self.book('victim')
+        self.store.trash_book('victim')
+        self.store.purge_book('victim')
+        generation = self.store.pending_cleanup()
+        self.store.request_cleanup()
+        self.store.complete_cleanup(generation)
+        reopened = Store(self.root)
+        self.assertGreater(reopened.pending_cleanup(), generation)

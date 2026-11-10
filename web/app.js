@@ -365,7 +365,7 @@ function confirmPurge(book) {
     event.currentTarget.disabled = true; error.hidden = true;
     try {
       await api(`/api/books/${encodeURIComponent(book.id)}`, undefined, { method: 'DELETE' });
-      if ($('dialog').open && showDialog.token === token) await openTrash(); notify('Đã xóa vĩnh viễn truyện khỏi thư viện ứng dụng.');
+      if ($('dialog').open && showDialog.token === token) await openTrash(); notify('Đã xóa truyện. Tệp không còn dùng sẽ được dọn nền sau khi kiểm tra tham chiếu.');
     } catch (problem) { error.textContent = problem.message; error.hidden = false; event.target.disabled = false; }
   } }));
 }

@@ -38,6 +38,38 @@ def _groups(value):
 def _chapter_key(url):
     return urlsplit(url or "").path.rstrip("/").removesuffix(".html")
 
+
+def _asset_references(row):
+    references = set()
+    def image(value):
+        if not isinstance(value, str):
+            raise ValueError('Invalid image reference')
+        if not value or value.startswith('data:'):
+            return
+        parsed = urlsplit(value)
+        urls = (parse_qs(parsed.query).get('url', []) if parsed.path == '/api/image' and
+                (not parsed.netloc or parsed.hostname in ('127.0.0.1', 'localhost', '::1')) else [value])
+        for url in urls:
+            checked = safe_remote_url(url, row['path'])
+            if checked:
+                references.add(('images', hashlib.sha256(checked.encode()).hexdigest()))
+    if row['idx'] == -1:
+        name = row['path'].replace('\\', '/').rsplit('/', 1)[-1].lower()
+        if re.fullmatch(r'[0-9a-f]{64}\.[a-z0-9]+', name):
+            references.add(('files', name))
+        image(row['cover'])
+    else:
+        values = json.loads(row['images'])
+        if not isinstance(values, list):
+            raise ValueError('Invalid chapter images')
+        for value in values:
+            image(value)
+        for markup in (row['html'], row['original_html']):
+            if markup:
+                for node in parse_html(markup).select('img'):
+                    image(node.get('data-original') or node.get('data-src') or node.get('src'))
+    return references
+
 class Store:
     def __init__(self, data_dir):
         self.data_dir = Path(data_dir).resolve()
@@ -83,6 +115,122 @@ class Store:
             """)
             if 'trashed_at' not in {row[1] for row in db.execute('PRAGMA table_info(books)')}:
                 db.execute('ALTER TABLE books ADD COLUMN trashed_at REAL NOT NULL DEFAULT 0')
+        self._init_asset_index()
+
+    def _init_asset_index(self):
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            first = not db.execute("SELECT 1 FROM sqlite_master WHERE name='asset_refs'").fetchone()
+            for sql in (
+                'CREATE TABLE IF NOT EXISTS asset_refs (book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, idx INTEGER NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY(book_id,idx,kind,name))',
+                'CREATE INDEX IF NOT EXISTS asset_lookup ON asset_refs(kind,name)',
+                'CREATE TABLE IF NOT EXISTS asset_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, idx INTEGER NOT NULL, blocked INTEGER NOT NULL DEFAULT 0, UNIQUE(book_id,idx))',
+                'CREATE INDEX IF NOT EXISTS asset_pending_work ON asset_pending(blocked,id)',
+                "CREATE TABLE IF NOT EXISTS asset_index_state (id INTEGER PRIMARY KEY CHECK(id=1), book_id TEXT NOT NULL DEFAULT '', idx INTEGER NOT NULL DEFAULT -1, complete INTEGER NOT NULL DEFAULT 0, cleanup_requested INTEGER NOT NULL DEFAULT 0, cleanup_completed INTEGER NOT NULL DEFAULT 0)",
+                "CREATE TRIGGER IF NOT EXISTS asset_book_insert AFTER INSERT ON books BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) VALUES(NEW.id,-1); END",
+                "CREATE TRIGGER IF NOT EXISTS asset_book_update AFTER UPDATE OF path,cover ON books WHEN NEW.path IS NOT OLD.path OR NEW.cover IS NOT OLD.cover BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) VALUES(NEW.id,-1); END",
+                'CREATE TRIGGER IF NOT EXISTS asset_book_delete AFTER DELETE ON books BEGIN UPDATE asset_index_state SET cleanup_requested=cleanup_requested+1 WHERE id=1; END',
+                "CREATE TRIGGER IF NOT EXISTS asset_book_path AFTER UPDATE OF path ON books WHEN NEW.path IS NOT OLD.path BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) SELECT book_id,idx FROM chapters WHERE book_id=NEW.id; END",
+                "CREATE TRIGGER IF NOT EXISTS asset_chapter_insert AFTER INSERT ON chapters WHEN NEW.html!='' OR NEW.original_html IS NOT NULL OR NEW.images!='[]' BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx); END",
+                "CREATE TRIGGER IF NOT EXISTS asset_chapter_update AFTER UPDATE OF html,original_html,images ON chapters WHEN NEW.html IS NOT OLD.html OR NEW.original_html IS NOT OLD.original_html OR NEW.images IS NOT OLD.images BEGIN INSERT OR REPLACE INTO asset_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx); END",
+                'CREATE TRIGGER IF NOT EXISTS asset_chapter_delete AFTER DELETE ON chapters BEGIN DELETE FROM asset_refs WHERE book_id=OLD.book_id AND idx=OLD.idx; DELETE FROM asset_pending WHERE book_id=OLD.book_id AND idx=OLD.idx; END',
+            ):
+                db.execute(sql)
+            if first:
+                db.execute('INSERT OR IGNORE INTO asset_pending(book_id,idx) SELECT id,-1 FROM books')
+                db.execute('INSERT OR REPLACE INTO asset_index_state(id) VALUES(1)')
+
+    @staticmethod
+    def _save_asset_refs(db, book_id, index, references):
+        db.execute('DELETE FROM asset_refs WHERE book_id=? AND idx=?', (book_id, index))
+        db.executemany('INSERT INTO asset_refs(book_id,idx,kind,name) VALUES(?,?,?,?)',
+                       ((book_id, index, kind, name) for kind, name in references))
+
+    def _index_book_assets(self, db, book_id):
+        row = db.execute('SELECT path,cover,-1 AS idx FROM books WHERE id=?', (book_id,)).fetchone()
+        try:
+            references = _asset_references(row)
+        except (ValueError, TypeError, RecursionError):
+            db.execute('UPDATE asset_pending SET blocked=1 WHERE book_id=? AND idx=-1', (book_id,))
+            logging.getLogger(__name__).warning('Cannot index book asset references for %s', book_id, exc_info=True)
+            return
+        self._save_asset_refs(db, book_id, -1, references)
+        db.execute('DELETE FROM asset_pending WHERE book_id=? AND idx=-1', (book_id,))
+
+    def index_assets(self, limit=32, stop=None):
+        if stop is not None and stop.is_set():
+            return 0
+        seeded = 0
+        with self.db() as db:
+            state = db.execute('SELECT * FROM asset_index_state WHERE id=1').fetchone()
+        if not state['complete']:
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                state = db.execute('SELECT * FROM asset_index_state WHERE id=1').fetchone()
+                if not state['complete']:
+                    # The primary-key cursor visits legacy owners in bounded batches without reading HTML.
+                    owners = db.execute('SELECT book_id,idx FROM chapters WHERE (book_id,idx)>(?,?) ORDER BY book_id,idx LIMIT ?',
+                                        (state['book_id'], state['idx'], limit)).fetchall()
+                    db.executemany('INSERT OR IGNORE INTO asset_pending(book_id,idx) VALUES(?,?)',
+                                   ((row['book_id'], row['idx']) for row in owners))
+                    if owners:
+                        db.execute('UPDATE asset_index_state SET book_id=?,idx=? WHERE id=1',
+                                   (owners[-1]['book_id'], owners[-1]['idx']))
+                    if len(owners) < limit:
+                        db.execute('UPDATE asset_index_state SET complete=1 WHERE id=1')
+                    seeded = len(owners)
+        with self.db() as db:
+            owners = db.execute('SELECT id AS token,book_id,idx FROM asset_pending '
+                                'WHERE blocked=0 ORDER BY id LIMIT ?', (limit,)).fetchall()
+        indexed = []
+        with self.db() as read_db:
+            for owner in owners:
+                if stop is not None and stop.is_set():
+                    break
+                # Autocommit reads; close the cursor before parsing, retaining just one body.
+                cursor = read_db.execute("SELECT p.idx,b.path,CASE WHEN p.idx=-1 THEN b.cover ELSE '' END AS cover,c.html,c.original_html,c.images "
+                    'FROM asset_pending p JOIN books b ON b.id=p.book_id LEFT JOIN chapters c ON c.book_id=p.book_id AND c.idx=p.idx '
+                    'WHERE p.id=?', (owner['token'],))
+                row = cursor.fetchone()
+                cursor.close()
+                if row is None:
+                    continue
+                try:
+                    references = _asset_references(row)
+                except (ValueError, TypeError, RecursionError):
+                    references = None
+                    logging.getLogger(__name__).warning('Cannot index asset references for book %s chapter %s', owner['book_id'], owner['idx'], exc_info=True)
+                indexed.append((owner, references))
+        if stop is not None and stop.is_set():
+            return 0
+        if indexed:
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                for row, references in indexed:
+                    if references is None:
+                        db.execute('UPDATE asset_pending SET blocked=1 WHERE id=?', (row['token'],))
+                    # A replaced token means the content changed while it was being parsed.
+                    elif db.execute('DELETE FROM asset_pending WHERE id=?', (row['token'],)).rowcount:
+                        self._save_asset_refs(db, row['book_id'], row['idx'], references)
+        return len(owners) + seeded
+
+    def asset_index_ready(self):
+        with self.db() as db:
+            return (bool(db.execute('SELECT complete FROM asset_index_state WHERE id=1').fetchone()[0])
+                    and not db.execute('SELECT 1 FROM asset_pending LIMIT 1').fetchone())
+
+    def request_cleanup(self):
+        with self.db() as db:
+            db.execute('UPDATE asset_index_state SET cleanup_requested=cleanup_requested+1 WHERE id=1')
+
+    def pending_cleanup(self):
+        with self.db() as db:
+            row = db.execute('SELECT cleanup_requested,cleanup_completed FROM asset_index_state WHERE id=1').fetchone()
+            return row['cleanup_requested'] if row['cleanup_requested'] > row['cleanup_completed'] else 0
+
+    def complete_cleanup(self, generation):
+        with self.db() as db:
+            db.execute('UPDATE asset_index_state SET cleanup_completed=MAX(cleanup_completed,?) WHERE id=1', (generation,))
 
     @contextlib.contextmanager
     def db(self):
@@ -176,6 +324,7 @@ class Store:
               max(0, int(book.get("chapter_index", book.get("last_index", 0)) or 0)),
               min(1, position), _json(_groups(book.get("groups", book.get("book_folder")))),
               now, now, float(book.get('read_at', 0) or 0), count, _json(book)))
+        self._index_book_assets(db, book_id)
         if chapters is not None:
             for index, chapter in enumerate(chapters):
                 title = str(chapter.get("title", chapter.get("name", "")) or "Chương " + str(index + 1))
@@ -292,6 +441,8 @@ class Store:
             with self.db() as db:
                 db.execute("UPDATE books SET " + ",".join(k + "=?" for k in allowed) + " WHERE id=?",
                            (*allowed.values(), book_id))
+                if 'cover' in allowed:
+                    self._index_book_assets(db, book_id)
         return self.get_book(book_id)
 
     def groups(self):
@@ -331,7 +482,6 @@ class Store:
             if not row['trashed_at']:
                 raise ValueError('Chỉ xóa vĩnh viễn truyện đã nằm trong thùng rác.')
             self._purge(db, book_id)
-        self.cleanup_files()
 
     def purge_expired(self, now=None, skip_ids=()):
         cutoff = (time.time() if now is None else now) - TRASH_RETENTION
@@ -342,8 +492,6 @@ class Store:
                    if row['id'] not in skipped]
             for book_id in ids:
                 self._purge(db, book_id)
-        if ids:
-            self.cleanup_files()
         return ids
 
     @contextlib.contextmanager
@@ -359,73 +507,73 @@ class Store:
                 if not self._active_assets[path]:
                     del self._active_assets[path]
 
-    def cleanup_files(self):
-        # Purge commits first; a separate write lock keeps references stable during collection.
+    def cleanup_file(self, path):
+        path = Path(path)
+        kind = path.parent.name
+        patterns = {'files': r'[0-9a-f]{64}\.[a-z0-9]+',
+                    'images': r'[0-9a-f]{64}(?:\.[0-9a-f]{32}\.tmp)?'}
+        if kind not in patterns or path.parent != self.data_dir / kind:
+            return True
+        match = re.fullmatch('(' + patterns[kind] + r')(\.[0-9a-f]{32}\.gc)?', path.name)
+        if not match:
+            return True
+        asset = path.parent / (match[1][:64] if kind == 'images' else match[1])
         try:
-            with self._asset_lock, self.db() as db:
+            with self.db() as db:
+                # Wait for a writer without holding the asset-registration lock.
                 db.execute('BEGIN IMMEDIATE')
-                files, images = set(), set()
+                with self._asset_lock:
+                    if (not db.execute('SELECT complete FROM asset_index_state WHERE id=1').fetchone()[0]
+                            or db.execute('SELECT 1 FROM asset_pending LIMIT 1').fetchone()):
+                        return False
+                    if asset in self._active_assets or db.execute(
+                            'SELECT 1 FROM asset_refs WHERE kind=? AND name=? LIMIT 1', (kind, path.name)).fetchone():
+                        return True
+                    directory = path.parent
+                    folder = directory.lstat()
+                    info = path.lstat()
+                    if (not stat.S_ISDIR(folder.st_mode) or getattr(folder, 'st_file_attributes', 0) & 0x400
+                            or directory.resolve() != directory or not stat.S_ISREG(info.st_mode)
+                            or getattr(info, 'st_file_attributes', 0) & 0x400 or path.resolve().parent != directory):
+                        return True
+                    staged = path if match[2] else path.with_name(path.name + '.' + uuid.uuid4().hex + '.gc')
+                    if staged != path:
+                        path.rename(staged)
+            # Unlinking can be slow on Windows; no database or asset lock is held here.
+            staged.unlink()
+        except FileNotFoundError:
+            pass
+        except (OSError, RuntimeError):
+            logging.getLogger(__name__).warning('Cannot remove unused asset %s', path, exc_info=True)
+        except sqlite3.Error:
+            logging.getLogger(__name__).warning('Skipping file cleanup: cannot verify asset index', exc_info=True)
+            return False
+        return True
 
-                def image_reference(value, base):
-                    if not isinstance(value, str):
-                        raise ValueError('Invalid image reference')
-                    if not value or value.startswith('data:'):
-                        return
-                    parsed = urlsplit(value)
-                    urls = (parse_qs(parsed.query).get('url', []) if parsed.path == '/api/image' and
-                            (not parsed.netloc or parsed.hostname in ('127.0.0.1', 'localhost', '::1')) else [value])
-                    for url in urls:
-                        checked = safe_remote_url(url, base)
-                        if checked:
-                            images.add(hashlib.sha256(checked.encode()).hexdigest())
-
-                for row in db.execute('SELECT path,cover FROM books'):
-                    files.add(row['path'].replace('\\', '/').rsplit('/', 1)[-1].lower())
-                    image_reference(row['cover'], row['path'])
-                for row in db.execute('SELECT c.html,c.original_html,c.images,b.path FROM chapters c JOIN books b ON b.id=c.book_id'):
-                    values = json.loads(row['images'])
-                    if not isinstance(values, list):
-                        raise ValueError('Invalid chapter images')
-                    for value in values:
-                        image_reference(value, row['path'])
-                    for markup in (row['html'], row['original_html']):
-                        if markup:
-                            for node in parse_html(markup).select('img'):
-                                image_reference(node.get('data-original') or node.get('data-src') or node.get('src'), row['path'])
-
-                for name, pattern, referenced in (
-                        ('files', r'[0-9a-f]{64}\.[a-z0-9]+', files),
-                        ('images', r'([0-9a-f]{64})(\.[0-9a-f]{32}\.tmp)?', images)):
-                    directory = self.data_dir / name
-                    try:
-                        info = directory.lstat()
-                        if (not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400
-                                or directory.resolve() != directory):
-                            continue
-                        paths = list(directory.iterdir())
-                    except FileNotFoundError:
-                        continue
-                    except (OSError, RuntimeError):
-                        logging.getLogger(__name__).warning('Cannot inspect asset directory %s', directory, exc_info=True)
-                        continue
-                    for path in paths:
-                        match = re.fullmatch(pattern, path.name)
-                        if not match:
-                            continue
-                        asset = directory / (match[1] if name == 'images' else path.name)
-                        if asset in self._active_assets or (path.name in referenced):
-                            continue
-                        try:
-                            info = path.lstat()
-                            if (stat.S_ISREG(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & 0x400
-                                    and path.resolve().parent == directory):
-                                path.unlink()
-                        except FileNotFoundError:
-                            pass
-                        except (OSError, RuntimeError):
-                            logging.getLogger(__name__).warning('Cannot remove unused asset %s', path, exc_info=True)
-        except (sqlite3.Error, ValueError, TypeError, RecursionError):
-            logging.getLogger(__name__).warning('Skipping file cleanup: cannot verify library references', exc_info=True)
+    def cleanup_files(self, stop=None):
+        if stop is not None and stop.is_set():
+            return False
+        if not self.asset_index_ready():
+            logging.getLogger(__name__).warning('Skipping file cleanup: asset references are not indexed yet')
+            return False
+        for name in ('files', 'images'):
+            directory = self.data_dir / name
+            try:
+                info = directory.lstat()
+                if (not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400
+                        or directory.resolve() != directory):
+                    continue
+                # Directory enumeration and all potentially slow I/O stay outside the locks.
+                for path in directory.iterdir():
+                    if stop is not None and stop.is_set():
+                        return False
+                    if not self.cleanup_file(path):
+                        return False
+            except FileNotFoundError:
+                continue
+            except (OSError, RuntimeError):
+                logging.getLogger(__name__).warning('Cannot inspect asset directory %s', directory, exc_info=True)
+        return True
 
     def settings(self, values=None):
         with self.db() as db:

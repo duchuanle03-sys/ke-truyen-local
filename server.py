@@ -61,10 +61,30 @@ class App:
         self.jobs = {}
         self.lock = threading.RLock()
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="chapter-download")
+        self._asset_stop = threading.Event()
         self._next_trash_cleanup = 0
         self.cleanup_trash()
+        self._asset_worker = threading.Thread(target=self._maintain_assets, name='asset-maintenance', daemon=True)
+        self._asset_worker.start()
+
+    def _maintain_assets(self):
+        while not self._asset_stop.is_set():
+            try:
+                if self.store.index_assets(stop=self._asset_stop):
+                    continue
+                if self._asset_stop.is_set():
+                    break
+                generation = self.store.pending_cleanup()
+                if generation and self.store.asset_index_ready():
+                    if self.store.cleanup_files(self._asset_stop):
+                        self.store.complete_cleanup(generation)
+            except Exception:
+                logging.exception('Cannot maintain asset index; will retry.')
+            self._asset_stop.wait(.25)
 
     def close(self):
+        self._asset_stop.set()
+        self._asset_worker.join(timeout=1)
         for job in self.jobs.values():
             job["cancelled"] = True
         self.executor.shutdown(wait=False, cancel_futures=True)
@@ -130,7 +150,8 @@ class App:
         except Exception:
             # Another import may already be using or have saved the same content-addressed file.
             if created:
-                self.store.cleanup_files()
+                if not self.store.cleanup_file(path):
+                    self.store.request_cleanup()
             raise
 
     def trash_book(self, book_id):
