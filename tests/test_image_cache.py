@@ -1,3 +1,4 @@
+from test_server import read_image
 import hashlib
 import json
 from pathlib import Path
@@ -40,7 +41,7 @@ class ImageCacheTests(unittest.TestCase):
 
     def cache(self, url, at, offline_owner=None):
         with patch('server.safe_fetch_bytes', return_value=PNG), patch('library.time.time', return_value=at):
-            return self.app.image(url, offline_owner=offline_owner)
+            return read_image(self.app, url, offline_owner=offline_owner)
 
     def collect(self):
         self.index()
@@ -158,7 +159,7 @@ class ImageCacheTests(unittest.TestCase):
         errors = []
         def download():
             try:
-                self.app.image(URLS[0], offline_owner=('offline', 0))
+                read_image(self.app, URLS[0], offline_owner=('offline', 0))
             except Exception as error:
                 errors.append(error)
         with patch.object(Path, 'unlink', blocked_unlink), patch('server.safe_fetch_bytes', side_effect=blocked_fetch):
@@ -205,7 +206,7 @@ class ImageCacheTests(unittest.TestCase):
         with patch('server.safe_fetch_bytes', side_effect=AssertionError('Network used for an offline image')):
             self.assertEqual(self.app.chapter('download', 0)['text'], 'Edited')
             for url in URLS[:2]:
-                self.assertEqual(self.app.image(url), (PNG, 'image/png'))
+                self.assertEqual(read_image(self.app, url), (PNG, 'image/png'))
         self.assertEqual(self.app.store.image_cache_stats()['protected_bytes'], 2 * len(PNG))
 
     def test_imported_file_images_are_offline_even_when_transient_cache_is_disabled(self):
@@ -278,7 +279,7 @@ class ImageCacheTests(unittest.TestCase):
         errors = []
         def load(url):
             try:
-                self.app.image(url)
+                read_image(self.app, url)
             except Exception as error:
                 errors.append(error)
         with patch('server.safe_fetch_bytes', side_effect=fetch):

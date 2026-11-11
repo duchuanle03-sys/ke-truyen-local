@@ -1,5 +1,8 @@
 """Loopback-only application API; original exports are never served as files."""
 import base64
+from contextlib import contextmanager, ExitStack
+from datetime import timezone
+from email.utils import formatdate, parsedate_to_datetime
 import hashlib
 import html
 import json
@@ -282,21 +285,26 @@ class App:
             removed = set(self.store.purge_expired(skip_ids=active))
             self.jobs = {key: job for key, job in self.jobs.items() if job['book_id'] not in removed}
 
-    def image(self, url, referer="", offline_owner=None):
+    @contextmanager
+    def open_image(self, url, referer="", offline_owner=None):
         url = validate_public_url(url, resolve=False)
         key = hashlib.sha256(url.encode()).hexdigest()
         path = self.image_dir / key
         with self.store.use_asset(path):
             if path.exists():
-                body = path.read_bytes()
-                self.store.touch_image(path, len(body))
-                if offline_owner is not None:
-                    self.store.pin_image(path, *offline_owner)
+                with path.open('rb') as image:
+                    kind = image_type(image.read(12))
+                    image.seek(0)
+                    self.store.touch_image(path, os.fstat(image.fileno()).st_size)
+                    if offline_owner is not None:
+                        self.store.pin_image(path, *offline_owner)
+                    yield image, kind
             else:
                 if offline_owner is not None:
                     self.store.pin_image(path, *offline_owner)
                 if referer:
                     referer = validate_public_url(referer, resolve=False)
+                # shortcut: network misses buffer up to 20 MiB; stream upstream if uncached concurrency becomes a bottleneck.
                 try:
                     body = safe_fetch_bytes(url, headers={"Referer": referer, "Accept": "image/*"})
                 except SourceError as error:
@@ -324,23 +332,28 @@ class App:
                     if offline_owner is not None:
                         raise
                     logging.warning('Image could not be cached; serving the fetched response.', exc_info=True)
-        return body, image_type(body)
+                yield body, content_type
 
     def cover(self, book_id):
+        with self.open_cover(book_id) as (value, kind):
+            return (value.read() if hasattr(value, 'read') else value), kind
+
+    @contextmanager
+    def open_cover(self, book_id):
         book = self.store.get_book(book_id)
-        try:
-            return self.image(book['cover'], book['path'])
-        except ValueError as original:
-            # Mobile exports retain old CDN URLs; refresh only the cover, never the reading state or TOC.
+        with ExitStack() as stack:
             try:
-                metadata = self.sources.cover(book['source'], book['path'])
-                url = validate_public_url(metadata['cover'], resolve=False)
-                with self.store.use_asset(self.image_dir / hashlib.sha256(url.encode()).hexdigest()):
-                    body = self.image(url, metadata['path'])
+                image = stack.enter_context(self.open_image(book['cover'], book['path']))
+            except ValueError as original:
+                # Recover only acquisition failures; consumer errors after yielding must never retry a response.
+                try:
+                    metadata = self.sources.cover(book['source'], book['path'])
+                    url = validate_public_url(metadata['cover'], resolve=False)
+                    image = stack.enter_context(self.open_image(url, metadata['path']))
                     self.store.update_book(book_id, {'cover': metadata['cover']})
-            except ValueError as error:
-                raise ValueError('Không tải được bìa cũ hoặc bìa trên trang nguồn: ' + str(error)) from original
-            return body
+                except ValueError as error:
+                    raise ValueError('Không tải được bìa cũ hoặc bìa trên trang nguồn: ' + str(error)) from original
+            yield image
 
     def shortcut(self, book_id, port):
         from shortcuts import create_shortcut
@@ -418,7 +431,8 @@ class App:
                 for url in image_urls(raw["images"], (raw['html'], raw.get('original_html')), book['path']):
                     if self._download_stop.is_set():
                         return
-                    self.image(url, book["path"], offline_owner=(book['id'], index))
+                    with self.open_image(url, book["path"], offline_owner=(book['id'], index)):
+                        pass
                 with self.lock:
                     if self._download_stop.is_set():
                         return
@@ -569,10 +583,27 @@ class Handler(BaseHTTPRequestHandler):
             raise PermissionError("Từ chối yêu cầu ngoài ứng dụng.")
 
     def _reply(self, status, value, content_type="application/json; charset=utf-8", extra=None):
+        if getattr(self, '_response_started', False):
+            self.close_connection = True
+            return
         body = json.dumps(public_content(value), ensure_ascii=False, allow_nan=False).encode() if content_type.startswith("application/json") else value
+        stream = hasattr(body, 'read')
+        info = os.fstat(body.fileno()) if stream else None
+        length = info.st_size if stream else len(body)
+        extra = dict(extra or {})
+        if status == 200 and (stream or content_type.startswith('image/')):
+            identity = f'{body.name}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}:{info.st_ctime_ns}'.encode() if stream else body
+            etag = ('W/' if stream else '') + '"' + hashlib.sha256(identity).hexdigest() + '"'
+            extra.update({'ETag': etag, 'Cache-Control': 'private, max-age=60, must-revalidate'})
+            if info is not None:
+                extra['Last-Modified'] = formatdate(info.st_mtime, usegmt=True)
+            if self.command in ('GET', 'HEAD') and self._not_modified(etag, info.st_mtime if info else None):
+                status = 304
+        self._response_started = True
         self.send_response(status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
+        if status != 304:
+            self.send_header("Content-Length", str(length))
         if status >= 400:
             self.close_connection = True
             self.send_header("Connection", "close")
@@ -583,12 +614,37 @@ class Handler(BaseHTTPRequestHandler):
                          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
                          "img-src 'self' https: http: data:; media-src 'self' blob: data:; "
                          "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-        self.send_header("Cache-Control", "no-store" if content_type.startswith("application/json") else "private, max-age=60")
+        self.send_header("Cache-Control", extra.pop('Cache-Control', "no-store" if content_type.startswith("application/json") else "private, max-age=60"))
         for key, value in (extra or {}).items():
             self.send_header(key, value)
         self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
+        if self.command != "HEAD" and status != 304:
+            if stream:
+                remaining = length
+                while remaining:
+                    chunk = body.read(min(65536, remaining))
+                    if not chunk:
+                        self.close_connection = True
+                        return
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            else:
+                self.wfile.write(body)
+
+    def _not_modified(self, etag, modified):
+        matching = self.headers.get('If-None-Match')
+        if matching is not None:
+            return matching.strip() == '*' or etag.removeprefix('W/') in re.findall(r'(?:W/)?("[^"]*")', matching)
+        since = self.headers.get('If-Modified-Since')
+        if modified is not None and since:
+            try:
+                date = parsedate_to_datetime(since)
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=timezone.utc)
+                return int(modified) <= int(date.timestamp())
+            except (ValueError, TypeError, OverflowError, OSError):
+                pass
+        return False
 
     def _body(self):
         if self.headers.get("Transfer-Encoding"):
@@ -627,9 +683,11 @@ class Handler(BaseHTTPRequestHandler):
         self._dispatch()
 
     def do_OPTIONS(self):
+        self._response_started = False
         self._reply(403, {"error": "Không cho phép truy cập API từ website khác."})
 
     def _dispatch(self):
+        self._response_started = False
         try:
             self._guard()
             self._route()
@@ -736,8 +794,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json()
                     return self._reply(200, store.restore_book(book_id))
                 if action == 'cover' and method == 'GET':
-                    body, kind = self.app.cover(book_id)
-                    return self._reply(200, body, kind)
+                    with self.app.open_cover(book_id) as (image, kind):
+                        return self._reply(200, image, kind)
                 if action == "file" and method == "GET":
                     book = store.get_book(book_id)
                     file = Path(book["path"]).resolve()
@@ -814,8 +872,8 @@ class Handler(BaseHTTPRequestHandler):
             body = self._json()
             return self._reply(200, {"text": self.app.qt.translate(body["text"], body.get("book_id", ""))})
         if path == "/api/image" and method == "GET":
-            body, kind = self.app.image(q["url"], q.get("referer", ""))
-            return self._reply(200, body, kind)
+            with self.app.open_image(q["url"], q.get("referer", "")) as (image, kind):
+                return self._reply(200, image, kind)
         raise KeyError("Không tìm thấy API.")
 
 def make_server(data_dir=None, host="127.0.0.1", port=8765, source_service=None):

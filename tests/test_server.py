@@ -1,4 +1,5 @@
 import base64
+from contextlib import nullcontext
 import io
 import json
 import tempfile
@@ -12,6 +13,12 @@ import zipfile
 from pathlib import Path
 from server import make_server
 from sources import SourceService
+
+
+def read_image(app, url, referer='', offline_owner=None):
+    with app.open_image(url, referer, offline_owner) as (value, kind):
+        return (value.read() if hasattr(value, 'read') else value), kind
+
 
 class HTTPTests(unittest.TestCase):
     def setUp(self):
@@ -43,6 +50,21 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)['items'], [])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+
+    def test_options_is_still_rejected_after_get_on_the_same_connection(self):
+        import http.client
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+        try:
+            connection.request('GET', '/api/books')
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            connection.request('OPTIONS', '/api/books')
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            self.assertIn('error', json.loads(response.read()))
+        finally:
+            connection.close()
 
     def test_image_cache_api_validates_budget_preserves_origin_guard_and_consumes_clear_body(self):
         status, body, _ = self.request('/api/cache/images')
@@ -203,7 +225,7 @@ class HTTPTests(unittest.TestCase):
         cached = self.server.app.image_dir / hashlib.sha256(url.encode()).hexdigest()
         cached.write_bytes(body)
         with patch('sources._public_addresses', side_effect=OSError('offline')):
-            actual, kind = self.server.app.image(url)
+            actual, kind = read_image(self.server.app, url)
         self.assertEqual(actual, body)
         self.assertEqual(kind, 'image/png')
 
@@ -213,13 +235,13 @@ class HTTPTests(unittest.TestCase):
         referer = 'https://sangtacviet.com/truyen/ciweimao/1/123/'
         body = b'\x89PNG\r\n\x1a\n' + b'public cover'
         with patch('server.safe_fetch_bytes', side_effect=[SourceError('Forbidden', code='http_error', http_status=403), body]) as fetch:
-            actual, kind = self.server.app.image(url, referer)
+            actual, kind = read_image(self.server.app, url, referer)
             self.assertEqual((actual, kind), (body, 'image/png'))
             self.assertEqual(fetch.call_args_list[0].args[0], url)
             self.assertEqual(fetch.call_args_list[0].kwargs['headers']['Referer'], referer)
             self.assertEqual(fetch.call_args_list[1].args[0], url.replace('http:', 'https:'))
             self.assertNotIn('Referer', fetch.call_args_list[1].kwargs['headers'])
-            self.assertEqual(self.server.app.image(url, referer), (body, 'image/png'))
+            self.assertEqual(read_image(self.server.app, url, referer), (body, 'image/png'))
             self.assertEqual(fetch.call_count, 2)
 
     def test_stv_image_retry_keeps_http_failures_and_other_sources_distinct(self):
@@ -227,7 +249,7 @@ class HTTPTests(unittest.TestCase):
         for referer, status in [('https://sangtacviet.com/truyen/qidian/1/123/', 404),
                                 ('https://docln.sbs/truyen/123/', 403), ('', 403)]:
             with self.subTest(referer=referer, status=status), patch('server.safe_fetch_bytes', side_effect=SourceError('Failure', code='http_error', http_status=status)) as fetch:
-                with self.assertRaises(SourceError): self.server.app.image('https://cdn.example/missing.jpg', referer)
+                with self.assertRaises(SourceError): read_image(self.server.app, 'https://cdn.example/missing.jpg', referer)
                 self.assertEqual(fetch.call_count, 1)
 
     def test_failed_cover_is_refreshed_without_changing_library_or_progress(self):
@@ -237,7 +259,7 @@ class HTTPTests(unittest.TestCase):
         self.server.app.store.progress('keep', 0, .6)
         self.server.app.store.save_note({'id': 'n', 'book_id': 'keep', 'note': 'Keep this'})
         body = b'\x89PNG\r\n\x1a\n' + b'new cover'
-        with patch.object(self.server.app, 'image', side_effect=[ValueError('404'), (body, 'image/png')]), \
+        with patch.object(self.server.app, 'open_image', side_effect=[ValueError('404'), nullcontext((body, 'image/png'))]), \
              patch.object(self.server.app.sources, 'cover', return_value={'cover': 'https://new.example/good.jpg', 'path': 'https://docln.sbs/truyen/1-keep'}) as refresh:
             status, actual, _ = self.request('/api/books/keep/cover')
         self.assertEqual((status, actual), (200, body))
@@ -250,7 +272,7 @@ class HTTPTests(unittest.TestCase):
     def test_failed_cover_replacement_keeps_existing_metadata(self):
         self.server.app.store.upsert_book({'id': 'keep', 'name': 'Keep', 'source': 'hako',
             'path': 'https://docln.sbs/truyen/1-keep', 'cover': 'https://old.example/dead.jpg'})
-        with patch.object(self.server.app, 'image', side_effect=ValueError('image unavailable')), \
+        with patch.object(self.server.app, 'open_image', side_effect=ValueError('image unavailable')), \
              patch.object(self.server.app.sources, 'cover', return_value={'cover': 'https://new.example/good.jpg', 'path': 'https://docln.sbs/truyen/1-keep'}):
             self.assertEqual(self.request('/api/books/keep/cover')[0], 400)
         self.assertEqual(self.server.app.store.get_book('keep')['cover'], 'https://old.example/dead.jpg')

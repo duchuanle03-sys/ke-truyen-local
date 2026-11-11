@@ -1,3 +1,4 @@
+from test_server import read_image
 import hashlib
 import contextlib
 from pathlib import Path
@@ -289,7 +290,7 @@ class AssetCleanupTests(unittest.TestCase):
             return png
         def run():
             try:
-                results.append(app.image(url))
+                results.append(read_image(app, url))
             except Exception as error:
                 errors.append(error)
         with patch('server.safe_fetch_bytes', side_effect=fetch):
@@ -583,7 +584,7 @@ class AssetCleanupTests(unittest.TestCase):
                              [{'html': '<p><img src="' + url + '"></p>'}])
         png = b'\x89PNG\r\n\x1a\nsynthetic image'
         with patch('server.safe_fetch_bytes', return_value=png):
-            app.image(url)
+            read_image(app, url)
         path = app.image_dir / hashlib.sha256(url.encode()).hexdigest()
         with app.store.db() as db:
             self.assertTrue(db.execute('SELECT 1 FROM asset_gc_candidates WHERE kind=? AND name=?',

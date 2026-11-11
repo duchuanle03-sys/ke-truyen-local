@@ -1,3 +1,4 @@
+from test_server import read_image
 import collections
 import tempfile
 import threading
@@ -134,7 +135,7 @@ class DownloadTests(unittest.TestCase):
                 self.assertEqual(chapter['text'], payload['text'])
                 self.assertEqual(chapter['html'], payload['html'])
                 for url in payload['images']:
-                    self.assertEqual(self.app.image(url), (PNG, 'image/png'))
+                    self.assertEqual(read_image(self.app, url), (PNG, 'image/png'))
         offline_source.chapter.assert_not_called()
 
     def test_pause_finishes_inflight_chapter_then_resume_downloads_the_rest(self):
