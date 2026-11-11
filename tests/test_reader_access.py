@@ -170,7 +170,7 @@ class ReaderAccessTests(unittest.TestCase):
                             return self.reply([])
                         book = {'id': book_id, 'name': 'Thử quyền đọc', 'source': 'file', 'chapter_index': 1 if book_id == 'direct' else 0, 'position': .37, 'chapter_count': 14}
                         if path == '/api/books':
-                            return self.reply([book])
+                            return self.reply({'items': [book], 'total': 1, 'shelf_total': 1, 'offset': 0, 'limit': 60, 'next_offset': None})
                         if path == f'/api/books/{book_id}':
                             return self.reply(book)
                         if path.endswith('/chapters'):

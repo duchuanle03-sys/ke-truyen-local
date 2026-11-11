@@ -56,7 +56,7 @@ class LibraryTests(unittest.TestCase):
         self.store.progress("old-id", 1, .8)
         self.store.save_content("old-id", 1, {"html": "<p>Đã tải</p>", "text": "Đã tải", "images": []})
         self.store.import_backup(self.export)
-        self.assertEqual(len(self.store.list_books()), 1)
+        self.assertEqual(len(self.store.list_books()['items']), 1)
         self.assertEqual(self.store.get_book("old-id")["position"], .8)
         self.assertEqual(self.store.content("old-id", 1)["text"], "Đã tải")
 
@@ -64,8 +64,8 @@ class LibraryTests(unittest.TestCase):
         self.store.import_backup(self.export)
         self.store.trash_book('old-id')
         self.store.import_backup(self.export)
-        self.assertEqual(self.store.list_books(), [])
-        self.assertEqual(len(self.store.list_books(trashed=True)), 1)
+        self.assertEqual(self.store.list_books()['items'], [])
+        self.assertEqual(len(self.store.list_books(trashed=True)['items']), 1)
 
     def test_zip_backup_rejects_traversal_without_writing_outside(self):
         archive = self.root / "bad.zip"
@@ -93,7 +93,7 @@ class LibraryTests(unittest.TestCase):
                     z.write(path, prefix + path.relative_to(self.export).as_posix())
         with self.assertRaises(ValueError):
             self.store.import_backup(archive)
-        self.assertEqual(self.store.list_books(), [])
+        self.assertEqual(self.store.list_books()['items'], [])
 
     def test_note_settings_and_search_round_trip(self):
         self.store.import_backup(self.export)
@@ -102,8 +102,8 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(len(self.store.notes("old-id")), 1)
         self.store.settings({"fontSize": 23})
         self.assertEqual(self.store.settings()["fontSize"], 23)
-        self.assertEqual(len(self.store.list_books(query="truyện")), 1)
-        self.assertEqual(len(self.store.list_books(query="absent")), 0)
+        self.assertEqual(len(self.store.list_books(query="truyện")['items']), 1)
+        self.assertEqual(len(self.store.list_books(query="absent")['items']), 0)
         self.store.delete_note("n1")
         self.assertEqual(self.store.notes("old-id"), [])
 
@@ -121,7 +121,7 @@ class LibraryTests(unittest.TestCase):
                     [{"title": "Chương 1", "url": "https://ln.hako.vn/c1"},
                      {"title": "Chương 2", "url": "https://ln.hako.vn/c2"}])
         self.assertEqual(book["id"], "old-id")
-        self.assertEqual(len(self.store.list_books()), 1)
+        self.assertEqual(len(self.store.list_books()['items']), 1)
         self.assertEqual(book["position"], .5)
 
     def test_legacy_last_read_timestamp_is_preserved_in_seconds(self):

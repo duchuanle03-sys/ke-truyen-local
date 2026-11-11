@@ -22,6 +22,8 @@ MAX_JSON = 32 * 1024 * 1024
 MAX_BACKUP = 512 * 1024 * 1024
 TRASH_RETENTION = 30 * 24 * 60 * 60
 _ACTIVE_DOWNLOAD_SQL = "status IN ('queued','running','paused','verification_required')"
+_SHELF_SORTS = {'recent': 'read_at', 'added': 'added_at', 'updated': 'updated_at',
+                'progress': 'progress', 'chapters': 'chapter_count', 'name': 'shelf_fold(name)'}
 _ASSET_NAMES = {'files': r'[0-9a-f]{64}\.[a-z0-9]+',
                 'images': r'[0-9a-f]{64}(?:\.[0-9a-f]{32}\.tmp)?'}
 
@@ -133,6 +135,27 @@ class Store:
                 db.execute('ALTER TABLE books ADD COLUMN trashed_at REAL NOT NULL DEFAULT 0')
         self._init_asset_index()
         self._init_search_index()
+        self._init_shelf_index()
+
+    def _init_shelf_index(self):
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            first = not db.execute("SELECT 1 FROM sqlite_master WHERE name='book_groups'").fetchone()
+            for sort, key in _SHELF_SORTS.items():
+                direction = 'ASC' if sort == 'name' else 'DESC'
+                db.execute(f'CREATE INDEX IF NOT EXISTS books_shelf_{sort} ON books('
+                           f'(trashed_at>0),archived,{key} {direction},name {direction},id {direction})')
+            for column in ('source', 'kind'):
+                db.execute(f'CREATE INDEX IF NOT EXISTS books_shelf_{column} ON books('
+                           f'(trashed_at>0),archived,{column},read_at DESC,name DESC,id DESC)')
+            # Persist casefolded metadata in SQLite; substring queries scan these keys without calling Python per book.
+            db.execute("CREATE INDEX IF NOT EXISTS books_shelf_search ON books((trashed_at>0),archived,shelf_fold(name || ' ' || author),id)")
+            db.execute('CREATE TABLE IF NOT EXISTS book_groups (book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, group_id TEXT NOT NULL, PRIMARY KEY(book_id,group_id))')
+            db.execute('CREATE INDEX IF NOT EXISTS book_group_lookup ON book_groups(group_id,book_id)')
+            db.execute("CREATE TRIGGER IF NOT EXISTS shelf_group_insert AFTER INSERT ON books BEGIN INSERT OR IGNORE INTO book_groups SELECT NEW.id,value FROM json_each(NEW.groups_json) WHERE type='text'; END")
+            db.execute("CREATE TRIGGER IF NOT EXISTS shelf_group_update AFTER UPDATE OF groups_json ON books WHEN NEW.groups_json IS NOT OLD.groups_json BEGIN DELETE FROM book_groups WHERE book_id=NEW.id; INSERT OR IGNORE INTO book_groups SELECT NEW.id,value FROM json_each(NEW.groups_json) WHERE type='text'; END")
+            if first:
+                db.execute("INSERT OR IGNORE INTO book_groups SELECT b.id,g.value FROM books b,json_each(b.groups_json) g WHERE g.type='text'")
 
     def _init_search_index(self):
         if sqlite3.sqlite_version_info < (3, 35, 0):
@@ -333,6 +356,7 @@ class Store:
     def db(self):
         db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
+        db.create_function('shelf_fold', 1, str.casefold, deterministic=True)
         db.execute("PRAGMA foreign_keys=ON")
         try:
             with db:
@@ -433,23 +457,41 @@ class Store:
                 item[key] = metadata[key]
         return item
 
-    def list_books(self, query="", source="", group="", sort="recent", archived=False, trashed=False):
-        with self.db() as db:
-            rows = (db.execute('SELECT * FROM books WHERE trashed_at>0').fetchall() if trashed else
-                    db.execute('SELECT * FROM books WHERE trashed_at=0 AND archived=?', (int(archived),)).fetchall())
-        result = [self._book(row) for row in rows]
+    def list_books(self, query="", source="", group="", sort="recent", archived=False, trashed=False,
+                   kind="all", reverse=False, offset=0, limit=60):
+        offset, limit = max(0, int(offset)), min(200, max(1, int(limit)))
+        if kind not in ('all', 'text', 'comic', 'file'):
+            raise ValueError('Loại truyện không hợp lệ.')
+        where, values = ['(trashed_at>0)=?'], [int(bool(trashed))]
+        if not trashed:
+            where.append('archived=?')
+            values.append(int(bool(archived)))
         term = query.casefold().strip()
         if term:
-            result = [b for b in result if term in (b["name"] + " " + b["author"]).casefold()]
-        if source:
-            result = [b for b in result if b["source"] == source]
+            where.append("id IN (SELECT id FROM books INDEXED BY books_shelf_search WHERE " +
+                         ' AND '.join(where) + " AND instr(shelf_fold(name || ' ' || author),?)>0)")
+            values += [*values, term]
+        for column, value in (('source', source), ('kind', kind if kind in ('text', 'comic') else '')):
+            if value:
+                where.append(column + '=?')
+                values.append(value)
+        if kind == 'file':
+            where.append("source IN ('local','file')")
         if group:
-            result = [b for b in result if str(group) in b["groups"]]
-        keys = {"recent": "read_at", "added": "added_at", "updated": "updated_at",
-                "progress": "progress", "chapters": "chapter_count", "name": "name"}
-        key = keys.get(sort, "read_at")
-        return sorted(result, key=lambda b: ((b[key] or "").casefold() if key == "name" else b[key], b["name"]),
-                      reverse=key != "name")
+            where.append('id IN (SELECT book_id FROM book_groups WHERE group_id=?)')
+            values.append(str(group))
+        key = _SHELF_SORTS.get(sort, 'read_at')
+        direction = 'ASC' if (key == _SHELF_SORTS['name']) != bool(reverse) else 'DESC'
+        predicate = ' AND '.join(where)
+        with self.db() as db:
+            db.execute('BEGIN')
+            total = db.execute('SELECT count(*) FROM books WHERE ' + predicate, values).fetchone()[0]
+            shelf_total = db.execute('SELECT count(*) FROM books WHERE (trashed_at>0)=0 AND archived=0').fetchone()[0]
+            offset = min(offset, max(0, (total - 1) // limit * limit))
+            rows = db.execute(f'SELECT * FROM books WHERE {predicate} ORDER BY {key} {direction},'
+                              f'name {direction},id {direction} LIMIT ? OFFSET ?', (*values, limit, offset)).fetchall()
+        return {'items': [self._book(row) for row in rows], 'total': total, 'shelf_total': shelf_total,
+                'limit': limit, 'offset': offset, 'next_offset': offset + limit if offset + limit < total else None}
 
     def get_book(self, book_id):
         with self.db() as db:

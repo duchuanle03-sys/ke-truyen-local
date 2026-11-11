@@ -29,8 +29,8 @@ class TrashStoreTests(unittest.TestCase):
         with patch('library.time.time', return_value=2_000_000_000):
             book = self.store.trash_book('first')
         self.assertEqual(book['trash_expires_at'], 2_000_000_000 + 30 * DAY)
-        self.assertEqual([b['id'] for b in self.store.list_books()], ['other'])
-        self.assertEqual([b['id'] for b in self.store.list_books(trashed=True)], ['first'])
+        self.assertEqual([b['id'] for b in self.store.list_books()['items']], ['other'])
+        self.assertEqual([b['id'] for b in self.store.list_books(trashed=True)['items']], ['first'])
         self.assertEqual(self.store.content('first', 0)['text'], 'Saved text')
         self.assertEqual(self.store.notes('first')[0]['note'], 'Personal note')
         with patch('library.time.time', return_value=2_000_000_000 + DAY):
@@ -38,7 +38,7 @@ class TrashStoreTests(unittest.TestCase):
             restored = self.store.restore_book('first')
         self.assertEqual(restored['trashed_at'], 0)
         self.assertEqual(restored['position'], .65)
-        self.assertEqual(len(self.store.list_books()), 2)
+        self.assertEqual(len(self.store.list_books()['items']), 2)
 
     def test_permanent_delete_requires_trash_and_only_removes_matching_data(self):
         with self.assertRaises(ValueError):
@@ -62,16 +62,18 @@ class TrashStoreTests(unittest.TestCase):
                 self.store.restore_book('first')
         self.assertEqual(self.store.purge_expired(now=2_000_000_000 + 30 * DAY, skip_ids={'first'}), [])
         self.assertEqual(self.store.purge_expired(now=2_000_000_000 + 30 * DAY), ['first'])
-        self.assertEqual([b['id'] for b in self.store.list_books()], ['other'])
+        self.assertEqual([b['id'] for b in self.store.list_books()['items']], ['other'])
 
     def test_upgrade_keeps_existing_books_and_reading_state(self):
         with self.store.db() as db:
             if 'trashed_at' in {r[1] for r in db.execute('PRAGMA table_info(books)')}:
+                for row in db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'books_shelf_%'").fetchall():
+                    db.execute('DROP INDEX ' + row[0])
                 db.execute('ALTER TABLE books DROP COLUMN trashed_at')
         upgraded = Store(self.tmp.name)
         self.assertEqual(upgraded.get_book('first')['trashed_at'], 0)
         self.assertEqual(upgraded.get_book('first')['position'], .65)
-        self.assertEqual(len(upgraded.list_books()), 2)
+        self.assertEqual(len(upgraded.list_books()['items']), 2)
 
 
 class TrashHTTPTests(unittest.TestCase):
@@ -103,13 +105,13 @@ class TrashHTTPTests(unittest.TestCase):
     def test_remove_restore_and_permanent_delete_through_api(self):
         self.assertEqual(self.request('/api/books/test-only', 'DELETE')[0], 400)
         self.assertEqual(self.request('/api/books/test-only/trash', 'POST')[0], 200)
-        self.assertEqual(self.request('/api/books')[1], [])
-        self.assertEqual(len(self.request('/api/books?trashed=1')[1]), 1)
+        self.assertEqual(self.request('/api/books')[1]['items'], [])
+        self.assertEqual(len(self.request('/api/books?trashed=1')[1]['items']), 1)
         self.assertEqual(self.request('/api/books/test-only/restore', 'POST')[0], 200)
-        self.assertEqual(len(self.request('/api/books')[1]), 1)
+        self.assertEqual(len(self.request('/api/books')[1]['items']), 1)
         self.request('/api/books/test-only/trash', 'POST')
         self.assertEqual(self.request('/api/books/test-only', 'DELETE')[0], 200)
-        self.assertEqual(self.request('/api/books?trashed=1')[1], [])
+        self.assertEqual(self.request('/api/books?trashed=1')[1]['items'], [])
         self.assertEqual(self.request('/api/books/test-only')[0], 404)
 
     def test_cross_origin_cannot_remove_or_permanently_delete(self):
@@ -117,7 +119,7 @@ class TrashHTTPTests(unittest.TestCase):
         self.assertEqual(self.request('/api/books/test-only')[1]['trashed_at'], 0)
         self.request('/api/books/test-only/trash', 'POST')
         self.assertEqual(self.request('/api/books/test-only', 'DELETE', 'https://evil.example')[0], 403)
-        self.assertEqual(len(self.request('/api/books?trashed=1')[1]), 1)
+        self.assertEqual(len(self.request('/api/books?trashed=1')[1]['items']), 1)
 
     def test_removal_cancels_only_matching_jobs_and_blocks_new_downloads(self):
         app = self.server.app
@@ -162,7 +164,7 @@ class TrashHTTPTests(unittest.TestCase):
                 store.trash_book('expired')
             app = App(directory)
             try:
-                self.assertEqual(app.store.list_books(trashed=True), [])
+                self.assertEqual(app.store.list_books(trashed=True)['items'], [])
                 with self.assertRaises(KeyError):
                     app.store.get_book('expired')
             finally:

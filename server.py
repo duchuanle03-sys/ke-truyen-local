@@ -667,7 +667,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/books" and method == "GET":
             return self._reply(200, store.list_books(query=q.get("q", ""), source=q.get("source", ""),
                                group=q.get("group", ""), sort=q.get("sort", "recent"), archived=q.get("archived") == "1",
-                               trashed=q.get('trashed') == '1'))
+                               trashed=q.get('trashed') == '1', kind=q.get('kind', 'all'),
+                               reverse=q.get('reverse') == '1', offset=q.get('offset', 0), limit=q.get('limit', 60)))
         if path == "/api/groups" and method == "GET":
             return self._reply(200, store.groups())
         if path == "/api/settings":

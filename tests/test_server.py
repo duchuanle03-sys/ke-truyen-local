@@ -41,8 +41,22 @@ class HTTPTests(unittest.TestCase):
     def test_api_is_real_json_and_does_not_invent_books(self):
         status, body, headers = self.request("/api/books")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body), [])
+        self.assertEqual(json.loads(body)['items'], [])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+
+    def test_books_api_pages_all_filters_and_validates_page_arguments(self):
+        with self.server.app.store.db() as db:
+            db.executemany('INSERT INTO books(id,name,source,groups_json,added_at,updated_at) VALUES(?,?,?,?,?,?)',
+                           ((str(i), f'Book {i:03}', 'hako' if i % 2 else 'file', '["g"]', i, i) for i in range(85)))
+        status, body, _ = self.request('/api/books')
+        page = json.loads(body)
+        self.assertEqual((status, len(page['items']), page['total'], page['next_offset']), (200, 60, 85, 60))
+        status, body, _ = self.request('/api/books?source=hako&group=g&kind=text&sort=name&reverse=1&limit=7&offset=7')
+        page = json.loads(body)
+        self.assertEqual((status, page['total'], page['shelf_total'], page['offset'], page['next_offset']), (200, 42, 85, 7, 14))
+        self.assertEqual([book['id'] for book in page['items']], [str(i) for i in range(69, 56, -2)])
+        for query in ('offset=invalid', 'limit=invalid', 'kind=invalid'):
+            self.assertEqual(self.request('/api/books?' + query)[0], 400)
 
     def test_book_search_api_passes_the_chapter_cursor_and_index_status(self):
         store = self.server.app.store

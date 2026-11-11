@@ -98,7 +98,7 @@ $('dialog').addEventListener('click', (event) => {
   if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) requestDialogClose();
 });
 
-const state = { books: [], groups: [], sources: [], settings: {}, kind: 'all', view: 'grid', reverse: false, sourcePage: 1, activeView: 'library' };
+const state = { books: [], groups: [], sources: [], settings: {}, kind: 'all', view: 'grid', reverse: false, sourcePage: 1, activeView: 'library', offset: 0, limit: 60, total: 0, nextOffset: null };
 let settingTimer;
 function saveSettings(patch) {
   Object.assign(state.settings, patch);
@@ -108,7 +108,7 @@ function saveSettings(patch) {
     catch (error) { notify(`Chưa lưu được thiết lập: ${error.message}`, true); }
   }, 350);
 }
-const reader = createReader({ api, el, notify, showDialog, getSettings: () => state.settings.reader || {}, saveSettings: (value) => saveSettings({ reader: value }), openDictionary: (book) => openDictionary(book), onClose: () => loadLibrary() });
+const reader = createReader({ api, el, notify, showDialog, getSettings: () => state.settings.reader || {}, saveSettings: (value) => saveSettings({ reader: value }), openDictionary: (book) => openDictionary(book), onClose: () => loadLibrary(state.offset) });
 
 function safeMedia(value) {
   if (!value) return '';
@@ -143,25 +143,33 @@ function card(book, fromSource = false) {
 }
 
 function renderLibrary() {
-  let books = state.books.filter((book) => state.kind === 'all' || (state.kind === 'file' ? ['local', 'file'].includes(book.source) : book.kind === state.kind));
-  if (state.reverse) books = books.toReversed();
+  const books = state.books;
   $('book-grid').className = `book-grid ${state.view}`;
   $('book-grid').replaceChildren(...books.map((book) => card(book)));
-  $('library-count').textContent = `${books.length.toLocaleString('vi-VN')} truyện${$('library-search').value ? ' phù hợp' : ''}`;
-  if (!books.length) $('book-grid').append(el('div', { class: 'empty-state' }, [el('span', { class: 'empty-icon', 'aria-hidden': 'true', text: '▥' }), el('h2', { text: state.books.length ? 'Không có truyện trong bộ lọc này' : 'Kệ sách đang chờ bạn' }), el('p', { text: $('library-search').value || $('library-source').value || $('library-group').value ? 'Thử đổi từ khóa hoặc bỏ bớt bộ lọc.' : 'Nhập thư viện điện thoại một lần, hoặc tìm truyện từ QQ, Full, Hako.' }), el('button', { class: 'button primary', text: 'Nhập thư viện hiện có', onclick: importBackup })]));
+  const filtered = $('library-search').value || $('library-source').value || $('library-group').value || state.kind !== 'all';
+  $('library-count').textContent = `${state.total ? `${state.offset + 1}–${state.offset + books.length}/` : ''}${state.total.toLocaleString('vi-VN')} truyện${filtered ? ' phù hợp' : ''}`;
+  $('library-page').textContent = state.total ? `${Math.floor(state.offset / state.limit) + 1}/${Math.ceil(state.total / state.limit)}` : '0/0';
+  $('library-previous').disabled = !state.offset; $('library-next').disabled = state.nextOffset === null;
+  if (!books.length) $('book-grid').append(el('div', { class: 'empty-state' }, [el('span', { class: 'empty-icon', 'aria-hidden': 'true', text: '▥' }), el('h2', { text: filtered ? 'Không có truyện trong bộ lọc này' : 'Kệ sách đang chờ bạn' }), el('p', { text: filtered ? 'Thử đổi từ khóa hoặc bỏ bớt bộ lọc.' : 'Nhập thư viện điện thoại một lần, hoặc tìm truyện từ QQ, Full, Hako.' }), el('button', { class: 'button primary', text: 'Nhập thư viện hiện có', onclick: importBackup })]));
 }
 
 let libraryRequest = 0;
-async function loadLibrary() {
+async function loadLibrary(offset = 0, focusPage = false) {
   const request = ++libraryRequest;
   $('book-grid').setAttribute('aria-busy', 'true');
   $('library-error').hidden = true;
-  const params = new URLSearchParams({ q: $('library-search').value, source: $('library-source').value, group: $('library-group').value, sort: $('library-sort').value });
+  $('library-previous').disabled = $('library-next').disabled = true;
+  const params = new URLSearchParams({ q: $('library-search').value, source: $('library-source').value, group: $('library-group').value, sort: $('library-sort').value, kind: state.kind, reverse: state.reverse ? '1' : '0', offset, limit: state.limit });
   try {
-    const books = await api(`/api/books?${params}`);
+    const page = await api(`/api/books?${params}`);
     if (request !== libraryRequest) return;
-    state.books = Array.isArray(books) ? books : books.items || [];
+    state.books = page.items; state.offset = page.offset; state.total = page.total; state.limit = page.limit; state.nextOffset = page.next_offset;
+    $('nav-count').textContent = page.shelf_total || '';
     renderLibrary();
+    if (focusPage) {
+      $('book-grid').scrollIntoView({ block: 'start' });
+      $('book-grid').querySelector('.book-card')?.focus({ preventScroll: true });
+    }
   } catch (error) {
     if (request !== libraryRequest) return;
     $('library-error').textContent = `${error.message} Dùng nút “Làm mới” để thử lại.`;
@@ -195,13 +203,15 @@ document.querySelector('.brand').onclick = (event) => { event.preventDefault(); 
 let searchTimer;
 $('library-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadLibrary, 220); });
 for (const id of ['library-source', 'library-group', 'library-sort']) $(id).onchange = () => { saveSettings({ library: { ...state.settings.library, sort: $('library-sort').value } }); loadLibrary(); };
-$('refresh-library').onclick = loadLibrary;
-$('sort-direction').onclick = () => { state.reverse = !state.reverse; $('sort-direction').setAttribute('aria-pressed', String(state.reverse)); renderLibrary(); };
+$('refresh-library').onclick = () => loadLibrary(state.offset);
+$('library-previous').onclick = () => loadLibrary(Math.max(0, state.offset - state.limit), true);
+$('library-next').onclick = () => { if (state.nextOffset !== null) loadLibrary(state.nextOffset, true); };
+$('sort-direction').onclick = () => { state.reverse = !state.reverse; $('sort-direction').setAttribute('aria-pressed', String(state.reverse)); loadLibrary(); };
 document.querySelectorAll('[data-kind]').forEach((button) => {
   button.onclick = () => {
     state.kind = button.dataset.kind;
     for (const other of document.querySelectorAll('[data-kind]')) { other.classList.toggle('active', other === button); other.setAttribute('aria-pressed', String(other === button)); }
-    renderLibrary();
+    loadLibrary();
   };
 });
 document.querySelectorAll('[data-view]').forEach((button) => {
@@ -222,7 +232,6 @@ async function importBackup() {
     dialog.body.append(reportNode(report));
     dialog.actions.replaceChildren(el('button', { class: 'button primary', text: 'Về kệ sách', onclick: () => { dialog.close(); navigate('library'); } }));
     await Promise.all([loadGroups(), loadLibrary()]);
-    $('nav-count').textContent = state.books.length;
   } catch (error) {
     message.className = 'inline-error';
     message.textContent = error.message;
@@ -313,9 +322,7 @@ async function bookDetail(initial, fromSource = false) {
 }
 
 async function refreshShelf() {
-  await loadLibrary();
-  try { $('nav-count').textContent = (await api('/api/books')).length || ''; }
-  catch { $('nav-count').textContent = ''; }
+  await loadLibrary(state.offset);
 }
 
 function confirmTrash(book) {
@@ -330,15 +337,16 @@ function confirmTrash(book) {
   } }));
 }
 
-async function openTrash() {
+async function openTrash(offset = 0) {
   const list = el('div', {}, [el('p', { text: 'Đang mở thùng rác…' })]);
   const dialog = showDialog('Thùng rác · giữ 30 ngày', [el('p', { class: 'muted', text: 'Có thể khôi phục trước ngày hết hạn hoặc xóa vĩnh viễn ngay. Truyện quá 30 ngày tự được dọn khi ứng dụng đang chạy hoặc vào lần mở tiếp theo.' }), list]);
   const token = showDialog.token;
-  dialog.actions.append(el('button', { class: 'button', text: 'Làm mới', onclick: openTrash }), el('button', { class: 'button', text: 'Đóng', onclick: dialog.close }));
+  dialog.actions.append(el('button', { class: 'button', text: 'Làm mới', onclick: () => openTrash(offset) }), el('button', { class: 'button', text: 'Đóng', onclick: dialog.close }));
   try {
-    const books = await api('/api/books?trashed=1');
+    const page = await api(`/api/books?${new URLSearchParams({ trashed: '1', offset, limit: 60 })}`);
     if (!$('dialog').open || showDialog.token !== token) return;
     list.replaceChildren();
+    const books = page.items; offset = page.offset;
     if (!books.length) list.append(el('p', { class: 'muted', text: 'Thùng rác đang trống.' }));
     for (const book of books) {
       const expiry = Number(book.trash_expires_at) * 1000;
@@ -349,27 +357,31 @@ async function openTrash() {
         row.inert = true; error.hidden = true;
         try {
           await api(`/api/books/${encodeURIComponent(book.id)}/restore`, {});
-          await refreshShelf(); if ($('dialog').open && showDialog.token === token) await openTrash(); notify('Đã khôi phục truyện cùng tiến độ và ghi chú.');
+          await refreshShelf(); if ($('dialog').open && showDialog.token === token) await openTrash(offset); notify('Đã khôi phục truyện cùng tiến độ và ghi chú.');
         } catch (problem) { row.inert = false; error.textContent = problem.message; error.hidden = false; }
-      } }), el('button', { class: 'button danger', text: 'Xóa vĩnh viễn', onclick: () => confirmPurge(book) })]), error);
+      } }), el('button', { class: 'button danger', text: 'Xóa vĩnh viễn', onclick: () => confirmPurge(book, offset) })]), error);
       list.append(row);
     }
+    list.append(el('nav', { class: 'dictionary-pagination', 'aria-label': 'Trang thùng rác' }, [
+      el('button', { id: 'trash-previous', class: 'button', text: 'Trang trước', disabled: !offset, onclick: () => openTrash(Math.max(0, offset - page.limit)) }),
+      el('span', { role: 'status', text: page.total ? `${offset + 1}–${offset + books.length}/${page.total}` : '0/0' }),
+      el('button', { id: 'trash-next', class: 'button', text: 'Trang sau', disabled: page.next_offset === null, onclick: () => openTrash(page.next_offset) })]));
   } catch (error) { if (showDialog.token === token) list.replaceChildren(el('p', { class: 'inline-error', role: 'alert', text: error.message })); }
 }
 
-function confirmPurge(book) {
+function confirmPurge(book, offset = 0) {
   const error = el('p', { class: 'inline-error', role: 'alert', hidden: true });
   const dialog = showDialog('Xóa vĩnh viễn truyện?', [el('h3', { text: book.name }), el('p', { text: 'Truyện, tiến độ đọc, ghi chú/dấu trang và nội dung chương đã lưu trong app sẽ bị xóa. Bản sao tệp nhập và ảnh cache không còn truyện nào dùng cũng sẽ được dọn. Sau đó không thể khôi phục từ Thùng rác.' }), el('p', { class: 'muted small', text: 'Bộ xuất điện thoại, tệp nhập gốc bên ngoài app, từ điển và tệp/ảnh dùng chung được giữ.' }), error]);
   const token = showDialog.token;
-  dialog.actions.append(el('button', { class: 'button', text: 'Hủy', onclick: openTrash }), el('button', { class: 'button danger', text: 'Xác nhận xóa vĩnh viễn', onclick: async (event) => {
+  dialog.actions.append(el('button', { class: 'button', text: 'Hủy', onclick: () => openTrash(offset) }), el('button', { class: 'button danger', text: 'Xác nhận xóa vĩnh viễn', onclick: async (event) => {
     event.currentTarget.disabled = true; error.hidden = true;
     try {
       await api(`/api/books/${encodeURIComponent(book.id)}`, undefined, { method: 'DELETE' });
-      if ($('dialog').open && showDialog.token === token) await openTrash(); notify('Đã xóa truyện. Tệp không còn dùng sẽ được dọn nền sau khi kiểm tra tham chiếu.');
+      if ($('dialog').open && showDialog.token === token) await openTrash(offset); notify('Đã xóa truyện. Tệp không còn dùng sẽ được dọn nền sau khi kiểm tra tham chiếu.');
     } catch (problem) { error.textContent = problem.message; error.hidden = false; event.target.disabled = false; }
   } }));
 }
-$('open-trash').onclick = openTrash;
+$('open-trash').onclick = () => openTrash();
 
 function editBook(book) {
   const name = el('input', { value: book.name || '', required: true });
@@ -569,7 +581,6 @@ async function initialize() {
   $('library-sort').value = state.settings.library?.sort || 'recent';
   document.querySelectorAll('[data-view]').forEach((button) => { button.classList.toggle('active', button.dataset.view === state.view); button.setAttribute('aria-pressed', String(button.dataset.view === state.view)); });
   await Promise.all([loadLibrary(), loadGroups()]);
-  $('nav-count').textContent = state.books.length || '';
   const locationUrl = new URL(location.href);
   const requestedBook = locationUrl.searchParams.get('book');
   if (requestedBook !== null) {
