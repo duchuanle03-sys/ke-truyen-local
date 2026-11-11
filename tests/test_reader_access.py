@@ -51,9 +51,14 @@ const state = () => fetch('/qa/state').then(r => r.json());
 const ready = () => wait(() => $('#reader').dataset.state === 'reading');
 const denied = () => wait(() => $('#reader').dataset.state === 'error');
 const button = (text) => [...document.querySelectorAll('#reader button')].find(n => n.textContent === text);
+const filterToc = (index) => {
+  const query = $('#dialog input[aria-label="Tìm mục lục"]');
+  query.focus(); query.value = String(index + 1); query.dispatchEvent(new Event('input', {bubbles: true}));
+  return document.querySelector(`.toc-item[data-chapter-index="${index}"]`);
+};
 const toc = (index) => {
   $('#reader button[aria-label="Mục lục"]').click();
-  document.querySelectorAll('.toc-item')[index].click();
+  filterToc(index).click();
 };
 const ratio = () => { const s = $('.reader-scroll'); return s.scrollTop / (s.scrollHeight - s.clientHeight); };
 try {
@@ -110,7 +115,8 @@ try {
       check(!$('.vip-label'), 'Unverified or ordinary error became VIP: ' + index);
       check($('.reader-access-error h2').textContent.includes(title), 'Wrong error screen: ' + index);
       $('#reader button[aria-label="Mục lục"]').click();
-      check(document.querySelectorAll('.toc-vip').length === 2 && !document.querySelectorAll('.toc-item')[index].querySelector('.toc-vip'), 'An ordinary error marked the TOC as VIP: ' + index);
+      check(!filterToc(index).querySelector('.toc-vip'), 'An ordinary error marked the TOC as VIP: ' + index);
+      check(filterToc(1).querySelector('.toc-vip') && filterToc(8).querySelector('.toc-vip'), 'Existing VIP metadata was lost');
       $('#dialog-close').click();
     }
     toc(7); await wait(async () => (await state()).slow);

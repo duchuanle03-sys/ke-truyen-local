@@ -6,6 +6,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   const root = document.getElementById('reader');
   const app = document.getElementById('app');
   let book = null, chapters = [], chapter = null, index = 0, prefs = { ...defaults }, generation = 0;
+  let tocEntries = [], disposeToc = () => {}, refreshToc = () => {};
   let scroller, sheet, content, status, progressBar, chapterTitle, previousButton, nextButton, selectionTip, speechBar;
   let saveTimer, resizeTimer, progressChain = Promise.resolve(), loading = false, dirty = false, lastSelection = '';
   let imagePage = 0, autoFrame = 0, autoLast = 0, lastReadingPosition = 0;
@@ -17,6 +18,11 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   const icon = (text, title, action, extra = '') => el('button', { class: `icon-button ${extra}`, text, title, 'aria-label': title, onclick: action });
   const path = (suffix = '') => `/api/books/${encodeURIComponent(book.id)}${suffix}`;
   const chapterPath = () => path(`/chapters/${index}`);
+
+  function tocEntry(item, fallback) {
+    const at = Number.isInteger(item.index) ? item.index : fallback;
+    return { item, index: at, search: `${at + 1} ${item.title || `Chương ${at + 1}`}`.toLocaleLowerCase('vi') };
+  }
 
   function position() {
     if (!scroller || !chapter) return 0;
@@ -173,7 +179,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     const savedIndex = Number(book.chapter_index);
     savedReading = Number.isInteger(savedIndex) ? { index: savedIndex, position: clamp(book.position, 0, 1) } : null;
     prefs = { ...defaults, ...getSettings() };
-    chapters = []; chapter = null; index = Number(atIndex ?? book.chapter_index) || 0;
+    disposeToc(); tocEntries = []; chapters = []; chapter = null; index = Number(atIndex ?? book.chapter_index) || 0;
     const initialPosition = Number(atPosition ?? book.position) || 0;
     root.hidden = false; app.inert = true; document.body.style.overflow = 'hidden';
     root.dataset.kind = book.kind === 'comic' ? 'comic' : 'text';
@@ -184,6 +190,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
       const result = await api(path('/chapters'));
       if (token !== generation) return;
       chapters = Array.isArray(result) ? result : result.chapters || [];
+      tocEntries = chapters.map(tocEntry);
       if (!chapters.length) throw new Error('Truyện chưa có mục lục. Hãy kiểm tra trang nguồn; sách vẫn được giữ trên kệ.');
       await loadChapter(clamp(index, 0, chapters.length - 1), initialPosition, false);
     } catch (error) { if (token === generation) showReadError(error, () => open(selected, index, initialPosition)); }
@@ -197,6 +204,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     root.hidden = true; root.classList.remove('is-focused'); app.inert = false; document.body.style.overflow = '';
+    disposeToc(); tocEntries = []; chapters = [];
     book = null; chapter = null; dirty = false; lastReadable = savedReading = null;
     document.getElementById('main').focus({ preventScroll: true });
     onClose();
@@ -226,6 +234,9 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
       const result = await api(path(`/chapters/${index}`));
       if (token !== generation) return;
       chapter = result; lastReadingPosition = clamp(pos, 0, 1);
+      Object.assign(chapters[index], { title: result.title || chapters[index].title, downloaded: true });
+      tocEntries[index] = tocEntry(chapters[index], index);
+      refreshToc();
       if (prefs.qt !== 'original' && book.kind !== 'comic' && !sourceVietnamese()) {
         try { await renderChapter(pos); }
         catch (error) { if (token !== generation) return; renderOriginal(); notify(`QT chưa dùng được: ${error.message} Đang hiển thị nguyên văn.`, true); }
@@ -262,6 +273,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     selectionTip.hidden = true; lastSelection = '';
     const vip = error.code === 'vip_locked' && error.access?.vip === true && typeof error.access.evidence === 'string' && error.access.evidence.trim();
     if (vip && chapters[index]) chapters[index].is_vip = true;
+    refreshToc();
     const auth = error.code === 'auth_required';
     const unverified = !vip && ['vip_locked', 'access_unverified'].includes(error.code);
     const titles = { network_error: 'Chưa kết nối được nguồn', source_timeout: 'Nguồn phản hồi quá lâu', parse_error: 'Chưa nhận diện được nội dung chương', http_error: `Nguồn trả về lỗi HTTP${error.http_status ? ` ${error.http_status}` : ''}` };
@@ -414,17 +426,105 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   }
 
   function tocDialog() {
+    disposeToc();
     const query = el('input', { type: 'search', placeholder: 'Tìm tên hoặc số chương…', 'aria-label': 'Tìm mục lục' });
-    const list = el('div', { class: 'toc-list' });
-    const dialog = showDialog(`Mục lục · ${chapters.length} chương`, [query, list]);
-    function render() {
-      const q = query.value.trim().toLocaleLowerCase('vi');
-      const items = chapters.map((item, i) => ({ ...item, index: Number.isInteger(item.index) ? item.index : i })).filter((item) => !q || `${item.index + 1} ${item.title}`.toLocaleLowerCase('vi').includes(q));
-      list.replaceChildren(...items.map((item) => el('button', { class: `toc-item${item.index === index ? ' active' : ''}`, onclick: () => { dialog.close(); loadChapter(item.index); } }, [el('span', { class: 'toc-title' }, [item.title || `Chương ${item.index + 1}`, item.is_vip === true ? el('span', { class: 'toc-vip', text: '🔒', role: 'img', 'aria-label': 'Chương VIP theo mục lục nguồn; quyền đọc chưa được kiểm tra', title: 'Chương VIP theo mục lục nguồn; quyền đọc chưa được kiểm tra' }) : null]), item.downloaded ? el('span', { class: 'cached', text: 'Đã lưu' }) : null])));
-      if (!items.length) list.append(el('p', { class: 'muted', text: 'Không có chương phù hợp.' }));
+    const count = el('p', { class: 'muted small', role: 'status' });
+    const help = el('p', { id: 'toc-help', class: 'sr-only', text: 'Dùng phím mũi tên, Home, End, Page Up và Page Down để chọn chương; Enter để mở.' });
+    const spacer = el('div', { class: 'toc-window', role: 'presentation' });
+    const list = el('div', { class: 'toc-list', role: 'list', 'aria-label': 'Mục lục', 'aria-describedby': 'toc-help' }, [spacer]);
+    const dialog = showDialog(`Mục lục · ${chapters.length} chương`, [query, count, help, list]);
+    const nativeDialog = dialog.body.closest('dialog'), rowHeight = 64, overscan = 6, rows = new Map();
+    let items = tocEntries, focused = Math.max(0, items.findIndex(item => item.index === index)), frame = 0;
+    list.style.setProperty('--toc-row-height', `${rowHeight}px`);
+    function size() {
+      list.style.setProperty('--toc-height', `${items.length * rowHeight}px`);
+      list.hidden = !items.length;
+      count.textContent = items.length ? `${items.length.toLocaleString('vi-VN')}/${tocEntries.length.toLocaleString('vi-VN')} chương` : 'Không có chương phù hợp.';
     }
-    query.oninput = render; render();
-    requestAnimationFrame(() => list.querySelector('.active')?.scrollIntoView({ block: 'center' }));
+    function render() {
+      if (!dialog.body.isConnected || !nativeDialog.open) { dispose(); return; }
+      const visible = Math.ceil((list.clientHeight || rowHeight * 8) / rowHeight);
+      const first = Math.max(0, Math.floor(list.scrollTop / rowHeight) - overscan);
+      const last = Math.min(items.length, Math.ceil(list.scrollTop / rowHeight) + visible + overscan);
+      const positions = Array.from({ length: Math.max(0, last - first) }, (_, i) => first + i);
+      if (list.contains(document.activeElement)) {
+        if (items[focused]?.index === Number(document.activeElement.dataset.chapterIndex) && !positions.includes(focused)) positions.push(focused);
+      } else if (focused < first || focused >= last) focused = Math.min(items.length - 1, Math.floor(list.scrollTop / rowHeight));
+      positions.sort((a, b) => a - b);
+      const keep = new Set(positions.map(pos => items[pos].index));
+      for (const [key, row] of rows) if (!keep.has(key)) { row.remove(); rows.delete(key); }
+      let before = null;
+      for (const pos of positions.reverse()) {
+        const entry = items[pos], item = entry.item, title = item.title || `Chương ${entry.index + 1}`;
+        let row = rows.get(entry.index);
+        if (!row) {
+          const control = el('button', { class: 'toc-item',
+            'data-chapter-index': entry.index,
+            onclick: () => { dialog.close(); loadChapter(entry.index); } }, [
+              el('span', { class: 'toc-title' }, [el('span', { class: 'toc-title-text' })])]);
+          row = el('div', { class: 'toc-row', role: 'listitem' }, [control]);
+          rows.set(entry.index, row);
+        }
+        const control = row.firstChild, label = control.querySelector('.toc-title');
+        if (control.title !== title) { control.title = title; label.firstChild.textContent = title; }
+        control.classList.toggle('active', entry.index === index);
+        if (entry.index === index) control.setAttribute('aria-current', 'page');
+        else control.removeAttribute('aria-current');
+        const vip = label.querySelector('.toc-vip'), cached = control.querySelector('.cached');
+        if (item.is_vip === true && !vip) label.append(el('span', { class: 'toc-vip', text: '🔒', role: 'img', 'aria-label': 'Chương VIP theo mục lục nguồn; quyền đọc chưa được kiểm tra', title: 'Chương VIP theo mục lục nguồn; quyền đọc chưa được kiểm tra' }));
+        else if (item.is_vip !== true) vip?.remove();
+        if (item.downloaded && !cached) control.append(el('span', { class: 'cached', text: 'Đã lưu' }));
+        else if (!item.downloaded) cached?.remove();
+        row.style.top = `${pos * rowHeight}px`;
+        row.setAttribute('aria-posinset', pos + 1); row.setAttribute('aria-setsize', items.length);
+        control.dataset.tocPosition = pos; control.tabIndex = pos === focused ? 0 : -1;
+        if (row.parentNode !== spacer || row.nextSibling !== before) spacer.insertBefore(row, before);
+        before = row;
+      }
+    }
+    function schedule() { if (!frame) frame = requestAnimationFrame(() => { frame = 0; render(); }); }
+    function focus(pos) {
+      focused = Math.max(0, Math.min(items.length - 1, pos));
+      const top = focused * rowHeight;
+      if (top < list.scrollTop) list.scrollTop = top;
+      else if (top + rowHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + rowHeight - list.clientHeight;
+      render();
+      rows.get(items[focused]?.index)?.firstChild.focus({ preventScroll: true });
+    }
+    list.onkeydown = event => {
+      const page = Math.max(1, Math.floor(list.clientHeight / rowHeight));
+      const moves = { ArrowDown: focused + 1, ArrowUp: focused - 1, PageDown: focused + page, PageUp: focused - page, Home: 0, End: items.length - 1 };
+      if (event.key in moves && items.length) { event.preventDefault(); event.stopPropagation(); focus(moves[event.key]); }
+    };
+    list.onfocusin = event => { if (event.target.matches('.toc-item')) focused = Number(event.target.dataset.tocPosition); };
+    list.onscroll = schedule;
+    function filter(reset) {
+      const focusedKey = items[focused]?.index, hadFocus = list.contains(document.activeElement);
+      const term = query.value.trim().toLocaleLowerCase('vi');
+      items = term ? tocEntries.filter(item => item.search.includes(term)) : tocEntries;
+      focused = reset ? 0 : Math.max(0, items.findIndex(item => item.index === focusedKey));
+      size(); if (reset) list.scrollTop = 0; render();
+      if (hadFocus && !reset) {
+        if (items[focused]?.index === focusedKey) focus(focused);
+        else query.focus();
+      }
+    }
+    query.oninput = () => filter(true);
+    const observer = new ResizeObserver(() => {
+      if (list.contains(document.activeElement)) focus(focused);
+      schedule();
+    });
+    function dispose() {
+      observer.disconnect(); cancelAnimationFrame(frame);
+      nativeDialog.removeEventListener('close', dispose);
+      query.oninput = list.onscroll = list.onkeydown = list.onfocusin = null;
+      if (disposeToc === dispose) { disposeToc = () => {}; refreshToc = () => {}; }
+    }
+    disposeToc = dispose;
+    refreshToc = () => filter(false);
+    nativeDialog.addEventListener('close', dispose, { once: true });
+    size(); list.scrollTop = Math.max(0, focused * rowHeight - (list.clientHeight - rowHeight) / 2); render();
+    observer.observe(list);
   }
 
   function rangeControl(label, key, min, max, step, suffix = '') {
