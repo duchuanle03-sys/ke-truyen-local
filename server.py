@@ -95,12 +95,17 @@ class App:
             self._resume_verified_downloads()
             self._download_futures = {key: future for key, future in self._download_futures.items() if not future.done()}
             slots = 2 - len(self._download_futures)
-            if slots:
-                for saved in self.store.queued_downloads(tuple(self._download_futures), slots):
-                    job = self._cache_job(self.jobs.get(saved['id'], saved))
-                    future = self.executor.submit(self._download, job)
-                    self._download_futures[job['id']] = future
-                    future.add_done_callback(lambda _: self._download_wake.set())
+            stv_busy = any(self.jobs.get(key, {}).get('source') == 'stv' for key in self._download_futures)
+            for _ in range(slots):
+                saved = self.store.queued_downloads(tuple(self._download_futures), 1, exclude_stv=stv_busy)
+                if not saved:
+                    break
+                job = self._cache_job(self.jobs.get(saved[0]['id'], saved[0]))
+                job['source'] = saved[0]['source']
+                stv_busy |= job['source'] == 'stv'
+                future = self.executor.submit(self._download, job)
+                self._download_futures[job['id']] = future
+                future.add_done_callback(lambda _: self._download_wake.set())
 
     def _resume_verified_downloads(self):
         ready = []
@@ -204,14 +209,15 @@ class App:
                              if url.startswith(("http://", "https://")) else url for url in chapter["images"]]
         return chapter
 
-    def _chapter_content(self, book, index):
+    def _chapter_content(self, book, index, background=False, cancelled=None):
         book_id = book['id']
         chapter = self.store.content(book_id, index)
         if not chapter["downloaded"]:
             if book["source"] not in ("qq", "full", "hako", "stv"):
                 raise ValueError("Chương chưa có nội dung. Hãy nhập tệp hoặc chọn lại nguồn tương ứng.")
             try:
-                content = self.sources.chapter(book["source"], chapter["url"])
+                options = {'background': True, 'cancelled': cancelled} if background and book['source'] == 'stv' else {}
+                content = self.sources.chapter(book["source"], chapter["url"], **options)
             except SourceAccessError as error:
                 self.store.chapter_access(book_id, index, error.access)
                 raise
@@ -416,7 +422,8 @@ class App:
                         return
                 book = self.store.get_book(job["book_id"])
                 try:
-                    raw = self._chapter_content(book, index)
+                    raw = self._chapter_content(book, index, background=True,
+                        cancelled=lambda: self._download_stop.is_set() or job['status'] != 'running' or job['cancelled'])
                 except SourceCaptchaError as error:
                     if not error.verification:
                         raise
@@ -448,6 +455,8 @@ class App:
         except Exception as error:
             with self.lock:
                 if self._download_stop.is_set():
+                    return
+                if isinstance(error, SourceError) and error.code == 'request_cancelled' and (job['status'] != 'running' or job['cancelled']):
                     return
                 job["status"] = "failed"
                 job["error"] = str(error)

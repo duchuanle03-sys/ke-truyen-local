@@ -409,10 +409,10 @@ class SourceService:
             raise SourceError('Không tìm thấy mục lục truyện')
         return book
 
-    def chapter(self, source, url):
+    def chapter(self, source, url, *, background=False, cancelled=None):
         url = self._url(source, url)
         if source == 'stv':
-            return self._stv().chapter(url)
+            return self._stv().chapter(url, background=background, cancelled=cancelled)
         raw = self._load(url)
         root = parse_html(raw)
         if source == 'qq':

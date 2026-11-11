@@ -4,6 +4,8 @@ import random
 import re
 import threading
 import uuid
+from collections import deque
+from contextlib import contextmanager
 from html import escape
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -13,6 +15,7 @@ from stv_http import StvHttp
 
 ORIGIN = 'https://sangtacviet.com'
 _MAX_HTML = 8 * 1024 * 1024
+_MAX_WAITERS = 64
 _PLACEHOLDER = re.compile(r'nhấp\s+vào\s+để\s+tải\s+chương|đang\s+tải\s+(?:nội\s+dung|chương)', re.I)
 
 
@@ -56,28 +59,80 @@ def _ciweimao_comments(root):
 
 
 class StvSource:
-    def __init__(self, http=None):
+    def __init__(self, http=None, metadata_http=None):
         self.http = http if http is not None else StvHttp()
+        self.metadata_http = metadata_http if metadata_http is not None else (http if http is not None else StvHttp())
         self.lock = threading.RLock()
+        self.condition = threading.Condition(self.lock)
+        self._waiting = {False: deque(), True: deque()}
+        self._reading = False
+        self.closed = False
         self.pending = None
         self.tocs = {}
 
     def close(self):
-        if self.pending:
-            self.pending['event'].set()
+        with self.condition:
+            self.closed = True
+            if self.pending:
+                self.pending['event'].set()
+                self.pending = None
+            self.condition.notify_all()
         self.http.close()
+        if self.metadata_http is not self.http:
+            self.metadata_http.close()
+
+    @contextmanager
+    def _reading_turn(self, background=False, cancelled=None):
+        ticket = object()
+        with self.condition:
+            if self.closed:
+                raise SourceError('Nguồn Sáng Tác Việt đã đóng.', code='network_error')
+            if sum(map(len, self._waiting.values())) >= _MAX_WAITERS:
+                raise SourceError('Hàng đợi Sáng Tác Việt đang đầy; hãy thử lại sau.', code='source_busy')
+            waiting = self._waiting[background]
+            waiting.append(ticket)
+            try:
+                while True:
+                    if self.closed:
+                        raise SourceError('Nguồn Sáng Tác Việt đã đóng.', code='network_error')
+                    if cancelled is not None and cancelled():
+                        raise SourceError('Đã dừng yêu cầu đang chờ lượt nguồn.', code='request_cancelled')
+                    if not self._reading and waiting[0] is ticket and (not background or not self._waiting[False]):
+                        self._reading = True
+                        break
+                    self.condition.wait(.1)
+            finally:
+                waiting.remove(ticket)
+                self.condition.notify_all()
+        try:
+            yield
+        finally:
+            with self.condition:
+                self._reading = False
+                self.condition.notify_all()
 
     def _request(self, path, **options):
-        return self.http.request(path, **options)
+        with self.lock:
+            if self.closed:
+                raise SourceError('Nguồn Sáng Tác Việt đã đóng.', code='network_error')
+        channel = self.http if options.get('session') == 'reading' else self.metadata_http
+        result = channel.request(path, **options)
+        with self.lock:
+            if self.closed:
+                raise SourceError('Nguồn Sáng Tác Việt đã đóng.', code='network_error')
+        return result
 
     def _error(self, payload, url=None):
         code = str(payload.get('code', ''))
         if code == '21' and url is not None:
-            if self.pending is None:
-                self.pending = {'id': uuid.uuid4().hex, 'url': url, 'image': None,
-                                'generation': getattr(self.http, 'generation', 0), 'event': threading.Event(), 'verified': False}
-                self.pending['captcha'] = {'source': 'stv', 'id': self.pending['id']}
-            raise SourceCaptchaError(self.pending['id'], self.pending)
+            with self.lock:
+                if self.closed:
+                    raise SourceError('Nguồn Sáng Tác Việt đã đóng.', code='network_error')
+                if self.pending is None:
+                    self.pending = {'id': uuid.uuid4().hex, 'url': url, 'image': None,
+                                    'generation': getattr(self.http, 'generation', 0), 'event': threading.Event(), 'verified': False}
+                    self.pending['captcha'] = {'source': 'stv', 'id': self.pending['id']}
+                raise SourceCaptchaError(self.pending['id'], self.pending)
         evidence = html_to_text(str(payload.get('err', '')))[:400]
         if re.search(r'\bvip\b', evidence, re.I) and re.search(r'chưa\s+(?:mua|mở\s+khóa)|không\s+có\s+quyền|(?:cần|phải|vui\s+lòng|yêu\s+cầu)\s+(?:mua|mở\s+khóa)', evidence, re.I):
             raise SourceAccessError('Chương VIP yêu cầu quyền đọc tại website gốc.', code='vip_locked', vip=True, evidence=evidence)
@@ -100,44 +155,42 @@ class StvSource:
                 'kind': 'text', 'format': 'online'}
 
     def search(self, query, page):
-        with self.lock:
-            fields = {'find': '', 'findinname': query, 'minc': 0, 'tag': '', 'p': page}
-            path = '/io/searchtp/searchBooks?' + urlencode(fields)
-            response = self._request(path, session='metadata')
-            root = _html(response['text'])
-            rows = root.select('a.booksearch')
-            if not rows:
-                if 'Không tìm thấy truyện?' in root.text() or not response['text'].strip():
-                    return {'items': [], 'next': None}
-                raise SourceError('Chưa nhận diện được kết quả tìm kiếm nguồn.', code='parse_error')
-            items, seen = [], set()
-            for row in rows:
-                name, author, tag = row.first('.searchbooktitle'), row.first('.searchbookauthor'), row.first('.searchtag')
-                url = safe_remote_url(row.get('href'), ORIGIN)
-                if not name or not name.text() or not url:
-                    raise SourceError('Kết quả thiếu tên hoặc liên kết truyện.', code='parse_error')
-                parsed = urlsplit(url)
-                if parsed.hostname not in ('sangtacviet.com', 'sangtacviet.vip'):
-                    raise SourceError('Liên kết tìm kiếm không thuộc Sáng Tác Việt.', code='parse_error')
-                url = ORIGIN + parsed.path.rstrip('/') + '/'
-                _parts(url)
-                if url in seen:
-                    continue
-                seen.add(url)
-                image = row.first('img')
-                cover = safe_remote_url(image.get('data-original') or image.get('data-src') or image.get('src'), ORIGIN) if image else ''
-                items.append({'name': name.text(), 'author': author.text() if author else '', 'path': url,
-                              'cover': cover, 'description': tag.text() if tag else ''})
-            # shortcut: observed searchBooks page size is 48; update if the source changes pagination.
-            return {'items': items, 'next': page + 1 if len(rows) >= 48 else None}
+        fields = {'find': '', 'findinname': query, 'minc': 0, 'tag': '', 'p': page}
+        path = '/io/searchtp/searchBooks?' + urlencode(fields)
+        response = self._request(path, session='metadata')
+        root = _html(response['text'])
+        rows = root.select('a.booksearch')
+        if not rows:
+            if 'Không tìm thấy truyện?' in root.text() or not response['text'].strip():
+                return {'items': [], 'next': None}
+            raise SourceError('Chưa nhận diện được kết quả tìm kiếm nguồn.', code='parse_error')
+        items, seen = [], set()
+        for row in rows:
+            name, author, tag = row.first('.searchbooktitle'), row.first('.searchbookauthor'), row.first('.searchtag')
+            url = safe_remote_url(row.get('href'), ORIGIN)
+            if not name or not name.text() or not url:
+                raise SourceError('Kết quả thiếu tên hoặc liên kết truyện.', code='parse_error')
+            parsed = urlsplit(url)
+            if parsed.hostname not in ('sangtacviet.com', 'sangtacviet.vip'):
+                raise SourceError('Liên kết tìm kiếm không thuộc Sáng Tác Việt.', code='parse_error')
+            url = ORIGIN + parsed.path.rstrip('/') + '/'
+            _parts(url)
+            if url in seen:
+                continue
+            seen.add(url)
+            image = row.first('img')
+            cover = safe_remote_url(image.get('data-original') or image.get('data-src') or image.get('src'), ORIGIN) if image else ''
+            items.append({'name': name.text(), 'author': author.text() if author else '', 'path': url,
+                          'cover': cover, 'description': tag.text() if tag else ''})
+        # shortcut: observed searchBooks page size is 48; update if the source changes pagination.
+        return {'items': items, 'next': page + 1 if len(rows) >= 48 else None}
 
     def cover(self, url):
-        with self.lock:
-            _parts(url)
-            book = self._metadata(self._request(url, session='metadata', navigation=True)['text'], url)
-            if not book['cover']:
-                raise SourceError('Trang truyện không cung cấp bìa hợp lệ.', code='parse_error')
-            return {'cover': book['cover'], 'path': url}
+        _parts(url)
+        book = self._metadata(self._request(url, session='metadata', navigation=True)['text'], url)
+        if not book['cover']:
+            raise SourceError('Trang truyện không cung cấp bìa hợp lệ.', code='parse_error')
+        return {'cover': book['cover'], 'path': url}
 
     def _toc(self, host, book):
         url = ORIGIN + '/truyen/' + host + '/1/' + book + '/'
@@ -164,15 +217,16 @@ class StvSource:
             if cid not in seen:
                 seen.add(cid)
                 chapters.append({'index': len(chapters), 'title': title, 'url': url + cid + '/'})
-        self.tocs[(host, book)] = seen
+        ids = frozenset(seen)
+        with self.lock:
+            self.tocs[(host, book)] = ids
         return chapters
 
     def detail(self, url):
-        with self.lock:
-            host, book, _ = _parts(url)
-            result = self._metadata(self._request(url, session='metadata', navigation=True)['text'], url)
-            result['chapters'] = self._toc(host, book)
-            return result
+        host, book, _ = _parts(url)
+        result = self._metadata(self._request(url, session='metadata', navigation=True)['text'], url)
+        result['chapters'] = self._toc(host, book)
+        return result
 
     def _identity(self, payload, host, book, cid, response):
         requested = urlsplit(response.get('request_url') if isinstance(response.get('request_url'), str) else '')
@@ -224,11 +278,12 @@ class StvSource:
             clean = ''.join('<p>' + escape(line) + '</p>' for line in text.splitlines() if line.strip())
         return clean, text
 
-    def chapter(self, url):
-        with self.lock:
+    def chapter(self, url, *, background=False, cancelled=None):
+        with self._reading_turn(background, cancelled):
             host, book, cid = _parts(url, chapter=True)
-            if self.pending is not None:
-                raise SourceCaptchaError(self.pending['id'], self.pending)
+            with self.lock:
+                if self.pending is not None:
+                    raise SourceCaptchaError(self.pending['id'], self.pending)
             if (host, book) not in self.tocs or cid not in self.tocs[(host, book)]:
                 self._toc(host, book)
             if cid not in self.tocs[(host, book)]:
@@ -267,21 +322,22 @@ class StvSource:
                     'language': 'vi', 'translation': 'source'}
 
     def captcha(self, action, challenge_id, answer=None):
-        with self.lock:
-            pending = self.pending
-            if not pending or not isinstance(challenge_id, str):
-                raise SourceError('Yêu cầu CAPTCHA đã hết hiệu lực. Hãy mở lại chương.', code='captcha_expired')
-            # A cancel can already be in flight when refresh rotates the image ID; old IDs cannot verify.
-            if action == 'cancel' and challenge_id in (pending['id'], pending.get('previous_id')):
-                pending['event'].set()
-                self.pending = None
-                return {'cancelled': True}
-            if challenge_id != pending['id']:
-                raise SourceError('Ảnh CAPTCHA đã thay đổi. Hãy dùng ảnh mới.', code='captcha_expired')
-            if getattr(self.http, 'generation', 0) != pending['generation']:
-                pending['event'].set()
-                self.pending = None
-                raise SourceError('Phiên HTTP đã thay đổi; cần mở lại chương.', code='captcha_expired')
+        with self._reading_turn():
+            with self.lock:
+                pending = self.pending
+                if not pending or not isinstance(challenge_id, str):
+                    raise SourceError('Yêu cầu CAPTCHA đã hết hiệu lực. Hãy mở lại chương.', code='captcha_expired')
+                # A cancel can already be in flight when refresh rotates the image ID; old IDs cannot verify.
+                if action == 'cancel' and challenge_id in (pending['id'], pending.get('previous_id')):
+                    pending['event'].set()
+                    self.pending = None
+                    return {'cancelled': True}
+                if challenge_id != pending['id']:
+                    raise SourceError('Ảnh CAPTCHA đã thay đổi. Hãy dùng ảnh mới.', code='captcha_expired')
+                if getattr(self.http, 'generation', 0) != pending['generation']:
+                    pending['event'].set()
+                    self.pending = None
+                    raise SourceError('Phiên HTTP đã thay đổi; cần mở lại chương.', code='captcha_expired')
             if action in ('image', 'refresh'):
                 if action == 'refresh' or pending['image'] is None:
                     response = self._request('/generate_captcha.php?random=' + str(random.random()),
@@ -289,11 +345,14 @@ class StvSource:
                     image = safe_raster_data_url('data:' + response['content_type'] + ';base64,' + response['body_base64'])
                     if not image:
                         raise SourceError('Website trả ảnh CAPTCHA không hợp lệ.', code='parse_error')
-                    if action == 'refresh':
-                        pending['previous_id'] = pending['id']
-                        pending['id'] = uuid.uuid4().hex
-                        pending['captcha']['id'] = pending['id']
-                    pending['image'] = image
+                    with self.lock:
+                        if self.closed:
+                            raise SourceError('Nguồn Sáng Tác Việt đã đóng.', code='network_error')
+                        if action == 'refresh':
+                            pending['previous_id'] = pending['id']
+                            pending['id'] = uuid.uuid4().hex
+                            pending['captcha']['id'] = pending['id']
+                        pending['image'] = image
                 return {'id': pending['id'], 'image': pending['image']}
             if action == 'verify':
                 if not pending['image'] or not isinstance(answer, str) or not 4 <= len(answer.strip()) <= 128 or re.search(r'[\x00-\x1f\x7f]', answer):
@@ -304,8 +363,11 @@ class StvSource:
                     referer=pending['url'], fresh_connection=True, require_session=True)
                 if response['text'].strip() != 'success':
                     raise SourceError('Xác minh CAPTCHA thất bại. Kiểm tra mã hoặc làm mới ảnh rồi thử lại.', code='captcha_failed')
-                pending['verified'] = True
-                pending['event'].set()
-                self.pending = None
+                with self.lock:
+                    if self.closed:
+                        raise SourceError('Nguồn Sáng Tác Việt đã đóng.', code='network_error')
+                    pending['verified'] = True
+                    pending['event'].set()
+                    self.pending = None
                 return {'verified': True}
             raise SourceError('Thao tác CAPTCHA không hợp lệ.')

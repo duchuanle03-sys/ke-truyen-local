@@ -127,11 +127,11 @@ class TrashHTTPTests(unittest.TestCase):
         entered = {key: threading.Event() for key in ('test-only', 'other')}
         release = threading.Event()
         original = app._chapter_content
-        def block(book, index):
+        def block(book, index, **options):
             entered[book['id']].set()
             if not release.wait(3):
                 raise TimeoutError('Test did not release a download')
-            return original(book, index)
+            return original(book, index, **options)
         with patch.object(app, '_chapter_content', side_effect=block):
             one, two = app.download('test-only'), app.download('other')
             try:

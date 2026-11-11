@@ -467,11 +467,13 @@ class Store:
         with self.db() as db:
             return {row[0] for row in db.execute('SELECT book_id FROM download_jobs WHERE ' + _ACTIVE_DOWNLOAD_SQL)}
 
-    def queued_downloads(self, exclude=(), limit=2):
+    def queued_downloads(self, exclude=(), limit=2, exclude_stv=False):
         with self.db() as db:
-            rows = db.execute("SELECT * FROM download_jobs WHERE status='queued' AND id NOT IN (" +
-                              ','.join('?' for _ in exclude) + ') ORDER BY created_at,id LIMIT ?', (*exclude, limit)).fetchall()
-        return [self._download_row(row) for row in rows]
+            rows = db.execute("SELECT j.*,b.source FROM download_jobs j JOIN books b ON b.id=j.book_id "
+                              "WHERE j.status='queued' AND j.id NOT IN (" + ','.join('?' for _ in exclude) + ')' +
+                              (" AND b.source!='stv'" if exclude_stv else '') +
+                              ' ORDER BY j.created_at,j.id LIMIT ?', (*exclude, limit)).fetchall()
+        return [self._download_row(row) | {'source': row['source']} for row in rows]
 
     def recover_downloads(self):
         with self.db() as db:

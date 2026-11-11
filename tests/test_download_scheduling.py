@@ -20,7 +20,7 @@ class SchedulingSource:
             self.verifications[name] = {
                 'captcha': {'source': 'stv', 'id': name}, 'event': threading.Event(), 'verified': False}
 
-    def chapter(self, kind, url):
+    def chapter(self, kind, url, *, background=False, cancelled=None):
         name, index = url.rstrip('/').split('/')[-2:]
         self.calls.append((name, index))
         if name in self.entered and index == '0':
@@ -70,6 +70,22 @@ class DownloadSchedulingTests(unittest.TestCase):
 
     def completed(self, job):
         return self.app.store.download_job(job['id'])['status'] == 'completed'
+
+    def test_second_stv_download_does_not_block_an_independent_source(self):
+        for name in ('a', 'b'):
+            with self.app.store.db() as db:
+                db.execute("UPDATE books SET source='stv' WHERE id=?", (name,))
+        first = self.app.download('a')
+        self.assertTrue(self.source.entered['a'].wait(2))
+        second = self.app.download('b')
+        third = self.app.download('c')
+        try:
+            self.wait_for(lambda: self.completed(third))
+            self.assertEqual(self.app.store.download_job(second['id'])['status'], 'queued')
+            self.assertFalse(self.source.entered['b'].is_set())
+        finally:
+            self.source.release.set()
+        self.wait_for(lambda: self.completed(first) and self.completed(second))
 
     def test_two_paused_jobs_release_workers_for_another_book(self):
         first, second = self.app.download('a'), self.app.download('b')

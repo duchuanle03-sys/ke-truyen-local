@@ -7,10 +7,44 @@ from unittest.mock import patch
 
 from source_errors import SourceError
 from stv_http import StvHttp
+from stv_source import StvSource
 
 
 @unittest.skipUnless(shutil.which('node'), 'Node is required for the STV HTTP transport')
 class StvTransportTests(unittest.TestCase):
+    def test_source_workers_are_lazy_separate_and_reused_without_external_requests(self):
+        source = StvSource()
+        self.addCleanup(source.close)
+        self.assertIsNone(source.http.process)
+        self.assertIsNone(source.metadata_http.process)
+        for lane in ('metadata', 'reading', 'metadata', 'reading'):
+            with self.assertRaises(SourceError) as caught:
+                source._request('/not-a-source-route', session=lane)
+            self.assertEqual(caught.exception.code, 'source_error')
+        self.assertNotEqual(source.http.process.pid, source.metadata_http.process.pid)
+        self.assertEqual((source.http.generation, source.metadata_http.generation), (1, 1))
+
+    def test_existing_readchapter_spacing_is_unchanged(self):
+        script = r'''
+import assert from 'node:assert/strict';
+import {Session} from './stv_http_worker.mjs';
+let now=20000;const delays=[],originalNow=Date.now,originalTimeout=globalThis.setTimeout;
+Date.now=()=>now;globalThis.setTimeout=(fn,ms)=>{delays.push(ms);now+=ms;fn();return 0;};
+try{
+ const reading=new Session(true,async()=>new Response('{"code":0}'));
+ const metadata=new Session(false,async()=>new Response('metadata'));
+ reading.lastRead=now;
+ await reading.request('/index.php?sajax=readchapter',{method:'POST',body:''});
+ await metadata.request('/index.php');
+ await reading.request('/index.php?sajax=readchapter',{method:'POST',body:''});
+ assert.deepEqual(delays,[10000,10000]);
+ assert.equal(reading.lastRead,40000);
+}finally{Date.now=originalNow;globalThis.setTimeout=originalTimeout;}
+'''
+        result = subprocess.run([shutil.which('node'), '--input-type=module', '-e', script], cwd=Path(__file__).resolve().parents[1],
+                                capture_output=True, encoding='utf-8', timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_cookie_order_headers_and_fresh_manual_verification_transport(self):
         script = r'''
 import assert from 'node:assert/strict';
