@@ -90,7 +90,7 @@ class App:
 
     def _schedule_downloads(self):
         with self.lock:
-            if self._download_stop.is_set():
+            if self._download_stop.is_set() or self.store._compacting:
                 return
             self._resume_verified_downloads()
             self._download_futures = {key: future for key, future in self._download_futures.items() if not future.done()}
@@ -167,7 +167,11 @@ class App:
     def _maintain_assets(self):
         try:
             while not self._asset_stop.is_set():
+                if self.store._compacting:
+                    self._asset_stop.wait(.25)
+                    continue
                 try:
+                    chapters = self.store.maintain_chapter_cache()
                     assets = self.store.index_assets(stop=self._asset_stop)
                     search = self.store.index_search(stop=self._asset_stop)
                     inventory = self.store.inventory_assets(stop=self._asset_stop)
@@ -177,7 +181,7 @@ class App:
                         self.store.queue_cache_evictions(stop=self._asset_stop)
                         if self.store.cleanup_files(self._asset_stop):
                             continue
-                    if assets or search or inventory:
+                    if assets or search or inventory or chapters:
                         self._asset_stop.wait(.01)
                         continue
                 except Exception:
@@ -202,14 +206,20 @@ class App:
         wait(tuple(self._download_futures.values()), timeout=1)
         self.qt.close()
 
-    def chapter(self, book_id, index):
+    def chapter(self, book_id, index, reader=None, reader_sequence=0):
         book = self.store.get_book(book_id)
-        chapter = self._chapter_content(book, index)
+        with self.store.use_chapter(book_id, index):
+            chapter = self._chapter_content(book, index)
+            if reader is not None: self.store.reader_chapter(reader, book_id, index, reader_sequence)
         chapter["images"] = ["/api/image?" + urlencode({"url": url, "referer": book["path"]})
                              if url.startswith(("http://", "https://")) else url for url in chapter["images"]]
         return chapter
 
     def _chapter_content(self, book, index, background=False, cancelled=None):
+        with self.store.use_chapter(book['id'], index):
+            return self._load_chapter_content(book, index, background, cancelled)
+
+    def _load_chapter_content(self, book, index, background, cancelled):
         book_id = book['id']
         chapter = self.store.content(book_id, index)
         if not chapter["downloaded"]:
@@ -221,7 +231,11 @@ class App:
             except SourceAccessError as error:
                 self.store.chapter_access(book_id, index, error.access)
                 raise
-            chapter = self.store.save_content(book_id, index, content)
+            chapter = self.store.save_content(book_id, index, content, offline=background, expected_revision=chapter['revision'])
+        elif background:
+            self.store.protect_chapter(book_id, index)
+        else:
+            self.store.touch_chapter(book_id, index)
         return chapter
 
     def add_source(self, source, url):
@@ -761,6 +775,27 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/cache/images/clear' and method == 'POST':
             self._json()
             return self._reply(200, store.clear_image_cache())
+        if path == '/api/cache/chapters' and method == 'GET':
+            return self._reply(200, store.chapter_cache_stats())
+        if path == '/api/cache/chapters' and method == 'POST':
+            return self._reply(200, store.set_chapter_cache_limit(self._json().get('max_chapters')))
+        if path == '/api/cache/chapters/clear' and method == 'POST':
+            self._json()
+            return self._reply(200, store.clear_chapter_cache())
+        if path == '/api/cache/chapters/legacy' and method == 'POST':
+            return self._reply(200, store.reclassify_legacy_chapters(self._json().get('confirmed')))
+        if path == '/api/cache/chapters/compact' and method == 'POST':
+            body = self._json()
+            try:
+                with self.app.lock:
+                    if any(not future.done() for future in self.app._download_futures.values()):
+                        raise ValueError('Tác vụ tải đang hoàn tất chương hiện tại; hãy chờ worker kết thúc rồi thu gọn.')
+                    return self._reply(200, store.compact_database(body.get('confirmed')))
+            finally:
+                self.app._download_wake.set()
+        if path == '/api/readers' and method == 'POST':
+            body = self._json()
+            return self._reply(200, store.reader_chapter(body.get('id'), body.get('book_id'), body.get('index'), body.get('sequence', 0)))
         if path == "/api/capabilities" and method == "GET":
             return self._reply(200, self.app.capabilities())
         if path == "/api/sources" and method == "GET":
@@ -828,7 +863,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) >= 5 and parts[3] == "chapters":
                 index = int(parts[4])
                 if len(parts) == 5 and method == "GET":
-                    return self._reply(200, self.app.chapter(book_id, index))
+                    return self._reply(200, self.app.chapter(book_id, index, self.headers.get('X-Reader-ID'), int(self.headers.get('X-Reader-Seq', '0'))))
                 if len(parts) == 6 and method == "POST":
                     if parts[5] == 'original':
                         self._json()

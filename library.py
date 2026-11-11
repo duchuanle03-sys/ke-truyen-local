@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, urlsplit
 
 from htmltools import parse_html, safe_remote_url
+from chapter_cache import ChapterCache
 
 MAX_JSON = 32 * 1024 * 1024
 MAX_BACKUP = 512 * 1024 * 1024
@@ -81,11 +82,17 @@ def _asset_references(row):
     references.update(('images', hashlib.sha256(url.encode()).hexdigest()) for url in urls)
     return references
 
-class Store:
+class Store(ChapterCache):
     def __init__(self, data_dir):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.data_dir / "library.sqlite3"
+        self._chapter_lock = threading.RLock()
+        self._active_chapters = Counter()
+        self._chapter_readers = {}
+        self._database_gate = threading.RLock()
+        self._database_users = 0
+        self._compacting = False
         self._asset_lock = threading.RLock()
         self._cache_write_lock = threading.RLock()
         # shortcut: in-flight leases cover one server; share leases before supporting multiple servers per library.
@@ -142,6 +149,7 @@ class Store:
         self._init_asset_index()
         self._init_image_cache()
         self._init_search_index()
+        self._init_chapter_cache()
         self._init_shelf_index()
 
     def _init_image_cache(self):
@@ -394,6 +402,18 @@ class Store:
 
     @contextlib.contextmanager
     def db(self):
+        with self._database_gate:
+            if self._compacting:
+                raise ValueError('Đang thu gọn cơ sở dữ liệu; hãy thử lại sau.')
+            self._database_users += 1
+        try:
+            with self._connection() as db:
+                yield db
+        finally:
+            with self._database_gate: self._database_users -= 1
+
+    @contextlib.contextmanager
+    def _connection(self):
         db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
         db.create_function('shelf_fold', 1, str.casefold, deterministic=True)
@@ -594,7 +614,8 @@ class Store:
                 same_url = old and _chapter_key(old['url']) == _chapter_key(url)
                 metadata = json.loads(old['raw']) if same_url else {}
                 metadata.update({key: value for key, value in chapter.items()
-                                 if value is not None or key not in ('language', 'translation', 'is_vip', 'access')})
+                                 if key not in ('html', 'text', 'images', 'original_html', 'original_text')
+                                 and (value is not None or key not in ('language', 'translation', 'is_vip', 'access'))})
                 if chapter.get('is_vip') is False:
                     metadata.pop('access', None)
                 if old and not same_url:
@@ -638,16 +659,24 @@ class Store:
             item.update(translation='source', language='vi')
         return item
 
-    def save_content(self, book_id, index, content):
-        self.content(book_id, index)
-        with self.db() as db:
-            metadata = json.loads(db.execute('SELECT raw FROM chapters WHERE book_id=? AND idx=?', (book_id, index)).fetchone()['raw'])
-            if content.get('translation') == 'source' and content.get('language') == 'vi':
-                metadata.update(translation='source', language='vi')
-            metadata.pop('access', None)
-            db.execute("UPDATE chapters SET html=?,text=?,images=?,downloaded=1,raw=? WHERE book_id=? AND idx=?",
-                       (content.get("html", ""), content.get("text", ""), _json(content.get("images", [])),
-                        _json(metadata), book_id, int(index)))
+    def save_content(self, book_id, index, content, *, offline=False, expected_revision=None):
+        index = int(index)
+        with self._chapter_lock, self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            old = db.execute('SELECT raw,revision,downloaded FROM chapters WHERE book_id=? AND idx=?', (book_id, index)).fetchone()
+            if old is None: raise KeyError('Không tìm thấy chương.')
+            if expected_revision is not None and old['revision'] != expected_revision:
+                if offline and old['downloaded']: self._track_body(db, book_id, index, offline=True)
+                if not old['downloaded']: raise ValueError('Chương đã thay đổi trong lúc tải; hãy mở lại chương.')
+            else:
+                self._track_body(db, book_id, index, offline=offline)
+                metadata = json.loads(old['raw'])
+                if content.get('translation') == 'source' and content.get('language') == 'vi':
+                    metadata.update(translation='source', language='vi')
+                metadata.pop('access', None)
+                db.execute("UPDATE chapters SET html=?,text=?,images=?,downloaded=1,raw=? WHERE book_id=? AND idx=?",
+                           (content.get("html", ""), content.get("text", ""), _json(content.get("images", [])),
+                            _json(metadata), book_id, index))
         return self.content(book_id, index)
 
     def chapter_access(self, book_id, index, access):
@@ -661,10 +690,13 @@ class Store:
             db.execute('UPDATE chapters SET raw=? WHERE book_id=? AND idx=?', (_json(metadata), book_id, index))
 
     def edit_content(self, book_id, index, content):
-        old = self.content(book_id, index)
         if self.get_book(book_id)["kind"] != "text":
             raise ValueError("Chương ảnh không dùng trình sửa văn bản.")
-        with self.db() as db:
+        with self._chapter_lock, self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            old = db.execute('SELECT title,downloaded FROM chapters WHERE book_id=? AND idx=?', (book_id, int(index))).fetchone()
+            if old is None or not old['downloaded']: raise ValueError('Hãy mở lại nội dung chương trước khi chỉnh sửa.')
+            self._track_body(db, book_id, int(index), edited=True)
             db.execute("UPDATE chapters SET original_html=COALESCE(original_html,html),"
                        "original_text=COALESCE(original_text,text),html=?,text=?,title=? "
                        "WHERE book_id=? AND idx=?", (content["html"], content["text"],
@@ -672,8 +704,11 @@ class Store:
         return self.content(book_id, index)
 
     def restore_content(self, book_id, index):
-        self.content(book_id, index)
-        with self.db() as db:
+        with self._chapter_lock, self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT downloaded FROM chapters WHERE book_id=? AND idx=?', (book_id, int(index))).fetchone()
+            if row is None or not row[0]: raise ValueError('Hãy mở lại chương trước khi khôi phục.')
+            self._track_body(db, book_id, int(index), edited=True)
             db.execute("UPDATE chapters SET html=COALESCE(original_html,html),"
                        "text=COALESCE(original_text,text),original_html=NULL,original_text=NULL "
                        "WHERE book_id=? AND idx=?", (book_id, int(index)))

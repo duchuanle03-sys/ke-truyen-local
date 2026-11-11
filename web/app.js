@@ -529,6 +529,50 @@ function renderDictionary(target, book = null) {
   load();
 }
 
+const formatBytes = value => value < 1024 ? `${value} B` : `${(value / 1024 ** (value < 1024 ** 2 ? 1 : 2)).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} ${value < 1024 ** 2 ? 'KiB' : 'MiB'}`;
+
+function chapterCachePanel(initial, problem = '') {
+  const summary = el('dl', { class: 'report' });
+  const status = el('p', { class: 'muted small', role: 'status' });
+  const error = el('p', { class: 'inline-error', role: 'alert', hidden: !problem, text: problem });
+  const limit = el('input', { id: 'chapter-cache-limit', type: 'number', min: 0, max: 100000, step: 1, required: true, value: 100, 'aria-label': 'Số chương giữ trong cache toàn thư viện' });
+  const panel = el('section', { class: 'settings-section', id: 'chapter-cache-settings' }, [el('h2', { text: 'Bộ nhớ đệm nội dung chương' }),
+    el('p', { class: 'muted small', text: 'Một giới hạn chung cho toàn bộ truyện chữ và truyện tranh: mặc định giữ 100 chương có thể tải lại được truy cập gần nhất. Nội dung tải ngoại tuyến chủ động, tệp nhập, bản chỉnh sửa và bản gốc để khôi phục được giữ riêng. Chương đang đọc không bị dọn; phiên đọc mất kết nối quá 5 phút có thể hết bảo vệ. Mở lại chương đã dọn cần mạng và có thể cần CAPTCHA hoặc dịch lại trên STV. Giới hạn cache ảnh được tính riêng.' }),
+    summary, el('label', { class: 'field', text: 'Số chương cache toàn thư viện · 0 = chỉ giữ chương đang dùng' }, [limit]),
+    el('div', { class: 'header-actions' }, [30, 50, 100].map(value => el('button', { class: 'button', text: `${value} chương`, onclick: () => { limit.value = value; } }))), status, error]);
+  function draw(data) {
+    limit.value = data.max_chapters;
+    summary.replaceChildren();
+    for (const [key, label] of [['cache', 'Có thể tải lại'], ['protected', 'Được giữ ngoại tuyến / nhập / chỉnh sửa'], ['legacy', 'Nội dung cũ chưa xác định kiểu tải']]) {
+      summary.append(el('dt', { text: label }), el('dd', { id: 'chapter-cache-' + key, text: `${data[key + '_count'].toLocaleString('vi-VN')} chương · khoảng ${formatBytes(data[key + '_bytes'])}` }));
+    }
+    summary.append(el('dt', { text: 'Tệp SQLite / WAL' }), el('dd', { text: `${formatBytes(data.database_bytes)} / ${formatBytes(data.wal_bytes)}` }),
+      el('dt', { text: 'Trang trống SQLite có thể tái sử dụng' }), el('dd', { text: `${formatBytes(data.reusable_bytes)} · ${data.freelist_count.toLocaleString('vi-VN')} trang` }));
+    status.textContent = `${!data.complete ? 'Đang kiểm kê nội dung cũ theo lô; thống kê chưa đầy đủ. Nội dung chưa kiểm kê vẫn an toàn. ' : ''}${data.clear_until || data.legacy_until || data.cache_count > data.max_chapters ? 'Đang dọn/phân loại nền; chương đang dùng sẽ được kiểm tra lại sau. ' : ''}Dung lượng trên là ước tính nội dung, chưa cộng chỉ mục FTS. Xóa nội dung giải phóng chỗ cho SQLite tái sử dụng; tệp thường không nhỏ đi. Auto-vacuum: ${['NONE', 'FULL', 'INCREMENTAL'][data.auto_vacuum]}.`;
+    panel.querySelector('#chapter-cache-legacy-action').disabled = !data.complete || !data.legacy_count;
+  }
+  async function action(path, body) {
+    panel.inert = true; error.hidden = true;
+    try { draw(await api(path, body)); }
+    catch (problem) { error.textContent = problem.message; error.hidden = false; }
+    finally { panel.inert = false; }
+  }
+  panel.append(el('div', { class: 'note-actions' }, [
+    el('button', { class: 'button', id: 'chapter-cache-save', text: 'Lưu giới hạn chương', onclick: () => { if (limit.reportValidity()) action('/api/cache/chapters', { max_chapters: Number(limit.value) }); } }),
+    el('button', { class: 'button', id: 'chapter-cache-refresh', text: 'Cập nhật cache chương', onclick: () => action('/api/cache/chapters') }),
+    el('button', { class: 'button', id: 'chapter-cache-clear', text: 'Dọn nội dung có thể tải lại', onclick: () => {
+      if (confirm('Dọn cache chương có thể tải lại? Giữ nguyên tên, mục lục, tiến độ và ghi chú. Nội dung ngoại tuyến, tệp nhập, bản sửa và nội dung cũ chưa phân loại được giữ.')) action('/api/cache/chapters/clear', {});
+    } }),
+    el('button', { class: 'button', id: 'chapter-cache-legacy-action', text: 'Cho phép dọn nội dung cũ chưa phân loại…', onclick: () => {
+      if (confirm('CẢNH BÁO: không biết các chương cũ này đã được tải ngoại tuyến hay chỉ đọc thông thường. Đây có thể là bản ngoại tuyến duy nhất; website có thể đã mất nội dung. Phân loại lại sẽ cho phép LRU xóa chúng, và mở lại cần mạng/CAPTCHA/dịch. Tệp nhập, bản sửa và nội dung đã xác nhận ngoại tuyến vẫn an toàn. Bạn có chấp nhận rủi ro này?')) action('/api/cache/chapters/legacy', { confirmed: true });
+    } }),
+    el('button', { class: 'button', id: 'chapter-cache-compact', text: 'Thu gọn tệp SQLite…', onclick: () => {
+      if (confirm('Đóng mọi trình đọc và tạm dừng các tác vụ tải trước. Thu gọn có thể mất nhiều thời gian, tạm khóa thao tác thư viện và cần khoảng hai lần dung lượng SQLite cộng 128 MiB trống. Giữ máy chủ chạy đến khi hoàn tất. Chỉ thực hiện khi cần thu nhỏ tệp; không bắt buộc để SQLite tái sử dụng chỗ trống. Tiếp tục?')) action('/api/cache/chapters/compact', { confirmed: true });
+    } })]));
+  if (initial) draw(initial);
+  return panel;
+}
+
 function imageCachePanel(initial, problem = '') {
   const summary = el('dl', { class: 'report' });
   const status = el('p', { class: 'muted small', role: 'status' });
@@ -537,12 +581,11 @@ function imageCachePanel(initial, problem = '') {
   const panel = el('section', { class: 'settings-section', id: 'image-cache-settings' }, [el('h2', { text: 'Bộ nhớ đệm ảnh' }),
     el('p', { class: 'muted small', text: 'Giới hạn áp dụng cho ảnh có thể tải lại; ảnh tải ngoại tuyến chủ động và ảnh trong file nhập được giữ riêng. Ảnh cũ chưa xác định được kiểu tải cũng được giữ an toàn. Dọn cache có thể làm ảnh đã xem cần mạng để tải lại.' }), summary,
     el('label', { class: 'field', text: 'Giới hạn cache ảnh (MiB) · 0 = không lưu ảnh tạm mới' }, [limit]), status, error]);
-  const bytes = value => value < 1024 ? `${value} B` : `${(value / 1024 ** (value < 1024 ** 2 ? 1 : 2)).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} ${value < 1024 ** 2 ? 'KiB' : 'MiB'}`;
   function draw(data) {
     limit.value = data.max_bytes / 1024 ** 2;
     summary.replaceChildren();
     for (const [key, label] of [['total_bytes', 'Tổng ảnh đã theo dõi'], ['cache_bytes', 'Cache có thể dọn'], ['protected_bytes', 'Ảnh được giữ an toàn'], ['legacy_bytes', 'Trong đó: ảnh cũ chưa phân loại']]) {
-      summary.append(el('dt', { text: label }), el('dd', { id: 'image-cache-' + key, text: bytes(data[key]) }));
+      summary.append(el('dt', { text: label }), el('dd', { id: 'image-cache-' + key, text: formatBytes(data[key]) }));
     }
     status.textContent = `${data.entries.toLocaleString('vi-VN')} ảnh đã theo dõi. ${!data.inventory_complete ? 'Đang kiểm kê ảnh cũ; thống kê chưa đầy đủ. ' : ''}${data.clearing || data.pending_bytes || data.cache_bytes > data.max_bytes ? 'Đang dọn nền; ảnh đang dùng hoặc tệp chưa xóa được sẽ thử lại. Bấm cập nhật để xem kết quả.' : ''}`;
   }
@@ -563,7 +606,7 @@ function imageCachePanel(initial, problem = '') {
 async function renderSettings(jobsOffset = 0) {
   jobsOffset = Number.isInteger(jobsOffset) ? Math.max(0, jobsOffset) : 0;
   const target = $('settings-page'); target.replaceChildren(el('p', { text: 'Đang kiểm tra công cụ…' }));
-  const results = await Promise.allSettled([api('/api/capabilities'), api(`/api/jobs?offset=${jobsOffset}`), api('/api/cache/images')]);
+  const results = await Promise.allSettled([api('/api/capabilities'), api(`/api/jobs?offset=${jobsOffset}`), api('/api/cache/images'), api('/api/cache/chapters')]);
   const capabilities = el('section', { class: 'settings-section' }, [el('h2', { text: 'Khả năng trên máy này' }), el('p', { class: 'muted', text: 'Chỉ công cụ phát hiện được mới được ghi nhận sẵn sàng. Giọng đọc được kiểm tra trong trình đọc.' })]);
   if (results[0].status === 'fulfilled') {
     const data = results[0].value;
@@ -608,7 +651,7 @@ async function renderSettings(jobsOffset = 0) {
     if (results[1].value.next_offset != null) pages.append(el('button', { class: 'button', text: 'Tác vụ tiếp', onclick: () => renderSettings(results[1].value.next_offset) }));
     jobs.append(pages);
   } else jobs.append(el('p', { class: 'inline-error', text: results[1].reason.message }));
-  target.replaceChildren(capabilities, imageCachePanel(results[2].status === 'fulfilled' ? results[2].value : null, results[2].reason?.message), jobs, el('section', { class: 'settings-section' }, [el('h2', { text: 'Dữ liệu thư viện' }), el('p', { class: 'muted', text: 'Thư viện, nội dung và cài đặt mới nằm riêng trong reader-local/user-data. Nhập backup giữ nguyên bộ xuất gốc. Đóng ứng dụng trước khi sao chép thư mục dữ liệu để lưu dự phòng.' }), el('div', { class: 'header-actions' }, [el('button', { class: 'button', text: 'Nhập thư viện hiện có', onclick: importBackup }), el('button', { class: 'button', text: 'Tất cả ghi chú đã lưu', onclick: globalNotesDialog })])]));
+  target.replaceChildren(capabilities, chapterCachePanel(results[3].status === 'fulfilled' ? results[3].value : null, results[3].reason?.message), imageCachePanel(results[2].status === 'fulfilled' ? results[2].value : null, results[2].reason?.message), jobs, el('section', { class: 'settings-section' }, [el('h2', { text: 'Dữ liệu thư viện' }), el('p', { class: 'muted', text: 'Thư viện, nội dung và cài đặt mới nằm riêng trong reader-local/user-data. Nhập backup giữ nguyên bộ xuất gốc. Đóng ứng dụng trước khi sao chép thư mục dữ liệu để lưu dự phòng.' }), el('div', { class: 'header-actions' }, [el('button', { class: 'button', text: 'Nhập thư viện hiện có', onclick: importBackup }), el('button', { class: 'button', text: 'Tất cả ghi chú đã lưu', onclick: globalNotesDialog })])]));
 }
 
 async function globalNotesDialog() {

@@ -13,6 +13,16 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   let lastReadable = null, savedReading = null;
   let voices = [], speechChunks = [], speechIndex = 0, speaking = false, paused = false, speechGeneration = 0, sleepTimer, sleepDeadline = 0, voiceSelect = null, speechStatus = null;
   let wakeLock = null;
+  const readerId = crypto.randomUUID();
+  let activeChapter = null;
+  function readingLease(release = false) {
+    const entry = activeChapter;
+    if (!entry && !release) return;
+    fetch('/api/readers', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: readerId, book_id: release ? null : entry.id, index: entry?.index, sequence: release ? generation : entry.sequence }), keepalive: true }).catch(() => {});
+    if (release) activeChapter = null;
+  }
+  setInterval(() => readingLease(), 30000);
   const synth = window.speechSynthesis;
   const button = (text, action, primary = false) => el('button', { class: `button${primary ? ' primary' : ''}`, text, onclick: action });
   const icon = (text, title, action, extra = '') => el('button', { class: `icon-button ${extra}`, text, title, 'aria-label': title, onclick: action });
@@ -199,6 +209,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
 
   async function close() {
     generation++;
+    readingLease(true);
     await saveProgress();
     stopSpeech(); stopAutoScroll();
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
@@ -231,8 +242,9 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     await saved;
     if (token !== generation) return;
     try {
-      const result = await api(path(`/chapters/${index}`));
+      const result = await api(path(`/chapters/${index}`), undefined, { headers: { 'X-Reader-ID': readerId, 'X-Reader-Seq': String(token) } });
       if (token !== generation) return;
+      activeChapter = { id: book.id, index, sequence: token };
       chapter = result; lastReadingPosition = clamp(pos, 0, 1);
       Object.assign(chapters[index], { title: result.title || chapters[index].title, downloaded: true });
       tocEntries[index] = tocEntry(chapters[index], index);
@@ -879,11 +891,16 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     try { await renderChapter(pos); }
     catch (error) { notify(`Đã lưu từ điển nhưng chưa cập nhật được chương: ${error.message}`, true); }
   });
-  window.addEventListener('pagehide', () => {
+  window.addEventListener('pagehide', (event) => {
+    generation++;
+    if (!event.persisted) readingLease(true);
     const entry = record();
     if (entry) fetch(`/api/books/${encodeURIComponent(entry.id)}/progress`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index: entry.index, position: entry.position }), keepalive: true }).catch(() => {});
     stopSpeech();
   });
-  document.addEventListener('visibilitychange', () => { if (document.hidden && book) saveProgress(true); });
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted && activeChapter) { activeChapter.sequence = ++generation; readingLease(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && book) saveProgress(true); readingLease(); });
   return { open, close };
 }

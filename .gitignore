@@ -9,6 +9,7 @@
 !htmltools.py
 !legacy_formats.py
 !library.py
+!chapter_cache.py
 !pdfocr.py
 !qt.py
 !qt_pack.py
