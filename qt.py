@@ -7,6 +7,8 @@ grammar, not a claim of compatibility with other QT rule engines.
 """
 
 from collections import OrderedDict
+from contextlib import closing, contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -115,15 +117,44 @@ def _join(tokens):
     return ''.join(result)
 
 
+@dataclass(frozen=True)
+class _ScopeSnapshot:
+    tries: dict
+    rules: dict
+    installed: bool
+    generation: int
+
+
+def _copy_path(root, word, meaning):
+    parents, node = [], root
+    for char in word:
+        parents.append((node, char))
+        node = node.get(char, {})
+    copied = dict(node)
+    if meaning is None: copied.pop(None, None)
+    else: copied[None] = meaning.split('¦', 1)[0].strip()
+    for parent, char in reversed(parents):
+        updated = dict(parent)
+        if copied: updated[char] = copied
+        else: updated.pop(char, None)
+        copied = updated
+    return copied
+
+
 class QtDictionary:
     def __init__(self, data_dir):
         directory = Path(data_dir)
         directory.mkdir(parents=True, exist_ok=True)
         self.path = directory / 'qt.sqlite3'
         self._lock = threading.RLock()
+        self._write_lock = threading.RLock()
+        # Owners serialize all shared-connection use; warm snapshots never wait for this mutex.
+        self._db_guard = threading.Lock()
+        self._closed = False
         self._db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.create_function('casefold', 1, str.casefold, deterministic=True)
+        self._db.execute('PRAGMA journal_mode=WAL')
         self._db.executescript('''
             CREATE TABLE IF NOT EXISTS entries (
                 kind TEXT NOT NULL, word TEXT NOT NULL, meaning TEXT NOT NULL,
@@ -134,16 +165,105 @@ class QtDictionary:
         ''')
         self._db.commit()
         self._cache = OrderedDict()
-        self._version = self._db.execute('PRAGMA data_version').fetchone()[0]
+        self._retired = []
+        self._scope_generations = {}
+        self._external_version = self._db.execute('PRAGMA data_version').fetchone()[0]
 
     def close(self):
+        with self._write_lock:
+            with self._lock:
+                if self._closed: return
+                self._closed = True
+                self._retired.append(self._cache)
+                self._cache = OrderedDict()
+            with self._db_guard: self._db.close()
+        self._reap()
+
+    @contextmanager
+    def _reader(self):
         with self._lock:
-            self._db.close()
+            if self._closed: raise QtError('Từ điển QT đã đóng.')
+        with closing(sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)) as db:
+            db.row_factory = sqlite3.Row
+            db.create_function('casefold', 1, str.casefold, deterministic=True)
+            db.execute('BEGIN')
+            yield db
+
+    def _check_external_changes(self):
+        if self._closed: raise QtError('Từ điển QT đã đóng.')
+        if not self._db_guard.acquire(blocking=False): return
+        try: current = self._db.execute('PRAGMA data_version').fetchone()[0]
+        finally: self._db_guard.release()
+        if current != self._external_version:
+            self._retired.append(self._cache)
+            self._cache = OrderedDict()
+            for scope in self._scope_generations: self._scope_generations[scope] += 1
+            self._external_version = current
+
+    def _reap(self):
+        with self._lock: retired, self._retired = self._retired, []
+        retired.clear()
+
+    def _publish(self, scope, snapshot, expected):
+        with self._lock:
+            self._check_external_changes()
+            if (self._scope_generations.get(scope, 0), self._external_version) != expected: return False
+            self._retired.append(self._cache.get(scope))
+            self._cache[scope] = snapshot
+            self._cache.move_to_end(scope)
+            while len(self._cache) > 9:
+                oldest = next(key for key in self._cache if key != '*')
+                self._retired.append(self._cache.pop(oldest))
+            return True
+
+    def _build_rules(self, db, scope):
+        rules = {}
+        for item in db.execute("SELECT word,meaning FROM entries WHERE kind='rules' AND scope=?", (scope,)):
+            first = item['word'][0] if not item['word'].startswith('{') else ''
+            rules.setdefault(first, []).append((_compile_rule(item['word'], item['meaning']), item['meaning']))
+        return {first: tuple(items) for first, items in rules.items()}
+
+    def _build_scope(self, scope, generation):
+        tries = {}
+        with self._reader() as db:
+            rules = self._build_rules(db, scope)
+            for kind in KINDS[:-1]:
+                trie = {}
+                for item in db.execute('SELECT word,meaning FROM entries WHERE kind=? AND scope=?', (kind, scope)):
+                    node = trie
+                    for char in item['word']: node = node.setdefault(char, {})
+                    node[None] = item['meaning'].split('¦', 1)[0].strip()
+                tries[kind] = trie
+        return _ScopeSnapshot(tries, rules, bool(rules or any(tries.values())), generation)
+
+    def _changed(self, scope, kind=None, word=None, meaning=None):
+        with self._lock:
+            self._check_external_changes()
+            generation = self._scope_generations.get(scope, 0) + 1
+            self._scope_generations[scope] = generation
+            expected = generation, self._external_version
+            old = self._cache.get(scope)
+        if old is None and kind is not None: return
+        try:
+            if kind and kind != 'rules':
+                tries = dict(old.tries)
+                tries[kind] = _copy_path(tries[kind], word, meaning)
+                snapshot = _ScopeSnapshot(tries, old.rules, bool(old.rules or any(tries.values())), generation)
+            elif kind == 'rules':
+                with self._reader() as db: rules = self._build_rules(db, scope)
+                snapshot = _ScopeSnapshot(old.tries, rules, bool(rules or any(old.tries.values())), generation)
+            else:
+                snapshot = self._build_scope(scope, generation)
+            self._publish(scope, snapshot, expected)
+        except BaseException:
+            with self._lock:
+                self._retired.append(self._cache.pop(scope, None))
+            raise
 
     def status(self):
-        with self._lock:
-            counts = [dict(row) for row in self._db.execute('SELECT kind,scope,count(*) AS count FROM entries GROUP BY kind,scope')]
-            return {'installed': bool(counts), 'counts': counts, 'backups': self._db.execute('SELECT count(*) FROM backups').fetchone()[0],
+        with self._reader() as db:
+            counts = [dict(row) for row in db.execute('SELECT kind,scope,count(*) AS count FROM entries GROUP BY kind,scope')]
+            return {'installed': bool(counts), 'counts': counts, 'backups': db.execute('SELECT count(*) FROM backups').fetchone()[0],
                     'precedence': 'book > global; name > vietphrase > pronouns > hanviet; longest within each tier; rules first',
                     'rule_grammar': '{n}, {n1}..{n8}: Arabic number; {word}, {word1}..{word8}: 1..32 Han characters; between fields require a delimiter outside the preceding field alphabet; replacement {lookup:word} looks up dictionary',
                     'bundled_data': False, 'traditional_conversion': False}
@@ -152,16 +272,20 @@ class QtDictionary:
         kind, scope = _kind(kind), _scope(scope)
         if not isinstance(query, str) or len(query) > 8192:
             raise QtError('Chuỗi tìm kiếm không hợp lệ.')
-        with self._lock:
-            rows = self._db.execute('SELECT kind,word,meaning,scope FROM entries WHERE kind=? AND scope=? ORDER BY word', (kind, scope))
+        with self._reader() as db:
+            rows = db.execute('SELECT kind,word,meaning,scope FROM entries WHERE kind=? AND scope=? ORDER BY word', (kind, scope))
             needle = query.casefold()
             return [dict(row) for row in rows if not needle or needle in row['word'].casefold() or needle in row['meaning'].casefold()]
 
     def save(self, kind, word, meaning, scope='*'):
         item = _entry(kind, word, meaning, scope)
-        with self._lock, self._db:
-            self._db.execute('INSERT INTO entries(kind,word,meaning,scope) VALUES(:kind,:word,:meaning,:scope) ON CONFLICT(kind,scope,word) DO UPDATE SET meaning=excluded.meaning', item)
-            self._cache.clear()
+        try:
+            with self._write_lock:
+                with self._lock: self._check_external_changes()
+                with self._db_guard, self._db:
+                    self._db.execute('INSERT INTO entries(kind,word,meaning,scope) VALUES(:kind,:word,:meaning,:scope) ON CONFLICT(kind,scope,word) DO UPDATE SET meaning=excluded.meaning', item)
+                self._changed(item['scope'], item['kind'], item['word'], item['meaning'])
+        finally: self._reap()
         return item
 
     def page(self, kind='name', scope='*', query='', offset=0, limit=100):
@@ -174,57 +298,47 @@ class QtDictionary:
         if query:
             where += ' AND (instr(casefold(word),?)>0 OR instr(casefold(meaning),?)>0)'
             params += [query.casefold(), query.casefold()]
-        with self._lock:
-            total = self._db.execute('SELECT count(*) FROM entries WHERE ' + where, params).fetchone()[0]
-            items = [dict(row) for row in self._db.execute(
+        with self._reader() as db:
+            total = db.execute('SELECT count(*) FROM entries WHERE ' + where, params).fetchone()[0]
+            items = [dict(row) for row in db.execute(
                 'SELECT kind,word,meaning,scope FROM entries WHERE ' + where + ' ORDER BY word LIMIT ? OFFSET ?',
                 params + [limit, offset])]
         return {'items': items, 'total': total, 'offset': offset, 'limit': limit}
 
     def delete(self, kind, word, scope='*'):
-        with self._lock, self._db:
-            count = self._db.execute('DELETE FROM entries WHERE kind=? AND scope=? AND word=?', (_kind(kind), _scope(scope), word)).rowcount
-            self._cache.clear()
+        kind, scope = _kind(kind), _scope(scope)
+        try:
+            with self._write_lock:
+                with self._lock: self._check_external_changes()
+                with self._db_guard, self._db:
+                    count = self._db.execute('DELETE FROM entries WHERE kind=? AND scope=? AND word=?', (kind, scope, word)).rowcount
+                self._changed(scope, kind, word)
             return {'deleted': count}
+        finally: self._reap()
 
     def _compiled(self, book_id):
         book_id = book_id or '*'
-        with self._lock:
-            version = self._db.execute('PRAGMA data_version').fetchone()[0]
-            if version != self._version:
-                self._cache.clear()
-                self._version = version
-            if book_id in self._cache:
-                self._cache.move_to_end(book_id)
-                return self._cache[book_id]
-            tries, rules = [], []
-            scope_rules = {}
-            for item in self._db.execute('SELECT word,meaning FROM entries WHERE kind=? AND scope=?', ('rules', book_id)):
-                first = item['word'][0] if not item['word'].startswith('{') else ''
-                scope_rules.setdefault(first, []).append((_compile_rule(item['word'], item['meaning']), item['meaning']))
-            rules.append(scope_rules)
-            for kind in KINDS[:-1]:
-                trie = {}
-                for item in self._db.execute('SELECT word,meaning FROM entries WHERE kind=? AND scope=?', (kind, book_id)):
-                    node = trie
-                    for char in item['word']:
-                        node = node.setdefault(char, {})
-                    node[None] = item['meaning'].split('¦', 1)[0].strip()
-                if trie:
-                    tries.append(trie)
-            installed = bool(tries or scope_rules)
-            if book_id != '*':
-                # Share the full vocabulary across readers; only book-specific overrides need separate tries.
-                shared_tries, shared_rules, shared_installed = self._compiled('*')
-                tries += shared_tries
-                rules += shared_rules
-                installed = installed or shared_installed
-            compiled = (tries, rules, installed)
-            self._cache[book_id] = compiled
-            if len(self._cache) > 8:
-                self._cache.move_to_end('*')
-                self._cache.popitem(last=False)
-            return compiled
+        scopes = (book_id, '*') if book_id != '*' else ('*',)
+        try:
+            for _ in range(4):
+                with self._lock:
+                    self._check_external_changes()
+                    if all(scope in self._cache for scope in scopes):
+                        snapshots = tuple(self._cache[scope] for scope in scopes)
+                        for scope in scopes: self._cache.move_to_end(scope)
+                        return (tuple(s.tries[kind] for s in snapshots for kind in KINDS[:-1] if s.tries[kind]),
+                                tuple(s.rules for s in snapshots), any(s.installed for s in snapshots))
+                with self._write_lock:
+                    for scope in scopes:
+                        with self._lock:
+                            self._check_external_changes()
+                            if scope in self._cache: continue
+                            generation = self._scope_generations.setdefault(scope, 0)
+                            expected = generation, self._external_version
+                        snapshot = self._build_scope(scope, generation)
+                        if not self._publish(scope, snapshot, expected): break
+            raise QtError('Từ điển đang được thay đổi liên tục; hãy thử dịch lại.')
+        finally: self._reap()
 
     @staticmethod
     def _lookup(text, tries):
@@ -253,7 +367,7 @@ class QtDictionary:
         while index < len(text):
             chosen = None
             for scope_rules in rules:
-                for regex, replacement in scope_rules.get(text[index], []) + scope_rules.get('', []):
+                for regex, replacement in scope_rules.get(text[index], ()) + scope_rules.get('', ()):
                     match = regex.match(text, index)
                     if match and (chosen is None or match.end() > chosen[0]):
                         chosen = (match.end(), self._replacement(match, replacement, tries))
@@ -331,22 +445,27 @@ class QtDictionary:
             if not items and not report['errors']:
                 report['errors'].append({'line': 0, 'error': 'Không thay thế bằng tệp rỗng; dùng thao tác xóa rõ ràng.'})
             return report
-        with self._lock, self._db:
-            old = self.list(kind, scope)
-            existing = {item['word'] for item in old}
-            if mode == 'replace':
-                cursor = self._db.execute('INSERT INTO backups(created,kind,scope,entries) VALUES(?,?,?,?)', (datetime.now(timezone.utc).isoformat(), kind, scope, json.dumps(old, ensure_ascii=False)))
-                report['backup_id'] = cursor.lastrowid
-                self._db.execute('DELETE FROM entries WHERE kind=? AND scope=?', (kind, scope))
-                existing = set()
-            for word, item in items.items():
-                if word in existing and mode == 'missing':
-                    report['skipped'] += 1
-                    continue
-                report['updated' if word in existing else 'inserted'] += 1
-                self._db.execute('INSERT INTO entries(kind,word,meaning,scope) VALUES(:kind,:word,:meaning,:scope) ON CONFLICT(kind,scope,word) DO UPDATE SET meaning=excluded.meaning', item)
-            self._cache.clear()
-            report['applied'] = True
+        try:
+            with self._write_lock:
+                with self._lock: self._check_external_changes()
+                with self._db_guard, self._db:
+                    self._db.execute('BEGIN IMMEDIATE')
+                    old = [dict(row) for row in self._db.execute('SELECT kind,word,meaning,scope FROM entries WHERE kind=? AND scope=? ORDER BY word', (kind, scope))]
+                    existing = {item['word'] for item in old}
+                    if mode == 'replace':
+                        cursor = self._db.execute('INSERT INTO backups(created,kind,scope,entries) VALUES(?,?,?,?)', (datetime.now(timezone.utc).isoformat(), kind, scope, json.dumps(old, ensure_ascii=False)))
+                        report['backup_id'] = cursor.lastrowid
+                        self._db.execute('DELETE FROM entries WHERE kind=? AND scope=?', (kind, scope))
+                        existing = set()
+                    for word, item in items.items():
+                        if word in existing and mode == 'missing':
+                            report['skipped'] += 1
+                            continue
+                        report['updated' if word in existing else 'inserted'] += 1
+                        self._db.execute('INSERT INTO entries(kind,word,meaning,scope) VALUES(:kind,:word,:meaning,:scope) ON CONFLICT(kind,scope,word) DO UPDATE SET meaning=excluded.meaning', item)
+                self._changed(scope)
+                report['applied'] = True
+        finally: self._reap()
         return report
 
     def export_text(self, kind, scope='*'):
@@ -355,14 +474,18 @@ class QtDictionary:
         return '\n'.join([header] + [item['word'] + '=' + item['meaning'] for item in self.list(kind, scope)]) + '\n'
 
     def restore_backup(self, backup_id):
-        with self._lock, self._db:
-            row = self._db.execute('SELECT * FROM backups WHERE id=?', (backup_id,)).fetchone()
-            if row is None:
-                raise QtError('Không tìm thấy bản sao từ điển.')
-            items = [_entry(**item) for item in json.loads(row['entries'])]
-            current = self.list(row['kind'], row['scope'])
-            self._db.execute('INSERT INTO backups(created,kind,scope,entries) VALUES(?,?,?,?)', (datetime.now(timezone.utc).isoformat(), row['kind'], row['scope'], json.dumps(current, ensure_ascii=False)))
-            self._db.execute('DELETE FROM entries WHERE kind=? AND scope=?', (row['kind'], row['scope']))
-            self._db.executemany('INSERT INTO entries(kind,word,meaning,scope) VALUES(:kind,:word,:meaning,:scope)', items)
-            self._cache.clear()
+        try:
+            with self._write_lock:
+                with self._lock: self._check_external_changes()
+                with self._db_guard, self._db:
+                    self._db.execute('BEGIN IMMEDIATE')
+                    row = self._db.execute('SELECT * FROM backups WHERE id=?', (backup_id,)).fetchone()
+                    if row is None: raise QtError('Không tìm thấy bản sao từ điển.')
+                    items = [_entry(**item) for item in json.loads(row['entries'])]
+                    current = [dict(item) for item in self._db.execute('SELECT kind,word,meaning,scope FROM entries WHERE kind=? AND scope=?', (row['kind'], row['scope']))]
+                    self._db.execute('INSERT INTO backups(created,kind,scope,entries) VALUES(?,?,?,?)', (datetime.now(timezone.utc).isoformat(), row['kind'], row['scope'], json.dumps(current, ensure_ascii=False)))
+                    self._db.execute('DELETE FROM entries WHERE kind=? AND scope=?', (row['kind'], row['scope']))
+                    self._db.executemany('INSERT INTO entries(kind,word,meaning,scope) VALUES(:kind,:word,:meaning,:scope)', items)
+                self._changed(row['scope'])
             return {'restored': len(items), 'kind': row['kind'], 'scope': row['scope']}
+        finally: self._reap()
