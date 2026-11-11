@@ -21,7 +21,7 @@ import documents
 import legacy_formats
 import pdfocr
 from htmltools import html_to_text, sanitize_html, safe_raster_data_url
-from library import Store
+from library import Store, image_urls
 from qt import QtDictionary
 from sources import SourceService, validate_public_url, safe_fetch_bytes
 from source_errors import SourceError, SourceAccessError, SourceCaptchaError
@@ -162,16 +162,16 @@ class App:
                 try:
                     assets = self.store.index_assets(stop=self._asset_stop)
                     search = self.store.index_search(stop=self._asset_stop)
-                    if assets or search:
-                        self._asset_stop.wait(.01)
-                        continue
+                    inventory = self.store.inventory_assets(stop=self._asset_stop)
                     if self._asset_stop.is_set():
                         break
                     if self.store.asset_index_ready():
-                        if self.store.inventory_assets(stop=self._asset_stop):
-                            continue
+                        self.store.queue_cache_evictions(stop=self._asset_stop)
                         if self.store.cleanup_files(self._asset_stop):
                             continue
+                    if assets or search or inventory:
+                        self._asset_stop.wait(.01)
+                        continue
                 except Exception:
                     logging.exception('Cannot maintain asset index; will retry.')
                 self._asset_stop.wait(.25)
@@ -282,14 +282,19 @@ class App:
             removed = set(self.store.purge_expired(skip_ids=active))
             self.jobs = {key: job for key, job in self.jobs.items() if job['book_id'] not in removed}
 
-    def image(self, url, referer=""):
+    def image(self, url, referer="", offline_owner=None):
         url = validate_public_url(url, resolve=False)
         key = hashlib.sha256(url.encode()).hexdigest()
         path = self.image_dir / key
         with self.store.use_asset(path):
             if path.exists():
                 body = path.read_bytes()
+                self.store.touch_image(path, len(body))
+                if offline_owner is not None:
+                    self.store.pin_image(path, *offline_owner)
             else:
+                if offline_owner is not None:
+                    self.store.pin_image(path, *offline_owner)
                 if referer:
                     referer = validate_public_url(referer, resolve=False)
                 try:
@@ -305,10 +310,20 @@ class App:
                 content_type = image_type(body)
                 if content_type == "application/octet-stream":
                     raise ValueError("Nguồn trả về dữ liệu không phải ảnh được hỗ trợ.")
-                temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
-                self.store.queue_assets((path, temporary))
-                temporary.write_bytes(body)
-                temporary.replace(path)
+                try:
+                    with self.store.cache_image_write(path, len(body)) as admitted:
+                        if admitted:
+                            temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
+                            self.store.queue_assets((path, temporary))
+                            try:
+                                temporary.write_bytes(body)
+                                temporary.replace(path)
+                            finally:
+                                temporary.unlink(missing_ok=True)
+                except OSError:
+                    if offline_owner is not None:
+                        raise
+                    logging.warning('Image could not be cached; serving the fetched response.', exc_info=True)
         return body, image_type(body)
 
     def cover(self, book_id):
@@ -400,11 +415,10 @@ class App:
                                    error=str(error), captcha=error.captcha)
                     # Keep the HTTP verification context, not an occupied download thread.
                     return
-                for url in raw["images"]:
+                for url in image_urls(raw["images"], (raw['html'], raw.get('original_html')), book['path']):
                     if self._download_stop.is_set():
                         return
-                    if url.startswith(("http://", "https://")):
-                        self.image(url, book["path"])
+                    self.image(url, book["path"], offline_owner=(book['id'], index))
                 with self.lock:
                     if self._download_stop.is_set():
                         return
@@ -673,6 +687,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(200, store.groups())
         if path == "/api/settings":
             return self._reply(200, store.settings(self._json() if method == "POST" else None))
+        if path == '/api/cache/images' and method == 'GET':
+            return self._reply(200, store.image_cache_stats())
+        if path == '/api/cache/images' and method == 'POST':
+            return self._reply(200, store.set_image_cache_limit(self._json().get('max_bytes')))
+        if path == '/api/cache/images/clear' and method == 'POST':
+            self._json()
+            return self._reply(200, store.clear_image_cache())
         if path == "/api/capabilities" and method == "GET":
             return self._reply(200, self.app.capabilities())
         if path == "/api/sources" and method == "GET":

@@ -44,6 +44,27 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(body)['items'], [])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
 
+    def test_image_cache_api_validates_budget_preserves_origin_guard_and_consumes_clear_body(self):
+        status, body, _ = self.request('/api/cache/images')
+        stats = json.loads(body)
+        self.assertEqual((status, stats['max_bytes'], stats['total_bytes']), (200, 1024 ** 3, 0))
+        self.assertEqual(self.request('/api/cache/images', {'max_bytes': 0})[0], 200)
+        for value in (-1, True, 1.5, '10', 65 * 1024 ** 3):
+            self.assertEqual(self.request('/api/cache/images', {'max_bytes': value})[0], 400)
+        self.assertEqual(self.request('/api/cache/images/clear', {}, {'Origin': 'https://other.example'})[0], 403)
+        import http.client
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_address[1], timeout=5)
+        try:
+            connection.request('POST', '/api/cache/images/clear', '{}', {'Content-Type': 'application/json'})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            connection.request('GET', '/api/cache/images')
+            response = connection.getresponse()
+            self.assertEqual((response.status, json.loads(response.read())['max_bytes']), (200, 0))
+        finally:
+            connection.close()
+
     def test_books_api_pages_all_filters_and_validates_page_arguments(self):
         with self.server.app.store.db() as db:
             db.executemany('INSERT INTO books(id,name,source,groups_json,added_at,updated_at) VALUES(?,?,?,?,?,?)',

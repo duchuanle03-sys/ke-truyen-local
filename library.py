@@ -45,35 +45,40 @@ def _chapter_key(url):
     return urlsplit(url or "").path.rstrip("/").removesuffix(".html")
 
 
-def _asset_references(row):
-    references = set()
-    def image(value):
+def image_urls(values, markup, base):
+    if not isinstance(values, (list, tuple)):
+        raise ValueError('Invalid chapter images')
+    values = list(values)
+    for text in markup:
+        if text:
+            values.extend(node.get('data-original') or node.get('data-src') or node.get('src')
+                          for node in parse_html(text).select('img'))
+    urls = set()
+    for value in values:
         if not isinstance(value, str):
             raise ValueError('Invalid image reference')
         if not value or value.startswith('data:'):
-            return
+            continue
         parsed = urlsplit(value)
-        urls = (parse_qs(parsed.query).get('url', []) if parsed.path == '/api/image' and
+        candidates = (parse_qs(parsed.query).get('url', []) if parsed.path == '/api/image' and
                 (not parsed.netloc or parsed.hostname in ('127.0.0.1', 'localhost', '::1')) else [value])
-        for url in urls:
-            checked = safe_remote_url(url, row['path'])
+        for url in candidates:
+            checked = safe_remote_url(url, base)
             if checked:
-                references.add(('images', hashlib.sha256(checked.encode()).hexdigest()))
+                urls.add(checked)
+    return sorted(urls)
+
+
+def _asset_references(row):
+    references = set()
     if row['idx'] == -1:
         name = row['path'].replace('\\', '/').rsplit('/', 1)[-1].lower()
         if re.fullmatch(r'[0-9a-f]{64}\.[a-z0-9]+', name):
             references.add(('files', name))
-        image(row['cover'])
+        urls = image_urls([row['cover']], (), row['path'])
     else:
-        values = json.loads(row['images'])
-        if not isinstance(values, list):
-            raise ValueError('Invalid chapter images')
-        for value in values:
-            image(value)
-        for markup in (row['html'], row['original_html']):
-            if markup:
-                for node in parse_html(markup).select('img'):
-                    image(node.get('data-original') or node.get('data-src') or node.get('src'))
+        urls = image_urls(json.loads(row['images']), (row['html'], row['original_html']), row['path'])
+    references.update(('images', hashlib.sha256(url.encode()).hexdigest()) for url in urls)
     return references
 
 class Store:
@@ -82,6 +87,7 @@ class Store:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.data_dir / "library.sqlite3"
         self._asset_lock = threading.RLock()
+        self._cache_write_lock = threading.RLock()
         # shortcut: in-flight leases cover one server; share leases before supporting multiple servers per library.
         self._active_assets = Counter()
         self._asset_inventory = None
@@ -134,8 +140,42 @@ class Store:
             if 'trashed_at' not in {row[1] for row in db.execute('PRAGMA table_info(books)')}:
                 db.execute('ALTER TABLE books ADD COLUMN trashed_at REAL NOT NULL DEFAULT 0')
         self._init_asset_index()
+        self._init_image_cache()
         self._init_search_index()
         self._init_shelf_index()
+
+    def _init_image_cache(self):
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            first = not db.execute("SELECT 1 FROM sqlite_master WHERE name='image_cache'").fetchone()
+            if 'evict' not in {row[1] for row in db.execute('PRAGMA table_info(asset_gc_candidates)')}:
+                db.execute('ALTER TABLE asset_gc_candidates ADD COLUMN evict INTEGER NOT NULL DEFAULT 0')
+            db.execute('CREATE INDEX IF NOT EXISTS asset_gc_cache ON asset_gc_candidates(evict,retry_at,id)')
+            db.execute('CREATE TABLE IF NOT EXISTS image_cache (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, size INTEGER NOT NULL DEFAULT 0, last_used REAL NOT NULL, legacy INTEGER NOT NULL DEFAULT 0, pin_count INTEGER NOT NULL DEFAULT 0, protected INTEGER GENERATED ALWAYS AS (legacy OR pin_count>0) VIRTUAL, evicting INTEGER NOT NULL DEFAULT 0)')
+            db.execute('CREATE INDEX IF NOT EXISTS image_cache_lru ON image_cache(protected,evicting,last_used,id)')
+            db.execute('CREATE INDEX IF NOT EXISTS image_cache_clear ON image_cache(protected,id)')
+            db.execute('CREATE TABLE IF NOT EXISTS image_pins (book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, idx INTEGER NOT NULL, name TEXT NOT NULL REFERENCES image_cache(name) ON DELETE CASCADE, PRIMARY KEY(book_id,idx,name))')
+            db.execute('CREATE INDEX IF NOT EXISTS image_pin_lookup ON image_pins(name)')
+            db.execute('CREATE TABLE IF NOT EXISTS image_cache_state (id INTEGER PRIMARY KEY CHECK(id=1), max_bytes INTEGER NOT NULL DEFAULT 1073741824, total_bytes INTEGER NOT NULL DEFAULT 0, protected_bytes INTEGER NOT NULL DEFAULT 0, legacy_bytes INTEGER NOT NULL DEFAULT 0, entries INTEGER NOT NULL DEFAULT 0, protected_entries INTEGER NOT NULL DEFAULT 0, pending_bytes INTEGER NOT NULL DEFAULT 0, trim_to INTEGER NOT NULL DEFAULT -1, clear_until INTEGER NOT NULL DEFAULT 0, clear_cursor INTEGER NOT NULL DEFAULT 0)')
+            db.execute('INSERT OR IGNORE INTO image_cache_state(id) VALUES(1)')
+            for action, event, delta in (
+                ('insert', 'INSERT', 'total_bytes=total_bytes+NEW.size,protected_bytes=protected_bytes+NEW.size*NEW.protected,legacy_bytes=legacy_bytes+NEW.size*NEW.legacy,entries=entries+(NEW.size>0),protected_entries=protected_entries+(NEW.size>0)*NEW.protected,pending_bytes=pending_bytes+NEW.size*(1-NEW.protected)*NEW.evicting'),
+                ('delete', 'DELETE', 'total_bytes=total_bytes-OLD.size,protected_bytes=protected_bytes-OLD.size*OLD.protected,legacy_bytes=legacy_bytes-OLD.size*OLD.legacy,entries=entries-(OLD.size>0),protected_entries=protected_entries-(OLD.size>0)*OLD.protected,pending_bytes=pending_bytes-OLD.size*(1-OLD.protected)*OLD.evicting'),
+                ('update', 'UPDATE OF size,legacy,pin_count,evicting', 'total_bytes=total_bytes+NEW.size-OLD.size,protected_bytes=protected_bytes+NEW.size*NEW.protected-OLD.size*OLD.protected,legacy_bytes=legacy_bytes+NEW.size*NEW.legacy-OLD.size*OLD.legacy,entries=entries+(NEW.size>0)-(OLD.size>0),protected_entries=protected_entries+(NEW.size>0)*NEW.protected-(OLD.size>0)*OLD.protected,pending_bytes=pending_bytes+NEW.size*(1-NEW.protected)*NEW.evicting-OLD.size*(1-OLD.protected)*OLD.evicting')):
+                db.execute(f'CREATE TRIGGER IF NOT EXISTS cache_count_{action} AFTER {event} ON image_cache BEGIN UPDATE image_cache_state SET {delta} WHERE id=1; END')
+            for sql in (
+                'CREATE TRIGGER IF NOT EXISTS image_pin_insert AFTER INSERT ON image_pins BEGIN UPDATE image_cache SET pin_count=pin_count+1 WHERE name=NEW.name; END',
+                'CREATE TRIGGER IF NOT EXISTS image_pin_delete AFTER DELETE ON image_pins BEGIN UPDATE image_cache SET pin_count=pin_count-1 WHERE name=OLD.name; END',
+                'CREATE TRIGGER IF NOT EXISTS image_pin_chapter_delete AFTER DELETE ON chapters BEGIN DELETE FROM image_pins WHERE book_id=OLD.book_id AND idx=OLD.idx; END',
+                "CREATE TRIGGER IF NOT EXISTS image_pin_ref_delete AFTER DELETE ON asset_refs WHEN OLD.kind='images' BEGIN DELETE FROM image_pins WHERE book_id=OLD.book_id AND idx=OLD.idx AND name=OLD.name; END",
+                "CREATE TRIGGER IF NOT EXISTS image_pin_file_ref AFTER INSERT ON asset_refs WHEN NEW.kind='images' AND EXISTS(SELECT 1 FROM books WHERE id=NEW.book_id AND source IN ('file','local')) BEGIN INSERT OR IGNORE INTO image_pins SELECT NEW.book_id,NEW.idx,NEW.name WHERE EXISTS(SELECT 1 FROM image_cache WHERE name=NEW.name); END",
+                "CREATE TRIGGER IF NOT EXISTS cache_evict_insert AFTER INSERT ON asset_gc_candidates WHEN NEW.kind='images' AND NEW.evict>0 BEGIN UPDATE image_cache SET evicting=1 WHERE name=NEW.name; END",
+                "CREATE TRIGGER IF NOT EXISTS cache_evict_update AFTER UPDATE OF evict ON asset_gc_candidates WHEN NEW.kind='images' BEGIN UPDATE image_cache SET evicting=(NEW.evict>0) WHERE name=NEW.name; END",
+                "CREATE TRIGGER IF NOT EXISTS cache_evict_delete AFTER DELETE ON asset_gc_candidates WHEN OLD.kind='images' BEGIN UPDATE image_cache SET evicting=0 WHERE name=OLD.name; END",
+            ):
+                db.execute(sql)
+            if first:
+                db.execute('UPDATE asset_index_state SET inventory_images=0 WHERE id=1')
 
     def _init_shelf_index(self):
         with self.db() as db:
@@ -726,6 +766,125 @@ class Store:
                 if not self._active_assets[path]:
                     del self._active_assets[path]
 
+    def image_cache_stats(self):
+        with self.db() as db:
+            row = dict(db.execute('SELECT * FROM image_cache_state WHERE id=1').fetchone())
+            inventory = bool(db.execute('SELECT inventory_images FROM asset_index_state WHERE id=1').fetchone()[0])
+            clearing = bool(row['clear_until'] or db.execute('SELECT 1 FROM asset_gc_candidates WHERE evict=2 LIMIT 1').fetchone())
+        return {key: row[key] for key in ('max_bytes', 'total_bytes', 'protected_bytes', 'legacy_bytes', 'entries', 'protected_entries', 'pending_bytes')} | {
+            'cache_bytes': row['total_bytes'] - row['protected_bytes'], 'inventory_complete': inventory, 'clearing': clearing}
+
+    def set_image_cache_limit(self, value):
+        if type(value) is not int or not 0 <= value <= 64 * 1024 ** 3:
+            raise ValueError('Giới hạn cache ảnh phải là số byte nguyên từ 0 đến 64 GiB.')
+        with self.db() as db:
+            db.execute('UPDATE image_cache_state SET max_bytes=? WHERE id=1', (value,))
+        return self.image_cache_stats()
+
+    def clear_image_cache(self):
+        with self.db() as db:
+            db.execute('UPDATE image_cache_state SET clear_until=COALESCE((SELECT max(id) FROM image_cache),0),clear_cursor=0 WHERE id=1')
+        return self.image_cache_stats()
+
+    def _image_cache_name(self, path):
+        item = self._asset_path(path)
+        if item is None or item[1] != 'images' or not re.fullmatch('[0-9a-f]{64}', item[2]) or item[3]:
+            raise ValueError('Đường dẫn cache ảnh không hợp lệ.')
+        return item[2]
+
+    def pin_image(self, path, book_id, index):
+        name = self._image_cache_name(path)
+        with self.db() as db:
+            if not db.execute('SELECT 1 FROM chapters WHERE book_id=? AND idx=?', (book_id, index)).fetchone():
+                raise KeyError('Không tìm thấy chương để giữ ảnh ngoại tuyến.')
+            db.execute('INSERT OR IGNORE INTO image_cache(name,last_used) VALUES(?,?)', (name, time.time()))
+            db.execute('INSERT OR IGNORE INTO image_pins(book_id,idx,name) VALUES(?,?,?)', (book_id, index, name))
+
+    def touch_image(self, path, size, legacy=True):
+        name = self._image_cache_name(path)
+        with self.db() as db:
+            db.execute('INSERT INTO image_cache(name,size,last_used,legacy) VALUES(?,?,?,?) '
+                       'ON CONFLICT(name) DO UPDATE SET size=excluded.size,last_used=excluded.last_used',
+                       (name, size, time.time(), int(legacy)))
+            self._pin_file_images(db, name)
+            db.execute("UPDATE asset_gc_candidates SET evict=0,generation=generation+1,retry_at=0 WHERE kind='images' AND name=? AND evict=1", (name,))
+
+    @staticmethod
+    def _pin_file_images(db, name):
+        db.execute("INSERT OR IGNORE INTO image_pins(book_id,idx,name) SELECT r.book_id,r.idx,r.name "
+                   "FROM asset_refs r JOIN books b ON b.id=r.book_id WHERE r.kind='images' AND r.name=? AND b.source IN ('file','local')", (name,))
+
+    @contextlib.contextmanager
+    def cache_image_write(self, path, size):
+        name = self._image_cache_name(path)
+        # Only admission/writes serialize; network, cache hits, asset leases and SQLite readers do not wait on this lock.
+        with self._cache_write_lock:
+            if path.exists():
+                yield False
+                return
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                db.execute("INSERT OR IGNORE INTO image_cache(name,last_used) SELECT ?,? WHERE EXISTS("
+                           "SELECT 1 FROM asset_refs r JOIN books b ON b.id=r.book_id WHERE r.kind='images' AND r.name=? AND b.source IN ('file','local'))", (name, time.time(), name))
+                self._pin_file_images(db, name)
+                entry = db.execute('SELECT protected FROM image_cache WHERE name=?', (name,)).fetchone()
+                state = db.execute('SELECT * FROM image_cache_state WHERE id=1').fetchone()
+                fits = bool(entry and entry['protected']) or state['total_bytes'] - state['protected_bytes'] + size <= state['max_bytes']
+                if not fits and size <= state['max_bytes']:
+                    target = state['max_bytes'] - size
+                    db.execute('UPDATE image_cache_state SET trim_to=CASE WHEN trim_to<0 THEN ? ELSE min(trim_to,?) END WHERE id=1', (target, target))
+                if fits:
+                    # Reserve before exposing the file, so crash recovery and upgrade inventory know its size and intent.
+                    db.execute('INSERT INTO image_cache(name,size,last_used) VALUES(?,?,?) '
+                               'ON CONFLICT(name) DO UPDATE SET size=excluded.size,last_used=excluded.last_used', (name, size, time.time()))
+                    db.execute("INSERT INTO asset_gc_candidates(kind,name) VALUES('images',?) ON CONFLICT(kind,name) DO UPDATE SET generation=generation+1,retry_at=0,evict=0", (name,))
+            if not fits:
+                yield False
+                return
+            try:
+                yield not path.exists()
+            finally:
+                if path.exists() and self._regular_asset(path):
+                    self.touch_image(path, path.lstat().st_size, legacy=False)
+                elif not path.exists():
+                    with self.db() as db:
+                        db.execute('UPDATE image_cache SET size=0 WHERE name=?', (name,))
+                        db.execute('DELETE FROM image_cache WHERE name=? AND protected=0', (name,))
+
+    def queue_cache_evictions(self, limit=32, stop=None):
+        if (stop is not None and stop.is_set()) or not self.asset_index_ready():
+            return 0
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            state = db.execute('SELECT * FROM image_cache_state WHERE id=1').fetchone()
+            if state['clear_until']:
+                rows = db.execute('SELECT * FROM image_cache WHERE protected=0 AND id>? AND id<=? '
+                                  'ORDER BY id LIMIT ?', (state['clear_cursor'], state['clear_until'], limit)).fetchall()
+                db.execute('UPDATE image_cache_state SET clear_cursor=?,clear_until=? WHERE id=1',
+                           (rows[-1]['id'] if rows else 0, state['clear_until'] if len(rows) == limit else 0))
+                mode, needed = 2, None
+            else:
+                target = min(state['max_bytes'], state['trim_to']) if state['trim_to'] >= 0 else state['max_bytes']
+                remaining = state['total_bytes'] - state['protected_bytes']
+                needed = remaining - state['pending_bytes'] - target
+                if needed <= 0:
+                    if remaining <= target and state['trim_to'] >= 0:
+                        db.execute('UPDATE image_cache_state SET trim_to=-1 WHERE id=1')
+                    return 0
+                rows = db.execute('SELECT * FROM image_cache WHERE protected=0 AND evicting=0 AND size>0 '
+                                  'ORDER BY last_used,id LIMIT ?', (limit,)).fetchall()
+                mode = 1
+            queued = 0
+            for row in rows:
+                db.execute("INSERT INTO asset_gc_candidates(kind,name,evict) VALUES('images',?,?) "
+                           'ON CONFLICT(kind,name) DO UPDATE SET evict=max(evict,excluded.evict),generation=generation+1,retry_at=0', (row['name'], mode))
+                queued += 1
+                if needed is not None:
+                    needed -= row['size']
+                    if needed <= 0:
+                        break
+            return queued
+
     def _asset_path(self, path):
         path = Path(path)
         kind = path.parent.name
@@ -739,7 +898,7 @@ class Store:
         if keys:
             with self.db() as db:
                 db.executemany('INSERT INTO asset_gc_candidates(kind,name) VALUES(?,?) '
-                    'ON CONFLICT(kind,name) DO UPDATE SET generation=generation+1,retry_at=0', keys)
+                    'ON CONFLICT(kind,name) DO UPDATE SET generation=generation+1,retry_at=0,evict=0', keys)
 
     def close_inventory(self):
         if self._asset_inventory is not None:
@@ -756,7 +915,7 @@ class Store:
         if kind is None:
             self.close_inventory()
             return 0
-        paths, exhausted = [], False
+        paths, cached, exhausted = [], [], False
         try:
             if self._asset_inventory is None or self._asset_inventory[0] != kind:
                 self.close_inventory()
@@ -779,6 +938,9 @@ class Store:
                     item = self._asset_path(Path(entry.path))
                     if item:
                         paths.append((kind, item[0].name))
+                        if kind == 'images' and re.fullmatch('[0-9a-f]{64}', entry.name) and self._regular_asset(item[0]):
+                            info = entry.stat(follow_symlinks=False)
+                            cached.append((entry.name, info.st_size, info.st_mtime))
         except FileNotFoundError:
             exhausted = True
         except OSError:
@@ -792,6 +954,7 @@ class Store:
                 db.executemany('INSERT OR IGNORE INTO asset_gc_candidates(kind,name) '
                     'SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM asset_refs WHERE kind=? AND name=?)',
                     ((kind, name, kind, name) for kind, name in paths))
+                db.executemany('INSERT OR IGNORE INTO image_cache(name,size,last_used,legacy) VALUES(?,?,?,1)', cached)
                 if exhausted:
                     db.execute('UPDATE asset_index_state SET inventory_' + kind + '=1 WHERE id=1')
         except sqlite3.Error:
@@ -843,15 +1006,21 @@ class Store:
                         return True
                     referenced = db.execute('SELECT 1 FROM asset_refs WHERE kind=? AND name=? LIMIT 1',
                                             (kind, original_name)).fetchone()
-                    if referenced:
+                    cache = db.execute('SELECT protected FROM image_cache WHERE name=?', (original_name,)).fetchone() if kind == 'images' else None
+                    evict = row['evict'] and cache is not None and not cache['protected']
+                    if (referenced and not evict) or (row['evict'] and not evict):
                         if staged.exists() and not original.exists() and self._regular_asset(staged):
                             staged.rename(original)
                         if not staged.exists():
+                            if kind == 'images' and not original.exists():
+                                db.execute('UPDATE image_cache SET size=0 WHERE name=?', (original_name,))
                             db.execute('DELETE FROM asset_gc_candidates WHERE id=? AND generation=?',
                                        (row['id'], row['generation']))
                             return True
                     elif not staged.exists():
                         if not path.exists():
+                            if kind == 'images':
+                                db.execute('DELETE FROM image_cache WHERE name=?', (original_name,))
                             db.execute('DELETE FROM asset_gc_candidates WHERE id=? AND generation=?',
                                        (row['id'], row['generation']))
                             return True
@@ -865,12 +1034,22 @@ class Store:
             # Slow deletion never holds a database transaction or the asset-registration lock.
             staged.unlink()
             with db:
-                if original != staged and original.exists():
-                    db.execute('UPDATE asset_gc_candidates SET retry_at=0 WHERE id=? AND generation=?',
-                               (row['id'], row['generation']))
-                else:
-                    db.execute('DELETE FROM asset_gc_candidates WHERE id=? AND generation=?',
-                               (row['id'], row['generation']))
+                db.execute('BEGIN IMMEDIATE')
+                with self._asset_lock:
+                    if not db.execute('SELECT 1 FROM asset_gc_candidates WHERE id=? AND generation=?',
+                                      (row['id'], row['generation'])).fetchone():
+                        return True
+                    if asset in self._active_assets:
+                        self._retry_asset(db, row, 1)
+                    elif original != staged and original.exists():
+                        db.execute('UPDATE asset_gc_candidates SET retry_at=0 WHERE id=? AND generation=?',
+                                   (row['id'], row['generation']))
+                    else:
+                        if kind == 'images':
+                            db.execute('UPDATE image_cache SET size=0 WHERE name=? AND protected=1', (original_name,))
+                            db.execute('DELETE FROM image_cache WHERE name=? AND protected=0', (original_name,))
+                        db.execute('DELETE FROM asset_gc_candidates WHERE id=? AND generation=?',
+                                   (row['id'], row['generation']))
         except FileNotFoundError:
             with db:
                 self._retry_asset(db, row, 1)
