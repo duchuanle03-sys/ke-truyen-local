@@ -1,11 +1,13 @@
 """Exercise server-side shelf and trash pages through the real app."""
 import json
+import struct
 from pathlib import Path
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
+import zlib
 
 from library import Store
 from server import Handler, ROOT, make_server
@@ -25,6 +27,31 @@ try{
  await wait(()=>ready()&&cards().length===60);
  check($('#nav-count').textContent==='123','Navigation count came from only the first page');
  check(first()==='Book 0122','Initial sort was wrong');
+ const initial=cards(),healthy=initial[0].querySelector('img');
+ for(const item of initial.slice(0,2))item.querySelector('img').loading='eager';
+ await wait(()=>healthy.complete&&healthy.naturalWidth>0&&healthy.parentElement.classList.contains('has-cover')&&!initial[1].querySelector('img'));
+ let mutations=[];const observer=new MutationObserver(records=>mutations.push(...records));observer.observe($('#book-grid'),{subtree:true,childList:true,attributes:true,characterData:true});
+ const takeMutations=()=>{const result=mutations.concat(observer.takeRecords());mutations=[];return result;};
+ const unchanged=message=>{check(cards().every((node,i)=>node===initial[i]),message);check(initial[0].querySelector('img')===healthy,'An unchanged cover image was replaced');};
+ for(const view of ['compact','list','grid']){$('[data-view="'+view+'"]').click();unchanged('Layout change recreated shelf cards');}
+ takeMutations();$('#refresh-library').click();await wait(ready);unchanged('Refresh recreated unchanged cards');
+ const refreshChanges=takeMutations();
+ check(refreshChanges.filter(m=>m.target.closest?.('.book-card')&&m.target.closest('.book-card')!==initial[1]).length===0,'Refresh rewrote healthy unchanged cards');
+ check(refreshChanges.some(m=>m.target.closest?.('.book-card')===initial[1]&&[...m.addedNodes].some(n=>n.matches?.('.book-cover'))),'Explicit refresh did not retry a failed cover');
+ await wait(()=>!initial[1].querySelector('img'));takeMutations();
+ await fetch('/qa/book-change?meta');$('[data-nav="library"]').click();await wait(()=>ready()&&first()==='Changed title');
+ unchanged('Metadata change replaced a card');
+ check(initial[0].querySelector('.book-author').textContent==='Changed author'&&initial[0].querySelector('progress').value===42,'Changed metadata was not patched');
+ check(initial[0].querySelector('.book-meta').textContent.includes('444'),'Chapter count was stale');
+ check(takeMutations().filter(m=>m.target.closest?.('.book-card')&&m.target.closest('.book-card')!==initial[0]).length===0,'One-book edit rewrote unrelated cards');
+ initial[0].click();await wait(()=>$('#dialog .book-description'));
+ check($('#dialog h2').textContent==='Changed title'&&$('#dialog-actions').textContent.includes('42%'),'Reused card opened stale book data');$('#dialog-close').click();
+ await fetch('/qa/book-change?cover');$('#refresh-library').click();await wait(()=>ready()&&initial[0].querySelector('img')!==healthy);
+ check(cards()[0]===initial[0]&&initial[0].querySelector('img'),'Changing a cover replaced the whole card or lost the image');
+ const replacement=initial[0].querySelector('img');$('#refresh-library').click();await wait(ready);
+ check(initial[0].querySelector('img')===replacement,'An unchanged replacement cover was recreated');
+ check(takeMutations().filter(m=>[...m.addedNodes].some(n=>n.matches?.('.book-card'))).length===0,'Updates created new card elements');
+ observer.disconnect();await fetch('/qa/book-change?restore');$('#refresh-library').click();await wait(()=>ready()&&first()==='Book 0122');
  $('#library-next').click();await wait(()=>ready()&&first()==='Book 0062');
  check(cards().length===60,'Page navigation accumulated cards');
  check(document.activeElement===cards()[0]&&cards()[0].getBoundingClientRect().top<innerHeight,'New page did not bring its first book into view and focus it');
@@ -38,6 +65,13 @@ try{
  check(cards().length===20,'Combined kind/source filtering was applied after pagination');
  $('[data-kind="all"]').click();change('library-source','');change('library-group','favorites');
  await wait(()=>ready()&&cards().length===25);check(first()==='Book 0000','Group filter failed');
+ const groupNodes=cards(),focused=groupNodes[10],grid=$('#book-grid'),nativeMove=grid.moveBefore;
+ for(const moving of [nativeMove,undefined]){
+  grid.moveBefore=moving;focused.focus();$('#sort-direction').click();await wait(()=>ready()&&first()==='Book 0120');
+  check(groupNodes.every(n=>n.isConnected)&&document.activeElement===focused,'Reordering lost cards or keyboard focus');
+  $('#sort-direction').click();await wait(()=>ready()&&first()==='Book 0000');
+ }
+ grid.moveBefore=nativeMove;
  change('library-group','');change('library-sort','name');
  $('#sort-direction').click();await wait(()=>ready()&&first()==='Book 0000');
  search('Book 0122');await wait(()=>ready()&&cards().length===1&&first()==='Book 0122');
@@ -71,9 +105,13 @@ def fixture_server(directory):
               '["favorites"]' if i % 5 == 0 else '[]', i, i, i, 0 if i < 123 else time.time())
              for i in range(244)))
         db.execute("INSERT INTO groups_list VALUES('favorites','Favorites')")
+        db.execute("UPDATE books SET cover='https://cdn.example/original.png' WHERE id IN ('book-121','book-122')")
     server = make_server(directory, port=0)
     server.app._asset_stop.set()
     server.app._asset_worker.join(2)
+    def chunk(kind, body):
+        return struct.pack('!I', len(body)) + kind + body + struct.pack('!I', zlib.crc32(kind + body))
+    png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', 1, 1, 8, 6, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(b'\0\xff\0\0\xff')) + chunk(b'IEND', b'')
     class QaHandler(Handler):
         def _route(self):
             if self.path == '/' or self.path.startswith('/?'):
@@ -83,6 +121,19 @@ def fixture_server(directory):
                 return self._reply(200, markup.encode('utf-8'), 'text/html; charset=utf-8')
             if self.path == '/qa.js':
                 return self._reply(200, CHECKS.encode('utf-8'), 'text/javascript; charset=utf-8')
+            if self.path.startswith('/api/books/book-122/cover'):
+                return self._reply(200, png, 'image/png')
+            if self.path.startswith('/api/books/book-121/cover'):
+                return self._reply(404, {'error': 'Synthetic unavailable cover'})
+            if self.path.startswith('/qa/book-change?'):
+                with server.app.store.db() as db:
+                    if self.path.endswith('?meta'):
+                        db.execute("UPDATE books SET name='Changed title',author='Changed author',progress=.42,chapter_count=444 WHERE id='book-122'")
+                    elif self.path.endswith('?cover'):
+                        db.execute("UPDATE books SET cover='https://cdn.example/replacement.png' WHERE id='book-122'")
+                    else:
+                        db.execute("UPDATE books SET name='Book 0122',author='',progress=0,chapter_count=0,cover='https://cdn.example/original.png' WHERE id='book-122'")
+                return self._reply(200, {'updated': True})
             if '/api/books?' in self.path and 'q=Slow' in self.path:
                 time.sleep(.6)
             return super()._route()

@@ -38,7 +38,7 @@ def public_content(value):
     cover = result.get('cover')
     if isinstance(cover, str):
         if cover.startswith(('https://', 'http://')):
-            result['cover'] = ('/api/books/' + quote(str(result['id']), safe='') + '/cover'
+            result['cover'] = ('/api/books/' + quote(str(result['id']), safe='') + '/cover?v=' + hashlib.sha256(cover.encode()).hexdigest()
                                if result.get('id') and 'source' in result else
                                '/api/image?' + urlencode({'url': cover, 'referer': result.get('path', '')}))
         else:

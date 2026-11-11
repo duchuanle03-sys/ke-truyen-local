@@ -99,6 +99,7 @@ $('dialog').addEventListener('click', (event) => {
 });
 
 const state = { books: [], groups: [], sources: [], settings: {}, kind: 'all', view: 'grid', reverse: false, sourcePage: 1, activeView: 'library', offset: 0, limit: 60, total: 0, nextOffset: null };
+const libraryCards = new Map();
 let settingTimer;
 function saveSettings(patch) {
   Object.assign(state.settings, patch);
@@ -134,18 +135,48 @@ function cover(book) {
 const percent = (book) => Math.round(Math.min(1, Math.max(0, Number(book.progress) || 0)) * 100);
 const sourceName = (id) => state.sources.find((source) => source.id === id)?.name || (id === 'local' ? 'File cục bộ' : id || 'Chưa rõ nguồn');
 
-function card(book, fromSource = false) {
-  const button = el('button', { class: 'book-card', onclick: () => bookDetail(book, fromSource) });
-  const info = el('div', { class: 'book-info' }, [el('h3', { text: book.name || 'Chưa có tên' }), el('p', { class: 'book-author', text: book.author || 'Chưa rõ tác giả' }), el('p', { class: 'book-meta', text: `${sourceName(book.source || $('source-select').value)}${book.chapter_count ? ` · ${Number(book.chapter_count).toLocaleString('vi-VN')} chương` : ''}` })]);
-  if (!fromSource) info.append(el('div', { class: 'book-progress' }, [el('progress', { max: 100, value: percent(book), 'aria-label': `Đã đọc ${percent(book)}%` }), el('span', { text: `${percent(book)}%` })]));
-  button.append(cover(book), info);
+function card(book, fromSource = false, previous = null) {
+  const button = previous?.node || el('button', { class: 'book-card', 'data-book-id': book.id });
+  if (!previous) {
+    const info = el('div', { class: 'book-info' }, [el('h3'), el('p', { class: 'book-author' }), el('p', { class: 'book-meta' })]);
+    if (!fromSource) info.append(el('div', { class: 'book-progress' }, [el('progress', { max: 100 }), el('span')]));
+    button.append(cover(book), info);
+  } else if (previous.cover !== book.cover && safeMedia(previous.cover) !== safeMedia(book.cover)) {
+    button.firstElementChild.replaceWith(cover(book));
+  }
+  button.onclick = () => bookDetail(book, fromSource);
+  const values = [['h3', book.name || 'Chưa có tên'], ['.book-author', book.author || 'Chưa rõ tác giả'],
+    ['.book-meta', `${sourceName(book.source || $('source-select').value)}${book.chapter_count ? ` · ${Number(book.chapter_count).toLocaleString('vi-VN')} chương` : ''}`]];
+  if (!fromSource) {
+    const value = percent(book), progress = button.querySelector('progress'), label = `Đã đọc ${value}%`;
+    if (progress.value !== value) progress.value = value;
+    if (progress.getAttribute('aria-label') !== label) progress.setAttribute('aria-label', label);
+    values.push(['.book-progress span', `${value}%`]);
+  }
+  for (const [selector, text] of values) {
+    const node = button.querySelector(selector);
+    if (node.textContent !== text) node.textContent = text;
+  }
   return button;
 }
 
 function renderLibrary() {
   const books = state.books;
-  $('book-grid').className = `book-grid ${state.view}`;
-  $('book-grid').replaceChildren(...books.map((book) => card(book)));
+  const grid = $('book-grid'), focused = grid.contains(document.activeElement) ? document.activeElement : null;
+  if (grid.className !== `book-grid ${state.view}`) grid.className = `book-grid ${state.view}`;
+  const keep = new Set(books.map(book => book.id));
+  for (const [id, entry] of libraryCards) if (!keep.has(id)) { entry.node.remove(); libraryCards.delete(id); }
+  grid.querySelector('.empty-state')?.remove();
+  books.forEach((book, i) => {
+    const node = card(book, false, libraryCards.get(book.id));
+    libraryCards.set(book.id, { node, cover: book.cover });
+    const before = grid.children[i] || null;
+    if (node !== before) {
+      if (node.parentNode === grid && grid.moveBefore) grid.moveBefore(node, before);
+      else grid.insertBefore(node, before);
+    }
+  });
+  if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
   const filtered = $('library-search').value || $('library-source').value || $('library-group').value || state.kind !== 'all';
   $('library-count').textContent = `${state.total ? `${state.offset + 1}–${state.offset + books.length}/` : ''}${state.total.toLocaleString('vi-VN')} truyện${filtered ? ' phù hợp' : ''}`;
   $('library-page').textContent = state.total ? `${Math.floor(state.offset / state.limit) + 1}/${Math.ceil(state.total / state.limit)}` : '0/0';
@@ -203,7 +234,10 @@ document.querySelector('.brand').onclick = (event) => { event.preventDefault(); 
 let searchTimer;
 $('library-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadLibrary, 220); });
 for (const id of ['library-source', 'library-group', 'library-sort']) $(id).onchange = () => { saveSettings({ library: { ...state.settings.library, sort: $('library-sort').value } }); loadLibrary(); };
-$('refresh-library').onclick = () => loadLibrary(state.offset);
+$('refresh-library').onclick = () => {
+  for (const entry of libraryCards.values()) if (entry.cover && !entry.node.querySelector('img')) entry.cover = null;
+  loadLibrary(state.offset);
+};
 $('library-previous').onclick = () => loadLibrary(Math.max(0, state.offset - state.limit), true);
 $('library-next').onclick = () => { if (state.nextOffset !== null) loadLibrary(state.nextOffset, true); };
 $('sort-direction').onclick = () => { state.reverse = !state.reverse; $('sort-direction').setAttribute('aria-pressed', String(state.reverse)); loadLibrary(); };

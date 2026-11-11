@@ -24,7 +24,10 @@ class OutputTests(unittest.TestCase):
 
     def test_library_covers_use_book_identity_to_allow_recovery(self):
         out = public_content({'id': 'book-id', 'source': 'hako', 'cover': 'https://cdn.example/old.jpg'})
-        self.assertEqual(out['cover'], '/api/books/book-id/cover')
+        self.assertTrue(out['cover'].startswith('/api/books/book-id/cover?v='))
+        self.assertEqual(out, public_content({'id': 'book-id', 'source': 'hako', 'cover': 'https://cdn.example/old.jpg'}))
+        changed = public_content({'id': 'book-id', 'source': 'hako', 'cover': 'https://cdn.example/new.jpg'})
+        self.assertNotEqual(out['cover'], changed['cover'])
 
     def test_stored_backup_html_cannot_inject_active_markup(self):
         out = public_content({"html": '<p onclick="x()">Text<script>alert(1)</script><img src="http://127.0.0.1/private"></p>'})
