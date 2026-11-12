@@ -10,12 +10,14 @@ import logging
 import mimetypes
 import os
 import re
+import secrets
 import socket
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie, CookieError
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
@@ -26,11 +28,13 @@ import pdfocr
 from htmltools import html_to_text, sanitize_html, safe_raster_data_url
 from library import Store, image_urls
 from qt import QtDictionary
+from lifecycle import ServerLifecycle, ShutdownError
 from sources import SourceService, validate_public_url, safe_fetch_bytes
 from source_errors import SourceError, SourceAccessError, SourceCaptchaError
 
 ROOT = Path(__file__).resolve().parent
 MAX_BODY = 128 * 1024 * 1024
+_FAILED_STARTS = []
 
 def public_content(value):
     if isinstance(value, list):
@@ -52,8 +56,52 @@ def public_content(value):
             lambda match: match[1] + html.escape('/api/image?' + urlencode({'url': html.unescape(match[2])}), quote=True) + match[3], markup)
     return result
 
-class App:
+class App(ServerLifecycle):
     def __init__(self, data_dir, source_service=None):
+        for failed in tuple(_FAILED_STARTS): failed._cleanup_failed_start()
+        self._startup_failed = False
+        self._failed_cleanup_lock = threading.Lock()
+        self._library_lock = self._acquire_library_lock(data_dir)
+        try: self._initialize(data_dir, source_service)
+        except BaseException:
+            self._startup_failed = True
+            _FAILED_STARTS.append(self)
+            for name in ('_download_stop', '_asset_stop', '_download_wake'):
+                if event := getattr(self, name, None): event.set()
+            for name in ('_asset_worker', '_download_worker'):
+                worker = getattr(self, name, None)
+                if worker is not None and worker.ident is not None: worker.join(timeout=1)
+            self._cleanup_failed_start()
+            raise
+
+    def _cleanup_failed_start(self):
+        if not self._startup_failed: return True
+        if not self._failed_cleanup_lock.acquire(blocking=False): return False
+        try:
+            current = threading.current_thread()
+            workers = [getattr(self, name, None) for name in ('_asset_worker', '_download_worker')]
+            if any(w is not None and w is not current and w.is_alive() for w in workers): return False
+            if any(not f.done() for f in getattr(self, '_download_futures', {}).values()): return False
+            if hasattr(self, 'executor'): self.executor.shutdown(wait=False, cancel_futures=True)
+            errors = []
+            resources = [getattr(self, name, None) for name in ('sources', '_image_fetcher', 'qt')]
+            for resource in resources:
+                try:
+                    if resource is not None and callable(getattr(resource, 'close', None)): resource.close()
+                except Exception as error: errors.append(error)
+            if hasattr(self, 'store'):
+                try: self.store.close_inventory(); self.store.checkpoint(timeout=.5)
+                except Exception as error: errors.append(error)
+            if errors:
+                logging.error('Startup cleanup incomplete; library lock retained: %s', errors)
+                return False
+            self._library_lock.close()
+            self._startup_failed = False
+            if self in _FAILED_STARTS: _FAILED_STARTS.remove(self)
+            return True
+        finally: self._failed_cleanup_lock.release()
+
+    def _initialize(self, data_dir, source_service):
         self.store = Store(data_dir)
         self.sources = source_service or SourceService()
         self.qt = QtDictionary(self.store.data_dir)
@@ -63,6 +111,7 @@ class App:
         self.image_dir.mkdir(exist_ok=True)
         self.jobs = {}
         self.lock = threading.RLock()
+        self._init_lifecycle()
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="chapter-download")
         self._download_futures = {}
         self._download_verifications = {}
@@ -145,6 +194,11 @@ class App:
             self._download_wake.set()
 
     def _maintain_downloads(self):
+        try: self._run_download_queue()
+        finally:
+            if self._startup_failed: self._cleanup_failed_start()
+
+    def _run_download_queue(self):
         while not self._download_stop.is_set():
             self._download_wake.wait()
             self._download_wake.clear()
@@ -165,6 +219,7 @@ class App:
             return page
 
     def _maintain_assets(self):
+        failures, last_error = 0, None
         try:
             while not self._asset_stop.is_set():
                 if self.store._compacting:
@@ -180,31 +235,29 @@ class App:
                     if self.store.asset_index_ready():
                         self.store.queue_cache_evictions(stop=self._asset_stop)
                         if self.store.cleanup_files(self._asset_stop):
+                            failures, last_error = 0, None
                             continue
+                    failures, last_error = 0, None
                     if assets or search or inventory or chapters:
                         self._asset_stop.wait(.01)
                         continue
-                except Exception:
-                    logging.exception('Cannot maintain asset index; will retry.')
+                except Exception as error:
+                    if self._asset_stop.is_set(): break
+                    if self.store._compacting:
+                        self._asset_stop.wait(.25)
+                        continue
+                    identity = type(error), str(error)
+                    if identity != last_error: logging.exception('Cannot maintain asset index; will retry with backoff.')
+                    elif failures == 3: logging.warning('Asset maintenance still unavailable; suppressing repeated tracebacks.')
+                    last_error = identity
+                    delay = (.25, 1, 5, 30)[min(failures, 3)]
+                    failures += 1
+                    self._asset_stop.wait(delay)
+                    continue
                 self._asset_stop.wait(.25)
         finally:
             self.store.close_inventory()
-
-    def close(self):
-        with self.lock:
-            if self._download_stop.is_set():
-                return
-            self._download_stop.set()
-            self._download_wake.set()
-            self.store.save_downloads(self.jobs.values())
-        self._download_worker.join(timeout=1)
-        self._asset_stop.set()
-        self._asset_worker.join(timeout=1)
-        self.executor.shutdown(wait=False, cancel_futures=True)
-        if callable(getattr(self.sources, 'close', None)):
-            self.sources.close()
-        wait(tuple(self._download_futures.values()), timeout=1)
-        self.qt.close()
+            if getattr(self, '_startup_failed', False): self._cleanup_failed_start()
 
     def chapter(self, book_id, index, reader=None, reader_sequence=0):
         book = self.store.get_book(book_id)
@@ -326,13 +379,13 @@ class App:
                     referer = validate_public_url(referer, resolve=False)
                 # shortcut: network misses buffer up to 20 MiB; stream upstream if uncached concurrency becomes a bottleneck.
                 try:
-                    body = safe_fetch_bytes(url, headers={"Referer": referer, "Accept": "image/*"})
+                    body = safe_fetch_bytes(url, headers={"Referer": referer, "Accept": "image/*"}, fetcher=self._image_fetcher)
                 except SourceError as error:
                     if (error.code != 'http_error' or error.http_status != 403
                             or (urlsplit(referer).hostname or '').removeprefix('www.') not in ('sangtacviet.com', 'sangtacviet.vip')):
                         raise
                     # STV's cover uses no-referrer; browsers also upgrade its mixed-content image to HTTPS.
-                    body = safe_fetch_bytes(urlsplit(url)._replace(scheme='https').geturl(), headers={"Accept": "image/*"})
+                    body = safe_fetch_bytes(urlsplit(url)._replace(scheme='https').geturl(), headers={"Accept": "image/*"}, fetcher=self._image_fetcher)
                 if len(body) > 20 * 1024 * 1024:
                     raise ValueError("Ảnh vượt giới hạn 20 MiB.")
                 content_type = image_type(body)
@@ -573,19 +626,65 @@ class HTTPServer(ThreadingHTTPServer):
         super().server_bind()
 
     def service_actions(self):
+        if self.app._shutting_down: return
         try:
             self.app.cleanup_trash()
         except Exception:
             logging.exception('Cannot clean up expired trash; will retry.')
 
     def server_close(self):
+        # The serve_forever owner alone closes the listener, drains work and then releases resources.
         super().server_close()
         if hasattr(self, 'app'):
-            self.app.close()
+            return self.app.close()
+        return True
+
+    def process_request(self, request, client_address):
+        with self.app._request_cond: self.app._connections.add(request)
+        try: super().process_request(request, client_address)
+        except BaseException:
+            with self.app._request_cond: self.app._connections.discard(request)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try: super().process_request_thread(request, client_address)
+        finally:
+            with self.app._request_cond:
+                self.app._connections.discard(request)
+                self.app._request_cond.notify_all()
+            self.app._close_wake.set()
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "KeTruyen"
     protocol_version = "HTTP/1.1"
+
+    def setup(self):
+        self.request.settimeout(30)
+        super().setup()
+
+    def _valid_session(self):
+        try:
+            cookies = SimpleCookie(self.headers.get('Cookie', ''))
+            value = cookies['ke_truyen_session'].value if 'ke_truyen_session' in cookies else ''
+            return secrets.compare_digest(value, self.app.session_token)
+        except (CookieError, TypeError): return False
+
+    def _ui_cookie(self):
+        return 'ke_truyen_session=' + self.app.session_token + '; HttpOnly; SameSite=Strict; Path=/api/'
+
+    def _critical_name(self):
+        parts = [part for part in unquote(urlsplit(self.path).path).split('/') if part]
+        path = '/' + '/'.join(parts)
+        if self.command == 'POST':
+            if path.startswith('/api/import/'): return 'nhập thư viện/tệp/OCR'
+            if path == '/api/cache/chapters/compact': return 'thu gọn SQLite'
+            if path in ('/api/dictionaries', '/api/dictionaries/import'): return 'ghi/nhập từ điển QT'
+            if len(parts) == 6 and parts[:2] == ['api', 'books'] and parts[3] == 'chapters' and parts[5] in ('edit', 'restore'):
+                return 'sửa/khôi phục chương'
+        if self.command == 'DELETE':
+            if path == '/api/dictionaries': return 'xóa mục từ QT'
+            if re.fullmatch(r'/api/books/[^/]+', path): return 'xóa vĩnh viễn truyện'
+        return None
 
     @property
     def app(self):
@@ -712,8 +811,21 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self):
         self._response_started = False
         try:
-            self._guard()
-            self._route()
+            with self.app.request_operation(self.connection): self._dispatch_admitted()
+        except ShutdownError as error:
+            self._reply(error.status, {'error': str(error), 'code': error.code, **error.details})
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.close_connection = True
+
+    def _dispatch_admitted(self):
+        try:
+            with ExitStack() as operations:
+                self._guard()
+                name = self._critical_name()
+                if name: operations.enter_context(self.app.critical_operation(name))
+                self._route()
+        except ShutdownError as error:
+            self._reply(error.status, {'error': str(error), 'code': error.code, **error.details})
         except SourceError as error:
             result = {'error': str(error), 'code': error.code}
             if error.http_status is not None:
@@ -725,6 +837,13 @@ class Handler(BaseHTTPRequestHandler):
             status = 409 if error.code == 'captcha_required' else 403 if error.code in ('vip_locked', 'auth_required') else 503 if error.code in ('network_error', 'source_timeout') else 400
             self._reply(status, result)
         except PermissionError as error:
+            # Consume small rejected bodies so Windows does not reset the socket before delivering 403.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if 0 < length <= 65536 and not self.headers.get('Transfer-Encoding'):
+                    self.connection.settimeout(.2)
+                    self.rfile.read(length)
+            except (OSError, ValueError): pass
             self._reply(403, {"error": str(error)})
         except (KeyError, FileNotFoundError) as error:
             self._reply(404, {"error": str(error).strip("'")})
@@ -734,7 +853,10 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(503, {"error": "Không kết nối được nguồn: " + str(error)})
         except (BrokenPipeError, ConnectionResetError):
             pass
-        except Exception:
+        except Exception as error:
+            if self.app._shutting_down and isinstance(error, OSError) and (getattr(error, 'winerror', None) in (10038, 10053, 10054, 10058) or error.errno in (9, 32, 88, 104)):
+                self.close_connection = True
+                return
             logging.exception("Application request failed")
             self._reply(500, {"error": "Có lỗi khi xử lý. Dữ liệu gốc chưa bị thay đổi."})
 
@@ -747,6 +869,18 @@ class Handler(BaseHTTPRequestHandler):
         store = self.app.store
         if path == '/api/instance' and method == 'GET':
             return self._reply(200, {'app': 'ke-truyen-local', 'data_directory': str(store.data_dir), 'pid': os.getpid()})
+        if path == '/api/shutdown' and method == 'POST':
+            if self.headers.get_content_type() != 'application/json':
+                raise PermissionError('Tắt máy chủ cần Content-Type: application/json.')
+            if not self._valid_session() or not secrets.compare_digest(self.headers.get('X-Shutdown-Token', '').encode(), self.app.session_token.encode()):
+                raise PermissionError('Cần mở giao diện của phiên máy chủ này để tắt ứng dụng.')
+            body = self._json()
+            result = self.app.begin_shutdown(body.get('pause_downloads') is True)
+            self._reply(200, result, extra={'Connection': 'close'})
+            self.close_connection = True
+            self.wfile.flush()
+            threading.Thread(target=self.server.shutdown, name='server-shutdown', daemon=True).start()
+            return
         if not path.startswith("/api/"):
             if method != "GET":
                 raise KeyError("Không có đường dẫn này.")
@@ -757,7 +891,8 @@ class Handler(BaseHTTPRequestHandler):
             if not file.is_file():
                 raise FileNotFoundError("Không tìm thấy tệp giao diện.")
             kind = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
-            self._reply(200, file.read_bytes(), kind + ("; charset=utf-8" if kind.startswith("text/") or kind == "application/javascript" else ""))
+            extra = {'Set-Cookie': self._ui_cookie()} if path in ('/', '/index.html') else None
+            self._reply(200, file.read_bytes(), kind + ("; charset=utf-8" if kind.startswith("text/") or kind == "application/javascript" else ""), extra=extra)
             return
         if path == "/api/books" and method == "GET":
             return self._reply(200, store.list_books(query=q.get("q", ""), source=q.get("source", ""),
@@ -767,7 +902,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/groups" and method == "GET":
             return self._reply(200, store.groups())
         if path == "/api/settings":
-            return self._reply(200, store.settings(self._json() if method == "POST" else None))
+            extra = {'X-Shutdown-Token': self.app.session_token} if method == 'GET' and self._valid_session() else None
+            return self._reply(200, store.settings(self._json() if method == "POST" else None), extra=extra)
         if path == '/api/cache/images' and method == 'GET':
             return self._reply(200, store.image_cache_stats())
         if path == '/api/cache/images' and method == 'POST':
@@ -924,5 +1060,8 @@ def make_server(data_dir=None, host="127.0.0.1", port=8765, source_service=None)
     if host != "127.0.0.1":
         raise ValueError("Ứng dụng chỉ lắng nghe trên 127.0.0.1.")
     server = HTTPServer((host, port), Handler)
-    server.app = App(data_dir or ROOT / "user-data", source_service)
+    try: server.app = App(data_dir or ROOT / "user-data", source_service)
+    except BaseException:
+        server.server_close()
+        raise
     return server

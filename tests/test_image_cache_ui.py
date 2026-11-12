@@ -60,7 +60,7 @@ def fixture_server(directory):
                 markup = (ROOT / 'web/index.html').read_text(encoding='utf-8')
                 if 'manual=1' not in self.path:
                     markup = markup.replace('</body>', '<script type="module" src="/qa.js"></script></body>')
-                return self._reply(200, markup.encode('utf-8'), 'text/html; charset=utf-8')
+                return self._reply(200, markup.encode('utf-8'), 'text/html; charset=utf-8', extra={'Set-Cookie': self._ui_cookie()})
             if self.path == '/qa.js':
                 return self._reply(200, CHECKS.encode('utf-8'), 'text/javascript; charset=utf-8')
             if self.path == '/qa/drain-cache':

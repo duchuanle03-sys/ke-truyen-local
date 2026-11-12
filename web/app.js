@@ -2,6 +2,7 @@ import { createReader } from './reader.js';
 import { createCaptchaDialog } from './captcha.js';
 
 const $ = (id) => document.getElementById(id);
+let shutdownToken = '';
 export function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -34,6 +35,7 @@ async function api(path, data, options = {}) {
     throw error;
   }
   const type = response.headers.get('content-type') || '';
+  if (response.headers.get('X-Shutdown-Token')) shutdownToken = response.headers.get('X-Shutdown-Token');
   let result;
   try { result = type.includes('json') ? await response.json() : await response.text(); }
   catch {
@@ -45,6 +47,7 @@ async function api(path, data, options = {}) {
     const error = new Error(typeof result?.error === 'string' ? result.error : `Yêu cầu thất bại (${response.status}). ${typeof result === 'string' ? result.slice(0, 200) : ''}`);
     error.code = typeof result?.code === 'string' ? result.code : 'http_error';
     error.http_status = Number.isInteger(result?.http_status) ? result.http_status : response.status;
+    if (Number.isInteger(result?.active_downloads)) error.active_downloads = result.active_downloads;
     if (result?.access && typeof result.access === 'object') {
       error.access = {
         vip: typeof result.access.vip === 'boolean' ? result.access.vip : null,
@@ -603,6 +606,25 @@ function imageCachePanel(initial, problem = '') {
   return panel;
 }
 
+function shutdownPanel() {
+  const status = el('p', { class: 'muted small', role: 'status', text: 'Tắt chủ động khi không dùng ứng dụng. Đóng tab không tự tắt máy chủ; tác vụ nghe nền và tải vẫn được giữ.' });
+  const control = el('button', { class: 'button', id: 'server-shutdown', text: 'Tắt máy chủ', onclick: async () => {
+    control.disabled = true;
+    const send = pause => api('/api/shutdown', { pause_downloads: pause }, { headers: { 'X-Shutdown-Token': shutdownToken }, captcha: false });
+    try {
+      if (!shutdownToken) { await api('/api/settings'); if (!shutdownToken) throw Error('Hãy tải lại giao diện để nhận phiên máy chủ hiện tại.'); }
+      try { await send(false); }
+      catch (error) {
+        if (error.code !== 'active_downloads') throw error;
+        if (!confirm(`Có ${error.active_downloads} tác vụ tải. Tạm dừng các tác vụ tải đang chạy và tắt máy chủ?`)) { control.disabled = false; return; }
+        await send(true);
+      }
+      status.textContent = 'Đã nhận lệnh tắt. Máy chủ đang hoàn tất yêu cầu và dọn tài nguyên. Nếu quá lâu, kiểm tra reader.log. Mở lại Start.cmd hoặc lối tắt để khởi động sau khi máy chủ cũ kết thúc.';
+    } catch (error) { status.textContent = error.message; notify(error.message, true); control.disabled = false; }
+  } });
+  return el('section', { class: 'settings-section', id: 'server-settings' }, [el('h2', { text: 'Máy chủ cục bộ' }), status, control]);
+}
+
 async function renderSettings(jobsOffset = 0) {
   jobsOffset = Number.isInteger(jobsOffset) ? Math.max(0, jobsOffset) : 0;
   const target = $('settings-page'); target.replaceChildren(el('p', { text: 'Đang kiểm tra công cụ…' }));
@@ -652,6 +674,7 @@ async function renderSettings(jobsOffset = 0) {
     jobs.append(pages);
   } else jobs.append(el('p', { class: 'inline-error', text: results[1].reason.message }));
   target.replaceChildren(capabilities, chapterCachePanel(results[3].status === 'fulfilled' ? results[3].value : null, results[3].reason?.message), imageCachePanel(results[2].status === 'fulfilled' ? results[2].value : null, results[2].reason?.message), jobs, el('section', { class: 'settings-section' }, [el('h2', { text: 'Dữ liệu thư viện' }), el('p', { class: 'muted', text: 'Thư viện, nội dung và cài đặt mới nằm riêng trong reader-local/user-data. Nhập backup giữ nguyên bộ xuất gốc. Đóng ứng dụng trước khi sao chép thư mục dữ liệu để lưu dự phòng.' }), el('div', { class: 'header-actions' }, [el('button', { class: 'button', text: 'Nhập thư viện hiện có', onclick: importBackup }), el('button', { class: 'button', text: 'Tất cả ghi chú đã lưu', onclick: globalNotesDialog })])]));
+  target.append(shutdownPanel());
 }
 
 async function globalNotesDialog() {

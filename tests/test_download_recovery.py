@@ -181,15 +181,16 @@ class DownloadRecoveryTests(unittest.TestCase):
         job = app.download('book')
         try:
             self.assertTrue(blocked.wait(3))
-            app.close()
+            app.begin_shutdown(True)
             saved = self.store.download_job(job['id'])
             self.assertEqual(saved['completed'], 1)
             self.assertFalse(saved['cancelled'])
-            self.assertEqual(saved['status'], 'running')
+            self.assertEqual(saved['status'], 'paused')
         finally:
             release.set()
             for future in app._download_futures.values():
                 future.result(timeout=3)
+            self.assertTrue(app.close(timeout=2))
 
     def test_old_shutdown_worker_cannot_overwrite_a_recovered_job(self):
         self.book()
@@ -205,10 +206,16 @@ class DownloadRecoveryTests(unittest.TestCase):
         job = old_app.download('book')
         try:
             self.assertTrue(entered.wait(2))
-            old_app.close()
+            self.assertFalse(old_app.close(timeout=.2))
             new_source = GateSource()
             new_source.release.set()
-            self.app(new_source)
+            with self.assertRaises(OSError): self.app(new_source)
+            release.set()
+            for future in old_app._download_futures.values(): future.result(timeout=3)
+            self.assertTrue(old_app.close(timeout=2))
+            restored = self.app(new_source)
+            self.assertEqual(self.store.download_job(job['id'])['status'], 'paused')
+            restored.job_action(job['id'], 'resume')
             self.wait_for(lambda: self.store.download_job(job['id'])['status'] == 'completed')
         finally:
             release.set()

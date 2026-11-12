@@ -81,7 +81,7 @@ class StvHttp:
             self._stop_locked()
 
     def _stop_locked(self):
-        process, self.process = self.process, None
+        process = self.process
         if process is not None:
             self.output.put(None)
             if process.poll() is None:
@@ -91,6 +91,7 @@ class StvHttp:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+            self.process = None
             for stream in (process.stdin, process.stdout):
                 if stream:
                     try:

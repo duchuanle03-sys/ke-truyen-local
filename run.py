@@ -3,10 +3,12 @@ import argparse
 import http.client
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import subprocess
 import sys
 import time
+import threading
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlencode
@@ -49,6 +51,27 @@ def report_error(message):
         ctypes.windll.user32.MessageBoxW(None, message, 'Kệ Truyện', 0x10)
 
 
+def configure_logging(data_dir):
+    logging.basicConfig(handlers=[RotatingFileHandler(str(Path(data_dir).parent / 'reader.log'),
+        maxBytes=2 * 1024 * 1024, backupCount=2, encoding='utf-8', delay=True)],
+        level=logging.WARNING, format='%(asctime)s %(levelname)s %(message)s')
+
+
+def console_close_handler(server):
+    if sys.platform != 'win32': return lambda: None
+    import ctypes
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+    @callback_type
+    def control(event):
+        if event not in (2, 5, 6): return False
+        try: server.app.begin_shutdown(True, force=True, timeout=.5)
+        except Exception: logging.exception('Console closed before pause could be persisted; startup recovery remains necessary.')
+        threading.Thread(target=server.shutdown, name='console-shutdown', daemon=True).start()
+        return True
+    if not ctypes.windll.kernel32.SetConsoleCtrlHandler(control, True): return lambda: None
+    return lambda: ctypes.windll.kernel32.SetConsoleCtrlHandler(control, False)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Kệ Truyện — thư viện cá nhân trên máy.")
     parser.add_argument("--port", type=int, default=8765)
@@ -67,42 +90,47 @@ def main(argv=None):
             open_window(f'http://127.0.0.1:{args.port}' + query)
         return 0
     args.data_dir.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(filename=str(args.data_dir.parent / "reader.log"), level=logging.WARNING,
-                        format="%(asctime)s %(levelname)s %(message)s", encoding="utf-8")
-    try:
-        server = make_server(args.data_dir, port=args.port)
-    except OSError as error:
-        if reuse:
-            # Another launch may be starting the same library at the same time.
-            for _ in range(6):
+    configure_logging(args.data_dir)
+    for attempt in range(81):
+        try:
+            server = make_server(args.data_dir, port=args.port)
+            break
+        except OSError as error:
+            if reuse:
                 if running_instance(args.data_dir, args.port):
                     if not args.no_browser:
                         open_window(f'http://127.0.0.1:{args.port}' + query)
                     return 0
-                time.sleep(.15)
-        report_error('Không mở được Kệ Truyện. Cổng đang được dùng hoặc thuộc thư viện khác: ' + str(error))
-        return 1
-    if args.import_backup:
-        result = server.app.store.import_backup(args.import_backup)
-        print(f"Khôi phục {result['books']} truyện, {result['chapters']} mục chương.")
-    if args.import_qt:
-        from qt_pack import install_pack
-        report = install_pack(server.app.qt, args.import_qt)
-        (args.data_dir / 'qt-install-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
-        print('Đã thêm', sum(item['inserted'] for item in report['files'].values()), 'mục QT; nhóm còn thiếu:', ', '.join(report['pending']))
-    url = f"http://127.0.0.1:{server.server_address[1]}" + query
-    print("Kệ Truyện đang chạy tại", url)
-    print("Dữ liệu riêng:", args.data_dir.resolve())
-    print("Giữ cửa sổ này mở. Nhấn Ctrl+C để dừng.")
-    if not args.no_browser:
-        open_window(url)
+            if not reuse or attempt == 80:
+                report_error('Không mở được Kệ Truyện. Cổng/thư viện đang được dùng hoặc máy chủ cũ chưa tắt xong: ' + str(error))
+                return 1
+            time.sleep(.25)
+    unregister = console_close_handler(server)
     try:
+        if args.import_backup:
+            with server.app.critical_operation('nhập thư viện khởi động'):
+                result = server.app.store.import_backup(args.import_backup)
+            print(f"Khôi phục {result['books']} truyện, {result['chapters']} mục chương.")
+        if args.import_qt:
+            from qt_pack import install_pack
+            with server.app.critical_operation('nhập gói QT khởi động'):
+                report = install_pack(server.app.qt, args.import_qt)
+            (args.data_dir / 'qt-install-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+            print('Đã thêm', sum(item['inserted'] for item in report['files'].values()), 'mục QT; nhóm còn thiếu:', ', '.join(report['pending']))
+        url = f"http://127.0.0.1:{server.server_address[1]}" + query
+        print("Kệ Truyện đang chạy tại", url)
+        print("Dữ liệu riêng:", args.data_dir.resolve())
+        print("Giữ cửa sổ này mở. Nhấn Ctrl+C hoặc chọn Tắt máy chủ trong Thiết lập để dừng.")
+        if not args.no_browser: open_window(url)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
-    return 0
+        closed = server.server_close()
+        unregister()
+    if not closed:
+        report_error('Chưa tắt hoàn toàn: còn thao tác đang kết thúc hoặc lỗi dọn tài nguyên. Xem reader.log; không chạy thêm máy chủ cho thư viện này.')
+    return 0 if closed else 1
 
 if __name__ == "__main__":
     try:

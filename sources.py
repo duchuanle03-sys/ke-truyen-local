@@ -2,9 +2,11 @@
 import base64
 import binascii
 import http.client
+from functools import partial
 import json
 import re
 import socket
+import _socket
 import threading
 import webbrowser
 import urllib.error
@@ -49,12 +51,21 @@ def validate_public_url(url, resolve=True):
     return checked
 
 
-def _public_socket(address, timeout=20, source_address=None, **kwargs):
+def abort_socket(connection):
+    try: socket.socket.shutdown(connection, socket.SHUT_RDWR)
+    except OSError: pass
+    # Socket.close defers the real close while makefile() readers exist; invalidate its owned FD to abort them.
+    _socket.socket.close(connection)
+
+
+def _public_socket(address, timeout=20, source_address=None, register=None, stopped=None, **kwargs):
     # Connect to the checked sockaddr itself so a second DNS lookup cannot rebind it.
     error = None
     for family, socktype, proto, _, sockaddr in _public_addresses(*address):
+        if stopped is not None and stopped.is_set(): raise SourceError('HTTP đã đóng.', code='network_error')
         connection = socket.socket(family, socktype, proto)
         try:
+            if register is not None: register(connection)
             connection.settimeout(timeout)
             if source_address:
                 connection.bind(source_address)
@@ -67,25 +78,47 @@ def _public_socket(address, timeout=20, source_address=None, **kwargs):
 
 
 class _HTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, owner=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.owner = owner
+
     def connect(self):
-        self._create_connection = _public_socket
+        self._create_connection = self.owner._connect if self.owner is not None else _public_socket
         super().connect()
 
 
 class _HTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, owner=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.owner = owner
+
     def connect(self):
-        self._create_connection = _public_socket
-        super().connect()
+        self._create_connection = self.owner._connect if self.owner is not None else _public_socket
+        http.client.HTTPConnection.connect(self)
+        if self.owner is not None and self.owner._closed.is_set():
+            self.sock.close()
+            raise SourceError('HTTP đã đóng.', code='network_error')
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self._tunnel_host or self.host, do_handshake_on_connect=False)
+        if self.owner is not None: self.owner._register(self.sock)
+        self.sock.do_handshake()
 
 
 class _HTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, owner=None):
+        super().__init__()
+        self.owner = owner
+
     def http_open(self, req):
-        return self.do_open(_HTTPConnection, req)
+        return self.do_open(partial(_HTTPConnection, owner=self.owner), req)
 
 
 class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, owner=None):
+        super().__init__()
+        self.owner = owner
+
     def https_open(self, req):
-        return self.do_open(_HTTPSConnection, req, context=self._context)
+        return self.do_open(partial(_HTTPSConnection, owner=self.owner), req, context=self._context)
 
 
 class _PublicRedirect(urllib.request.HTTPRedirectHandler):
@@ -98,11 +131,35 @@ class _PublicRedirect(urllib.request.HTTPRedirectHandler):
 
 class _PublicFetcher:
     def __init__(self):
+        self._closed = threading.Event()
+        self._lock = threading.Lock()
+        self._sockets = set()
+        self._local = threading.local()
         self.cookies = CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _HTTPHandler(),
-            _HTTPSHandler(), _PublicRedirect(), urllib.request.HTTPCookieProcessor(self.cookies))
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _HTTPHandler(self),
+            _HTTPSHandler(self), _PublicRedirect(), urllib.request.HTTPCookieProcessor(self.cookies))
+
+    def _register(self, connection):
+        with self._lock:
+            if self._closed.is_set():
+                connection.close()
+                raise SourceError('HTTP đã đóng.', code='network_error')
+            self._sockets.add(connection)
+            self._local.sockets.append(connection)
+
+    def _connect(self, *args, **kwargs):
+        return _public_socket(*args, register=self._register, stopped=self._closed, **kwargs)
+
+    def close(self):
+        with self._lock:
+            self._closed.set()
+            sockets = tuple(self._sockets)
+        for connection in sockets:
+            abort_socket(connection)
 
     def _read(self, url, headers=None, max_bytes=_MAX_RESPONSE):
+        if self._closed.is_set(): raise SourceError('HTTP đã đóng.', code='network_error')
+        self._local.sockets = []
         url = validate_public_url(url)
         if type(max_bytes) is not int or max_bytes < 1:
             raise SourceError('Giới hạn tải không hợp lệ')
@@ -117,6 +174,7 @@ class _PublicFetcher:
             with self.opener.open(request, timeout=20) as response:
                 validate_public_url(response.url)
                 raw = response.read(max_bytes + 1)
+                if self._closed.is_set(): raise SourceError('HTTP đã đóng.', code='network_error')
                 if len(raw) > max_bytes:
                     raise SourceError('Nội dung nguồn vượt giới hạn tải')
                 return raw, response.headers.get_content_charset() or 'utf-8'
@@ -125,6 +183,12 @@ class _PublicFetcher:
             raise SourceError('Nguồn trả HTTP ' + str(exc.code), code='http_error', http_status=exc.code) from exc
         except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
             raise SourceError('Không tải được nguồn: ' + str(exc), code='network_error') from exc
+        finally:
+            with self._lock:
+                for connection in self._local.sockets:
+                    self._sockets.discard(connection)
+                    connection.close()
+            self._local.sockets = []
 
     def __call__(self, url):
         for attempt in range(2):
@@ -145,8 +209,8 @@ class _PublicFetcher:
         raise SourceError('Nguồn yêu cầu kiểm tra trình duyệt; chưa tải được nội dung')
 
 
-def safe_fetch_bytes(url, headers=None, max_bytes=20 * 1024 * 1024):
-    return _PublicFetcher()._read(url, headers, max_bytes)[0]
+def safe_fetch_bytes(url, headers=None, max_bytes=20 * 1024 * 1024, fetcher=None):
+    return (fetcher or _PublicFetcher())._read(url, headers, max_bytes)[0]
 
 
 def _value(root, selector, attribute=None):
@@ -228,17 +292,24 @@ class SourceService:
         self.fetcher = fetcher if fetcher is not None else _PublicFetcher()
         self._stv_source = None
         self._stv_lock = threading.Lock()
+        self._closed = False
 
     def _stv(self):
         from stv_source import StvSource
         with self._stv_lock:
+            if self._closed: raise SourceError('Nguồn HTTP đã đóng.', code='network_error')
             if self._stv_source is None:
                 self._stv_source = StvSource()
             return self._stv_source
 
     def close(self):
-        if self._stv_source is not None:
-            self._stv_source.close()
+        with self._stv_lock:
+            self._closed = True
+            source = self._stv_source
+        try:
+            if callable(getattr(self.fetcher, 'close', None)): self.fetcher.close()
+        finally:
+            if source is not None: source.close()
 
     def captcha(self, source, action, challenge_id, answer=None):
         if source != 'stv':

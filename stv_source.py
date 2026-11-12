@@ -77,9 +77,9 @@ class StvSource:
                 self.pending['event'].set()
                 self.pending = None
             self.condition.notify_all()
-        self.http.close()
-        if self.metadata_http is not self.http:
-            self.metadata_http.close()
+        try: self.http.close()
+        finally:
+            if self.metadata_http is not self.http: self.metadata_http.close()
 
     @contextmanager
     def _reading_turn(self, background=False, cancelled=None):

@@ -15,6 +15,7 @@
 !qt_pack.py
 !run.py
 !server.py
+!lifecycle.py
 !sources.py
 !source_errors.py
 !stv_source.py

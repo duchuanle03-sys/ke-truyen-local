@@ -265,13 +265,16 @@ class DownloadTests(unittest.TestCase):
         job = self.app.download('book')
         try:
             self.assertTrue(entered.wait(2))
-            self.app.close()
+            self.app.begin_shutdown(True)
         finally:
             release.set()
+        self.assertTrue(self.app.close(timeout=2))
         self.futures[-1].result(timeout=3)
         self.assertEqual(self.app.store.download_job(job['id'])['completed'], 0)
         self.assertEqual(attempts[urls[2]], 0)
         self.app = App(self.tmp.name, self.source)
+        self.assertEqual(self.app.store.download_job(job['id'])['status'], 'paused')
+        self.app.job_action(job['id'], 'resume')
         self.wait_for(lambda: self.app.store.download_job(job['id'])['status'] == 'completed')
         self.assertEqual([attempts[url] for url in urls], [1, 1, 1])
         self.assertEqual(self.source.chapter.call_args_list, [call('full', url) for url in self.payloads])

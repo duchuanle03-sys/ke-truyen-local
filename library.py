@@ -401,20 +401,20 @@ class Store(ChapterCache):
                     and not db.execute('SELECT 1 FROM asset_pending LIMIT 1').fetchone())
 
     @contextlib.contextmanager
-    def db(self):
+    def db(self, timeout=30):
         with self._database_gate:
             if self._compacting:
                 raise ValueError('Đang thu gọn cơ sở dữ liệu; hãy thử lại sau.')
             self._database_users += 1
         try:
-            with self._connection() as db:
+            with self._connection(timeout) as db:
                 yield db
         finally:
             with self._database_gate: self._database_users -= 1
 
     @contextlib.contextmanager
-    def _connection(self):
-        db = sqlite3.connect(self.path, timeout=30)
+    def _connection(self, timeout=30):
+        db = sqlite3.connect(self.path, timeout=timeout)
         db.row_factory = sqlite3.Row
         db.create_function('shelf_fold', 1, str.casefold, deterministic=True)
         db.execute("PRAGMA foreign_keys=ON")
@@ -449,6 +449,23 @@ class Store(ChapterCache):
 
     def save_download(self, job):
         self.save_downloads((job,))
+
+    def active_download_count(self, timeout=1):
+        with self.db(timeout=timeout) as db:
+            return db.execute("SELECT count(*) FROM download_jobs WHERE status IN ('queued','running','verification_required')").fetchone()[0]
+
+    def pause_downloads(self, jobs, timeout=1):
+        deadline = time.monotonic() + timeout
+        with self.db(timeout=timeout) as db:
+            db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+            db.execute('BEGIN IMMEDIATE')
+            db.executemany('UPDATE download_jobs SET data=?,updated_at=? WHERE id=?',
+                           ((self._download_data(job), time.time(), job['id']) for job in jobs))
+            db.execute("UPDATE download_jobs SET status=CASE WHEN cancelled=1 THEN 'cancelled' ELSE 'paused' END,updated_at=? WHERE status IN ('queued','running','verification_required')", (time.time(),))
+
+    def checkpoint(self, timeout=1):
+        with self.db(timeout=timeout) as db:
+            db.execute('PRAGMA wal_checkpoint(PASSIVE)').fetchone()
 
     def save_downloads(self, jobs):
         now = time.time()

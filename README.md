@@ -12,9 +12,15 @@ Nhấp đúp `Start.cmd`, hoặc chạy trong thư mục dự án:
 python -X utf8 run.py
 ```
 
-Mở `http://127.0.0.1:8765` nếu trình duyệt không tự mở. Giữ cửa sổ máy chủ mở khi đọc; nhấn `Ctrl+C` để dừng. Có thể đổi cổng bằng `--port 8768` hoặc tắt mở trình duyệt tự động bằng `--no-browser`.
+Mở `http://127.0.0.1:8765` nếu trình duyệt không tự mở. Giữ cửa sổ máy chủ mở khi đọc; nhấn `Ctrl+C` hoặc vào **Thiết lập → Máy chủ cục bộ → Tắt máy chủ** để dừng. Nút này cũng dùng được khi máy chủ chạy bằng `pythonw.exe` từ lối tắt. Có thể đổi cổng bằng `--port 8768` hoặc tắt mở trình duyệt tự động bằng `--no-browser`.
 
 Nếu máy chủ của cùng thư viện đã chạy, mở lại `Start.cmd` sẽ dùng máy chủ đó để mở giao diện, kể cả khi máy chủ được khởi động nền từ lối tắt truyện.
+
+Khi tắt có kiểm soát, app từ chối yêu cầu mới bằng 503, lưu checkpoint và chuyển mọi tác vụ đang chờ/đang tải/chờ CAPTCHA sang **Tạm dừng** trong SQLite trước khi xác nhận nhận lệnh. Nếu có tác vụ tải, giao diện yêu cầu bạn đồng ý tạm dừng trước; hủy xác nhận giữ máy chủ hoạt động. Sau khi mở lại, chọn **Tiếp tục** để tải tiếp. Chỉ sự cố/kill/mất điện để lại tác vụ chưa tạm dừng mới được phục hồi tự động từ checkpoint như trước. Chương/tệp/ảnh đã lưu vẫn được giữ. Thao tác nhập thư viện/tệp/OCR, nhập/sửa từ điển, sửa/khôi phục chương, xóa vĩnh viễn và thu gọn SQLite đang chạy sẽ chặn nút tắt bằng thông báo 409 có tên thao tác. Không có bộ hẹn giờ tự tắt theo heartbeat/5 phút; hết hạn lease đọc của cache chương không tắt máy chủ.
+
+Yêu cầu tắt cần cookie riêng mỗi lần khởi động (`HttpOnly; SameSite=Strict; Path=/api/`), header khớp và kiểm tra Host/Origin/loại nội dung JSON. Token chỉ trao cho giao diện có cookie hợp lệ, không lưu vào từ điển/thư viện/log. Máy chủ ngừng nhận yêu cầu trước, chờ tối đa 2 giây cho công việc đang chạy tự kết thúc rồi hủy các kết nối HTTP/TLS/pipe còn chờ; mặc định một lượt dọn có hạn khoảng 15 giây. QT, inventory, checkpoint và khóa thư viện chỉ được đóng sau khi các request, worker và lease thực sự kết thúc. Nếu chưa thể hoàn tất, app báo dọn chưa xong, giữ tài nguyên còn dùng và tự thử lại; launcher trả mã lỗi thay vì báo thoát thành công. Giao diện chỉ xác nhận đã nhận lệnh tắt. Khóa `.server.lock` được giữ đến khi dọn xong; lối tắt chờ/thử khởi động lại tối đa khoảng 20 giây, tránh mở thêm writer khi cổng đã nhả mà worker cũ còn sống.
+
+Đóng cửa sổ console Windows có handler cố gắng lưu trạng thái tạm dừng ngay, nhưng OS có thể kết thúc tiến trình trước khi dọn xong; Task Manager/mất điện cũng không bảo đảm chạy handler. SQLite WAL, checkpoint tác vụ, lease hết hạn và hàng đợi dọn bền vững vẫn là cơ chế phục hồi sau sự cố. Không nên sao lưu hoặc mở thêm máy chủ cho cùng thư viện khi app báo dọn chưa hoàn tất. `reader.log` xoay vòng tối đa 2 MiB/tệp và 2 bản cũ; lỗi bảo trì lặp dùng backoff 0,25 → 1 → 5 → 30 giây, chỉ ghi lại traceback khi lỗi thay đổi và đặt lại khi có lượt thành công.
 
 Bản clone mới có thư viện trống. Dùng **Nhập file**, **Nhập thư viện**, hoặc **Khám phá** để thêm truyện.
 

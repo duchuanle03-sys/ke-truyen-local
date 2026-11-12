@@ -505,20 +505,20 @@ class AssetCleanupTests(unittest.TestCase):
         with patch('library.parse_html', side_effect=parse):
             app = App(self.root)
             def close():
-                app.close()
+                self.assertFalse(app.close(timeout=.2))
                 closed.set()
             try:
                 self.assertTrue(entered.wait(2))
                 closer = threading.Thread(target=close)
                 closer.start()
                 self.assertTrue(closed.wait(1.5), 'Shutdown waited for a blocked maintenance operation')
+                self.assertFalse(app._resources_closed, 'Resources closed underneath the active parser')
             finally:
                 release.set()
                 app._asset_worker.join(6)
                 if 'closer' in locals():
                     closer.join(6)
-                else:
-                    app.close()
+                self.assertTrue(app.close(timeout=2))
         self.assertEqual(len(calls), 1)
 
     def test_restart_resumes_persistent_candidates_after_process_exit(self):
