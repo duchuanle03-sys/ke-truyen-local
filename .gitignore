@@ -33,5 +33,7 @@
 !/windows/shortcut.ps1
 !/tests/
 !/tests/test_*.py
+!/tests/qt_index_benchmark.py
 !/tests/fixtures/
 !/tests/fixtures/source_*.json
+!/tests/fixtures/qt_index_profile.json

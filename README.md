@@ -92,7 +92,47 @@ Node.js cần khi dùng Sáng Tác Việt và kiểm tra JavaScript. Kiểm th�
 
 Benchmark cache chương: `python -X utf8 -m unittest discover -s tests -p test_chapter_cache_scale.py -v` tạo 100.000 bản ghi chương, 512 body đã lưu ở hai truyện chữ/tranh. Một lượt đo trên máy phát triển: chọn 8 LRU khoảng 3 ms, dọn một batch khoảng 19 ms; bỏ 172.200 byte body và 86.104 byte văn bản chuẩn hóa. Sau gộp nền, payload FTS giảm 426.130 byte. SQLite vật lý trước/sau batch đều 47.030.272 byte, tăng lên 47.099.904 byte trong gộp, rồi còn 46.514.176 byte sau thu gọn chủ động; freelist tương ứng 60/76/28/0 trang (4.096 byte/trang). SQLite đi kèm Python trên máy này thiếu `dbstat`, nên benchmark đo payload các block FTS riêng, không gọi đó là số trang vật lý của riêng FTS. Kết quả thực tế phụ thuộc độ lớn chương, nội dung chỉ mục và phần cứng; chưa đo trường hợp hàng trăm nghìn body rất lớn. Mỗi lần chạy in đầy đủ thời gian, dung lượng payload/normalized, page count, freelist, kích thước vật lý trước/sau dọn, sau gộp và sau compaction.
 
-Benchmark QT: `python -X utf8 -m unittest discover -s tests -p test_qt_scale.py -v` dùng 1.014.374 mục chung tổng hợp, không mở từ điển cá nhân. Một lượt đo: save/delete trên cache chung đã nóng 0,23/0,97 ms; phạm vi truyện 0,02/0,65 ms; lấy composite snapshot 0,006 ms; riêng traversal/dịch chương 10.000 ký tự 8,9 ms. Dựng lạnh khoảng 1,57 giây. Đây là các phép đo riêng; sao chép các nút có nhiều nhánh và lịch cấp CPU/GIL có thể làm tăng độ trễ. Dựng lại toàn phạm vi giữ cả snapshot cũ và mới trong RAM đến khi lượt dịch cũ hoàn tất.
+Benchmark QT: `python -X utf8 -m unittest discover -s tests -p test_qt_scale.py -v` dùng 1.014.374 mục chung tổng hợp với độ dài 1–23 ký tự và các tiền tố chồng nhau. Fixture chỉ chứa thống kê gộp: số mục, độ dài từ, độ dài tiền tố chung của hai từ kề nhau khi sắp xếp, cùng số ký tự/số byte UTF-8/độ rộng Unicode của nghĩa đầu. Không chứa từ hoặc bản dịch cá nhân. Bộ sinh bảo toàn chính xác các histogram này, gán nhãn CJK ngẫu nhiên khác nhau cho các nhánh và sinh nghĩa công khai; tần suất từ trong truyện thực tế chưa được mô hình hóa. Đo riêng lấy snapshot, sửa/xóa và dịch 10.000/100.000 ký tự; không so trực tiếp với benchmark hai ký tự cũ.
+
+### So sánh các chỉ mục QT thử nghiệm
+
+Các prototype nằm riêng trong `tests/qt_index_benchmark.py`; ứng dụng vẫn dùng chỉ mục hiện tại trong `qt.py`. Chưa thêm dependency cho app, persistent compiled cache hay pre-warming. Để so sánh trie hiện tại, flat dictionary, MARISA và flat dictionary chia bucket, dùng Python Windows đang chạy app:
+
+```powershell
+python -m venv .qa/qt-index-env
+.qa/qt-index-env/Scripts/python.exe -m pip install --only-binary=:all: --no-deps marisa-trie==1.4.1
+.qa/qt-index-env/Scripts/python.exe -X utf8 -m unittest discover -s tests -p test_qt_index_candidates.py -v
+.qa/qt-index-env/Scripts/python.exe -X utf8 tests/qt_index_benchmark.py --generate tests/fixtures/qt_index_profile.json --fixture .qa/qt-index-bench/fixture/qt.sqlite3 --output .qa/qt-index-bench/generated-profile.json
+.qa/qt-index-env/Scripts/python.exe -X utf8 tests/qt_index_benchmark.py --fixture .qa/qt-index-bench/fixture/qt.sqlite3 --output .qa/qt-index-bench/results.json --runs 3 --repeats 7
+.qa/qt-index-env/Scripts/python.exe -X utf8 tests/qt_index_benchmark.py --fixture .qa/qt-index-bench/fixture/qt.sqlite3 --output .qa/qt-index-bench/restore-results.json --phase restore --runs 3
+```
+
+Bộ sinh từ chối ghi đè fixture đã có; dùng đường dẫn mới nếu chạy lại bước sinh. Mỗi candidate chạy tuần tự trong subprocess mới trên bản sao của cùng SQLite tổng hợp. Benchmark chỉ cho phép sửa fixture có marker riêng, không nhận từ điển đang dùng. Kết quả JSON ghi phiên bản Python/SQLite/native package, working-set RSS và private commit trước/sau dựng, peak RSS, thời gian dựng lạnh, acquisition, dịch thuần ở năm workload, add/update/delete chung/riêng, overlay, merge/restore, reader khi rebuild và thời gian editor chờ khóa. RSS bao gồm toàn tiến trình; peak là high-water mark của Windows đến thời điểm lấy mẫu, không phải riêng heap trie. “Lạnh” nghĩa chưa có snapshot trong tiến trình, không có nghĩa xóa cache đĩa của Windows. Dữ liệu fixture và kết quả trong `.qa/` không đưa lên Git.
+
+MARISA thử nghiệm dùng `Trie`, key IDs, blob UTF-8 cùng bảng offset 64-bit/length 32-bit; chỉ decode nghĩa khi khớp. Flat candidates dùng cùng bảng nghĩa để so sánh đầy đủ. Các prototype dùng CoW overlay và tombstone; mức overlay chỉ là các điểm đo, chưa phải ngưỡng rebuild được chọn. Kích thước serialized MARISA cộng đầy đủ blob và hai bảng số, không dùng riêng dung lượng trie để kết luận RAM. Chưa có định dạng cache bền vững hoặc benchmark mmap/warm startup.
+
+Kiểm tra đối chiếu dùng nguyên vòng dịch, SQL mutation và cơ chế snapshot của app, chỉ thay dispatch/build trong tiến trình kiểm thử. Corpus gồm match, miss, tiền tố có đuôi không khớp (có thể lùi về từ ngắn hơn), chữ Việt trộn chữ Hán và fallthrough đến Hán Việt. Mỗi lượt dịch dùng snapshot đã lấy trước; SHA-256 kết quả phải trùng giữa mọi candidate/lượt. Median/p95/max được ghi cùng số mẫu; với 7 mẫu, p95 theo nearest rank chính là mẫu lớn nhất. Reader trong phép thử rebuild được phát tối đa mỗi 100 ms, không phải tải đồng thời không giới hạn; vòng reader CPU chạy liên tục có thể làm iterator SQLite tranh GIL rất lâu.
+
+Merge đo 2.000 mục vào Names trên bộ một triệu mục. Phép restore trong `--phase all` chỉ khôi phục tier pronouns ban đầu rỗng, đo rebuild chứ không đại diện khôi phục nhiều dữ liệu. Dùng thêm `--phase restore` để thay Names bằng 2.000 mục rồi khôi phục đủ 183.769 mục gốc, kiểm tra số mục trả về. Mỗi lần thay/khôi phục trong phase này đo một mẫu, lấy median/tail qua ba subprocess độc lập. Bulk import/restore vẫn là API hiện có và dựng lại toàn phạm vi, nên thời gian còn gồm SQL/backups của các tier không thay đổi.
+
+Kết quả đo ngày 13/11/2026, Python 3.14.7 x64 / SQLite 3.50.4 trên Windows, 3 subprocess mỗi candidate và 7 mẫu mỗi workload (median của ba median theo process):
+
+- Trie hiện tại: RSS 562,2 MiB; dựng 6,09 s; match 10k/100k ký tự 5,12/47,03 ms; mixed 100k 57,28 ms; miss 100k 70,64 ms.
+- Flat + bảng nghĩa: RSS 211,7 MiB; dựng 5,73 s; match 19,38/207,13 ms; mixed 106,58 ms; miss 81,14 ms.
+- MARISA + bảng nghĩa: RSS 78,9 MiB; dựng 7,22 s; match 9,36/93,64 ms; mixed 77,66 ms; miss 84,22 ms.
+- Bucketed flat + bảng nghĩa: RSS 226,6 MiB; dựng 6,13 s; match 9,60/94,28 ms; mixed 81,67 ms; miss 83,05 ms.
+
+RSS sau các lượt thay snapshot lần lượt khoảng 618,6/238,6/95,3/257,0 MiB. Peak lúc dựng lần đầu khoảng 564,2/214,1/133,3/229,1 MiB; high-water đến sau các lượt merge/khôi phục tier rỗng là 1.176,8/475,6/261,0/505,7 MiB. Đây là số của toàn process trên fixture tổng hợp, chưa phải đo toàn app với thư viện/từ điển thật. Mọi workload giữa 12 subprocess cho cùng SHA-256 kết quả. Các mẫu match 100k chậm nhất lần lượt 54,9/231,0/192,0/156,9 ms, cho thấy biến động cần được giữ trong báo cáo.
+
+Lấy snapshot nóng khoảng 0,006 ms cho cả bốn candidate. Median add/update/delete chung: trie 1,00/0,82/0,73 ms; flat 0,80/0,72/0,63 ms; MARISA 0,75/0,50/0,54 ms; bucketed flat 0,74/0,53/0,63 ms. Các thao tác riêng truyện khoảng 0,5–0,75 ms. Merge 2.000 mục vào bộ lớn lần lượt 8,62/6,72/8,21/7,05 s; rebuild hiện vẫn dựng lại các tier khác trong cùng phạm vi. Overlay đã đo ở 16/128/512/2.048 mục; ước lượng object size ở mức cuối khoảng 335 KiB, chưa chọn ngưỡng rebuild production từ các probe này.
+
+MARISA serialized đầy đủ 36.953.276 byte (khoảng 35,2 MiB). Wheel `marisa-trie==1.4.1` cho `cp314-win_amd64` cài thành công trong venv dùng cùng Python của app, tải khoảng 173 kB và không biên dịch C++ trên máy này. Dependency vẫn chỉ phục vụ benchmark; không ảnh hưởng việc mở app hoặc đọc truyện bình thường.
+
+Phép khôi phục Names riêng cũng chạy 3 subprocess mỗi candidate, mỗi lượt xác nhận đủ 183.769 mục. Median restore theo thứ tự trie/flat/MARISA/bucketed: 8,18/6,22/7,98/6,61 s; mẫu chậm nhất 8,28/7,34/9,55/7,90 s. Peak process đến sau restore và rebuild đồng thời: 1.172,2/516,3/337,3/539,2 MiB.
+
+Reader 10k trong phép này tiếp tục đo qua cả publish và giải phóng snapshot cũ: median 6,25/10,91/7,98/8,15 ms, mẫu chậm nhất 440,8/25,0/30,2/34,8 ms. Editor chờ khóa rebuild trung vị 7,28/5,77/7,34/5,99 s. Đây là tải có khoảng cách 100 ms giữa các yêu cầu; chưa đo nhiều reader chạy CPU liên tục. Các mẫu concurrency cũ dừng ngay sau construction không được dùng cho các số này. MARISA cải thiện tail lúc thay index, dù traversal thông thường chậm hơn.
+
+Decision gate: MARISA giảm khoảng 86% RSS process ban đầu, nhưng match throughput nóng chậm gần 2 lần; cold build cũng chậm hơn. Hai phương án standard-library giảm RAM nhưng chưa giữ được tốc độ dịch. Vì chưa candidate compact nào đạt đồng thời hai mục tiêu, giai đoạn 1–2 giữ production backend hiện tại. Giai đoạn tích hợp cần cải thiện đường lookup hoặc chấp nhận rõ tradeoff RAM/tốc độ này. Persistent cache, mmap và pre-warming được để ở giai đoạn sau; chưa có số warm-start và chưa thêm revision trigger vào SQLite.
 
 ## Giới hạn
 
