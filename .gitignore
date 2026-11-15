@@ -37,3 +37,32 @@
 !/tests/fixtures/
 !/tests/fixtures/source_*.json
 !/tests/fixtures/qt_index_profile.json
+# Rust rewrite agent configuration and sources
+!/.codex/
+!/.codex/config.toml
+!/.codex/agents/
+!/.codex/agents/*.toml
+!/RUST_REWRITE_POLICY.md
+!/FIRST_CODEX_PROMPT.md
+!/rust/
+!/rust/Cargo.toml
+!/rust/Cargo.lock
+!/rust/README.md
+!/rust/src/
+!/rust/src/*.rs
+!/rust/tests/
+!/rust/tests/*.rs
+!/rust/tests/support/
+!/rust/tests/support/*.py
+
+# Reviewed migration documents only; generated fixtures/results remain local.
+!/docs/
+!/docs/rust-rewrite/
+!/docs/rust-rewrite/ADR-0001.md
+!/docs/rust-rewrite/contracts.md
+!/docs/rust-rewrite/environment.md
+!/docs/rust-rewrite/m1-report.md
+!/docs/rust-rewrite/m1-verification.md
+!/docs/superpowers/
+!/docs/superpowers/plans/
+!/docs/superpowers/plans/2026-11-16-rust-backend-migration.md
