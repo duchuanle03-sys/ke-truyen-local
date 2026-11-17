@@ -8,7 +8,12 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut args = std::env::args().skip(1);
     let mut options = HashMap::new();
+    let mut writable = false;
     while let Some(key) = args.next() {
+        if key == "--writable" && !writable {
+            writable = true;
+            continue;
+        }
         if !["--fixture", "--web-root", "--port"].contains(&key.as_str())
             || options.contains_key(&key)
         {
@@ -25,6 +30,5 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fixture = PathBuf::from(get("--fixture")?);
     let web = PathBuf::from(get("--web-root")?);
     let port = get("--port")?.parse::<u16>()?;
-    let library = reader_local::Library::open_fixture(&fixture)?;
-    reader_local::http::serve(library, &web, port)
+    reader_local::http::serve_fixture(&fixture, &web, port, writable)
 }

@@ -6,13 +6,17 @@ edition = "2024"
 [dependencies]
 rusqlite = { version = "0.38", features = ["bundled", "functions", "hooks"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "arbitrary_precision", "raw_value"] }
 sha2 = "0.10"
 base64 = "0.22"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 regex = "1"
 quick-xml = "0.39"
 getrandom = "0.3"
+httpdate = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
