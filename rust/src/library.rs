@@ -1,9 +1,7 @@
 use crate::casefold::casefold;
-use rusqlite::{
-    Connection, OpenFlags, functions::FunctionFlags, params_from_iter, types::ValueRef,
-};
+use rusqlite::{Connection, OpenFlags, functions::FunctionFlags, params_from_iter};
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -12,19 +10,32 @@ use std::{
 static SQL_FOLDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 #[cfg(test)]
 #[path = "../tests/common.rs"]
-mod test_common;
+pub(crate) mod test_common;
 
 #[derive(Debug)]
 pub struct ApiError {
     pub status: u16,
     pub message: String,
+    pub code: Option<&'static str>,
 }
 impl ApiError {
     pub fn new(status: u16, message: impl Into<String>) -> Self {
         Self {
             status,
             message: message.into(),
+            code: None,
         }
+    }
+    pub(crate) fn with_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
+    }
+    pub(crate) fn json(&self) -> Value {
+        let mut value = serde_json::json!({"error":self.message});
+        if let Some(code) = self.code {
+            value["code"] = code.into();
+        }
+        value
     }
 }
 impl std::fmt::Display for ApiError {
@@ -85,7 +96,7 @@ pub fn decode(input: &str, plus: bool) -> String {
 fn python_space(c: char) -> bool {
     crate::casefold::python_whitespace(c)
 }
-fn decimal(c: char) -> Option<u32> {
+pub(crate) fn decimal(c: char) -> Option<u32> {
     // Unicode decimal blocks, including Unicode 16 additions, generated with the fold table.
     const STARTS: &[u32] = &[
         0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
@@ -101,6 +112,9 @@ fn decimal(c: char) -> Option<u32> {
         .find_map(|s| (c as u32).checked_sub(*s).filter(|n| *n < 10))
 }
 fn py_repr(s: &str) -> String {
+    py_repr_full(s).chars().take(200).collect()
+}
+pub(crate) fn py_repr_full(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') {
         '"'
     } else {
@@ -128,9 +142,19 @@ fn py_repr(s: &str) -> String {
         }
     }
     out.push(quote);
-    out.chars().take(200).collect()
+    out
 }
-fn integer(s: &str) -> Result<i64, ApiError> {
+pub(crate) fn integer(s: &str) -> Result<i64, ApiError> {
+    parse_integer(s).map(|(value, _)| value)
+}
+pub(crate) fn sqlite_integer(s: &str) -> Result<i64, ApiError> {
+    let (value, overflow) = parse_integer(s)?;
+    if overflow {
+        return Err(rusqlite::Error::InvalidQuery.into());
+    }
+    Ok(value)
+}
+fn parse_integer(s: &str) -> Result<(i64, bool), ApiError> {
     let raw = s.trim_matches(crate::casefold::integer_whitespace);
     let (negative, digits) = if let Some(v) = raw.strip_prefix('-') {
         (true, v)
@@ -138,12 +162,21 @@ fn integer(s: &str) -> Result<i64, ApiError> {
         (false, raw.strip_prefix('+').unwrap_or(raw))
     };
     let mut value = 0i64;
+    let mut overflow = false;
     let mut count = 0;
     let mut previous = false;
     let mut valid = !digits.is_empty();
     for c in digits.chars() {
         if let Some(n) = decimal(c) {
-            value = value.saturating_mul(10).saturating_add(n.into());
+            let next = value.checked_mul(10).and_then(|value| {
+                if negative {
+                    value.checked_sub(n.into())
+                } else {
+                    value.checked_add(n.into())
+                }
+            });
+            overflow |= next.is_none();
+            value = next.unwrap_or(if negative { i64::MIN } else { i64::MAX });
             count += 1;
             previous = true;
         } else if c == '_' && previous {
@@ -167,7 +200,7 @@ fn integer(s: &str) -> Result<i64, ApiError> {
             ),
         ));
     }
-    Ok(if negative { -value } else { value })
+    Ok((value, overflow))
 }
 impl ShelfQuery {
     pub fn from_uri(uri: &str) -> Result<Self, ApiError> {
@@ -218,6 +251,8 @@ pub struct ShelfPage {
 }
 pub struct Library {
     path: PathBuf,
+    writable: bool,
+    _lock: Option<std::fs::File>,
 }
 pub fn checked_path(path: &Path) -> Result<PathBuf, ApiError> {
     let absolute = std::path::absolute(path)?;
@@ -243,6 +278,12 @@ pub fn checked_path(path: &Path) -> Result<PathBuf, ApiError> {
 }
 impl Library {
     pub fn open_fixture(path: &Path) -> Result<Self, ApiError> {
+        Self::open_fixture_mode(path, false)
+    }
+    pub fn open_writable_fixture(path: &Path) -> Result<Self, ApiError> {
+        Self::open_fixture_mode(path, true)
+    }
+    fn open_fixture_mode(path: &Path, writable: bool) -> Result<Self, ApiError> {
         let path = checked_path(path)?;
         let root = if path.is_dir() {
             path
@@ -255,8 +296,11 @@ impl Library {
                 .to_owned()
         };
         let marker = checked_path(&root.join("m1-fixture.json"))?;
-        let marker: Value = serde_json::from_slice(&std::fs::read(marker)?)
-            .map_err(|_| ApiError::new(400, "Invalid fixture marker"))?;
+        let marker = std::fs::read(marker)?;
+        let marker = std::str::from_utf8(&marker)
+            .ok()
+            .and_then(|text| parse_json(text).ok())
+            .ok_or_else(|| ApiError::new(400, "Invalid fixture marker"))?;
         if marker["format"] != "reader-local-rust-m1"
             || marker["version"] != 1
             || marker["database"] != "library.sqlite3"
@@ -266,11 +310,26 @@ impl Library {
         {
             return Err(ApiError::new(400, "Unsupported fixture marker"));
         }
+        if writable && marker["sealed"] != false {
+            return Err(ApiError::new(
+                400,
+                "Writable mode requires an unsealed synthetic fixture",
+            ));
+        }
         let path = checked_path(&root.join("library.sqlite3"))?;
         if path.parent() != Some(root.as_path()) {
             return Err(ApiError::new(400, "Fixture database escapes root"));
         }
-        let library = Self { path };
+        let lock = if writable {
+            Some(crate::lifecycle::library_lock(&root)?)
+        } else {
+            None
+        };
+        let mut library = Self {
+            path,
+            writable: false,
+            _lock: lock,
+        };
         let db = library.connection()?;
         db.prepare("SELECT id,name,author,source,path,cover,kind,format,description,progress,chapter_index,position,groups_json,added_at,updated_at,read_at,chapter_count,raw,archived,trashed_at FROM books LIMIT 0")?;
         db.prepare("SELECT book_id,group_id FROM book_groups LIMIT 0")?;
@@ -324,12 +383,42 @@ impl Library {
             "book_group_lookup",
             "CREATE INDEX book_group_lookup ON book_groups(group_id,book_id)",
         )?;
+        if writable {
+            use sha2::{Digest, Sha256};
+            let sql = db
+                .prepare("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name")?
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+                .join("\n");
+            if format!("{:x}", Sha256::digest(sql.as_bytes()))
+                != "55fd8c47098a02d88d4cade8ebd04cf4fb40be8d75f0e501643b34b35d9580f0"
+            {
+                return Err(ApiError::new(400, "Unsupported writable fixture schema"));
+            }
+        }
+        drop(db);
+        if writable {
+            library.writable = true;
+            library
+                .write_connection()?
+                .pragma_update(None, "journal_mode", "WAL")?;
+        }
         Ok(library)
     }
-    fn connection(&self) -> Result<Connection, ApiError> {
+    pub fn root(&self) -> &Path {
+        self.path.parent().expect("validated database parent")
+    }
+    pub fn writable(&self) -> bool {
+        self.writable
+    }
+    fn base_connection(&self, writable: bool) -> Result<Connection, ApiError> {
         let db = Connection::open_with_flags(
             &self.path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            (if writable {
+                OpenFlags::SQLITE_OPEN_READ_WRITE
+            } else {
+                OpenFlags::SQLITE_OPEN_READ_ONLY
+            }) | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         db.create_scalar_function(
             "shelf_fold",
@@ -341,8 +430,22 @@ impl Library {
                 Ok(casefold(&ctx.get::<String>(0)?))
             },
         )?;
-        db.pragma_update(None, "query_only", true)?;
+        db.pragma_update(None, "foreign_keys", true)?;
+        db.pragma_update(None, "query_only", !writable)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(db)
+    }
+    pub(crate) fn reader_connection(&self) -> Result<Connection, ApiError> {
+        self.base_connection(false)
+    }
+    pub(crate) fn write_connection(&self) -> Result<Connection, ApiError> {
+        if !self.writable {
+            return Err(ApiError::new(403, "Writable mode is required"));
+        }
+        self.base_connection(true)
+    }
+    fn connection(&self) -> Result<Connection, ApiError> {
+        let db = self.reader_connection()?;
         install_authorizer(&db)?;
         Ok(db)
     }
@@ -410,66 +513,7 @@ impl Library {
         let offset = q.offset.min(((total - 1).max(0) / q.limit) * q.limit);
         values.push(q.limit.into());
         values.push(offset.into());
-        let mut stmt=tx.prepare(&format!("SELECT * FROM books WHERE {predicate} ORDER BY {key} {direction},name {direction},id {direction} LIMIT ? OFFSET ?"))?;
-        let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-        let mut rows = stmt.query(params_from_iter(&values))?;
-        let mut items = Vec::new();
-        while let Some(row) = rows.next()? {
-            let mut item = Map::new();
-            for (i, name) in names.iter().enumerate() {
-                let value = match row.get_ref(i)? {
-                    ValueRef::Null => Value::Null,
-                    ValueRef::Integer(v) => v.into(),
-                    ValueRef::Real(v) => {
-                        serde_json::Number::from_f64(v).map_or(Value::Null, Value::Number)
-                    }
-                    ValueRef::Text(v) => String::from_utf8_lossy(v).to_string().into(),
-                    ValueRef::Blob(_) => return Err(ApiError::new(500, "Invalid book value")),
-                };
-                item.insert(name.clone(), value);
-            }
-            let groups = item.remove("groups_json").unwrap_or(Value::Null);
-            item.insert("groups".into(), parse_json(groups.as_str().unwrap_or(""))?);
-            let archived = item.get("archived").and_then(Value::as_i64).unwrap_or(0) != 0;
-            item.insert("archived".into(), archived.into());
-            let trash = item
-                .get("trashed_at")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
-            item.insert(
-                "trash_expires_at".into(),
-                if trash == 0.0 {
-                    Value::Null
-                } else {
-                    (trash + 2592000.0).into()
-                },
-            );
-            let raw = item.remove("raw").unwrap_or_else(|| "{}".into());
-            let metadata = parse_json(raw.as_str().unwrap_or(""))?;
-            if metadata.is_null() {
-                return Err(ApiError::new(
-                    500,
-                    "Có lỗi khi xử lý. Dữ liệu gốc chưa bị thay đổi.",
-                ));
-            }
-            if metadata.is_number()
-                || metadata.is_boolean()
-                || metadata
-                    .as_array()
-                    .is_some_and(|values| values.iter().any(|v| v == "warnings" || v == "ocr"))
-                || metadata
-                    .as_str()
-                    .is_some_and(|s| s.contains("warnings") || s.contains("ocr"))
-            {
-                return Err(rusqlite::Error::InvalidQuery.into());
-            }
-            for key in ["warnings", "ocr"] {
-                if let Some(value) = metadata.get(key) {
-                    item.insert(key.into(), value.clone());
-                }
-            }
-            items.push(Value::Object(item));
-        }
+        let items = crate::reader::rows(&tx, &format!("SELECT * FROM books WHERE {predicate} ORDER BY {key} {direction},name {direction},id {direction} LIMIT ? OFFSET ?"), params_from_iter(&values))?.into_iter().map(crate::reader::book_value).collect::<Result<Vec<_>,_>>()?;
         Ok(ShelfPage {
             items,
             total,
@@ -513,111 +557,209 @@ fn check_index(db: &Connection, name: &str, expected: &str) -> Result<(), ApiErr
     }
     Ok(())
 }
-fn parse_json(s: &str) -> Result<Value, ApiError> {
-    serde_json::from_str(s).map_err(|error| {
-        let text = error.to_string();
-        let line_start = s
-            .split_inclusive('\n')
-            .take(error.line().saturating_sub(1))
-            .map(str::len)
-            .sum::<usize>();
-        let byte = (line_start + error.column()).min(s.len());
-        let mut byte = byte;
-        while !s.is_char_boundary(byte) {
-            byte -= 1
+pub(crate) fn parse_json(s: &str) -> Result<Value, ApiError> {
+    let raw: &serde_json::value::RawValue =
+        serde_json::from_str(s).map_err(|error| json_error(s, error))?;
+    parse_raw_json(raw.get())
+}
+fn parse_raw_json(s: &str) -> Result<Value, ApiError> {
+    use serde_json::value::RawValue;
+    enum Work<'a> {
+        Visit(&'a str, usize),
+        Array(usize),
+        Object(Vec<String>),
+    }
+    struct ObjectVisitor;
+    impl<'de> serde::de::Visitor<'de> for ObjectVisitor {
+        type Value = Vec<(String, &'de RawValue)>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a JSON object")
         }
-        let mut pos = s[..byte].chars().count().saturating_sub(1);
-        let chars: Vec<char> = s.chars().collect();
-        if error.is_eof() {
-            pos = chars.len()
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
+            let mut entries = Vec::new();
+            while let Some(entry) = map.next_entry()? {
+                entries.push(entry);
+            }
+            Ok(entries)
         }
-        let previous = chars[..pos.min(chars.len())]
-            .iter()
-            .rposition(|c| ![' ', '\t', '\r', '\n'].contains(c));
-        let trailing = previous
-            .filter(|&p| chars[p] == ',')
-            .filter(|_| chars.get(pos).is_some_and(|c| *c == ']' || *c == '}'));
-        let unicode_escape = (0..chars.len())
-            .rev()
-            .find(|&i| {
-                i <= pos
-                    && chars[i] == '\\'
-                    && chars.get(i + 1) == Some(&'u')
-                    && chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 0
-                    && (i + 2..i + 6).any(|n| !chars.get(n).is_some_and(char::is_ascii_hexdigit))
-            })
-            .filter(|&i| pos <= i + 6);
-        let message = if let Some(escape) = unicode_escape.filter(|_| {
-            text.starts_with("invalid escape") || text.starts_with("EOF while parsing a string")
-        }) {
-            pos = escape + 1;
-            "Invalid \\uXXXX escape"
-        } else if let Some(comma) = trailing {
-            let end = chars[pos];
-            pos = comma;
-            if end == ']' {
-                "Illegal trailing comma before end of array"
-            } else {
-                "Illegal trailing comma before end of object"
+    }
+    let mut work = vec![Work::Visit(s, 0)];
+    let mut values = Vec::new();
+    while let Some(task) = work.pop() {
+        match task {
+            Work::Array(count) => {
+                let children = values.split_off(values.len() - count);
+                values.push(Value::Array(children));
             }
-        } else if text.starts_with("expected `:`") {
-            "Expecting ':' delimiter"
-        } else if text.starts_with("expected `,`") {
-            "Expecting ',' delimiter"
-        } else if text.starts_with("key must be a string")
-            || text.starts_with("EOF while parsing an object")
-                && previous.is_some_and(|p| chars[p] == '{' || chars[p] == ',')
-        {
-            "Expecting property name enclosed in double quotes"
-        } else if text.starts_with("EOF while parsing an object")
-            || text.starts_with("EOF while parsing a list")
-                && !previous.is_some_and(|p| chars[p] == '[' || chars[p] == ',')
-        {
-            "Expecting ',' delimiter"
-        } else if text.starts_with("trailing characters") {
-            "Extra data"
-        } else if text.starts_with("EOF while parsing a string") {
-            let mut open = None;
-            let mut escaped = false;
-            for (i, &c) in chars.iter().enumerate() {
-                if escaped {
-                    escaped = false;
-                    continue;
+            Work::Object(keys) => {
+                let children = values.split_off(values.len() - keys.len());
+                let mut object = serde_json::Map::new();
+                for (key, value) in keys.into_iter().zip(children) {
+                    object.insert(key, value);
                 }
-                if c == '\\' {
-                    escaped = true
-                } else if c == '"' {
-                    open = if open.is_some() { None } else { Some(i) }
+                values.push(Value::Object(object));
+            }
+            Work::Visit(s, depth) => match s.as_bytes().first().copied() {
+                Some(b'{' | b'[') if depth >= 984 => {
+                    return Err(ApiError::new(400, "Dữ liệu JSON lồng quá sâu."));
                 }
-            }
-            pos = open.unwrap_or(pos);
-            "Unterminated string starting at"
-        } else if text.starts_with("invalid escape") {
-            pos = pos.saturating_sub(1);
-            "Invalid \\escape"
-        } else if text.starts_with("control character") {
-            "Invalid control character at"
-        } else if text.starts_with("expected ident")
-            || text.starts_with("EOF while parsing a value")
-        {
-            while pos > 0 && chars[pos - 1].is_ascii_alphabetic() {
-                pos -= 1;
-            }
-            "Expecting value"
+                Some(b'{') => {
+                    let mut deserializer = serde_json::Deserializer::from_str(s);
+                    let entries =
+                        serde::Deserializer::deserialize_map(&mut deserializer, ObjectVisitor)
+                            .map_err(|error| json_error(s, error))?;
+                    let (keys, children): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
+                    work.push(Work::Object(keys));
+                    for raw in children.into_iter().rev() {
+                        work.push(Work::Visit(raw.get(), depth + 1));
+                    }
+                }
+                Some(b'[') => {
+                    let entries: Vec<&RawValue> =
+                        serde_json::from_str(s).map_err(|error| json_error(s, error))?;
+                    work.push(Work::Array(entries.len()));
+                    for raw in entries.into_iter().rev() {
+                        work.push(Work::Visit(raw.get(), depth + 1));
+                    }
+                }
+                Some(b'"') => values.push(
+                    serde_json::from_str::<String>(s)
+                        .map(Value::String)
+                        .map_err(|error| json_error(s, error))?,
+                ),
+                Some(b't' | b'f') => values.push(
+                    serde_json::from_str::<bool>(s)
+                        .map(Value::Bool)
+                        .map_err(|error| json_error(s, error))?,
+                ),
+                Some(b'n') => values.push(Value::Null),
+                _ => {
+                    if !s.contains(['.', 'e', 'E']) {
+                        let digits = s.strip_prefix('-').unwrap_or(s).len();
+                        if digits > 4300 {
+                            return Err(ApiError::new(
+                                400,
+                                format!(
+                                    "Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
+                                ),
+                            ));
+                        }
+                    }
+                    values.push(
+                        serde_json::from_str::<serde_json::Number>(s)
+                            .map(Value::Number)
+                            .map_err(|error| json_error(s, error))?,
+                    );
+                }
+            },
+        }
+    }
+    Ok(values.pop().expect("validated JSON value"))
+}
+fn json_error(s: &str, error: serde_json::Error) -> ApiError {
+    let text = error.to_string();
+    let line_start = s
+        .split_inclusive('\n')
+        .take(error.line().saturating_sub(1))
+        .map(str::len)
+        .sum::<usize>();
+    let byte = (line_start + error.column()).min(s.len());
+    let mut byte = byte;
+    while !s.is_char_boundary(byte) {
+        byte -= 1
+    }
+    let mut pos = s[..byte].chars().count().saturating_sub(1);
+    let chars: Vec<char> = s.chars().collect();
+    if error.is_eof() {
+        pos = chars.len()
+    }
+    let previous = chars[..pos.min(chars.len())]
+        .iter()
+        .rposition(|c| ![' ', '\t', '\r', '\n'].contains(c));
+    let trailing = previous
+        .filter(|&p| chars[p] == ',')
+        .filter(|_| chars.get(pos).is_some_and(|c| *c == ']' || *c == '}'));
+    let unicode_escape = (0..chars.len())
+        .rev()
+        .find(|&i| {
+            i <= pos
+                && chars[i] == '\\'
+                && chars.get(i + 1) == Some(&'u')
+                && chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 0
+                && (i + 2..i + 6).any(|n| !chars.get(n).is_some_and(char::is_ascii_hexdigit))
+        })
+        .filter(|&i| pos <= i + 6);
+    let message = if let Some(escape) = unicode_escape.filter(|_| {
+        text.starts_with("invalid escape") || text.starts_with("EOF while parsing a string")
+    }) {
+        pos = escape + 1;
+        "Invalid \\uXXXX escape"
+    } else if let Some(comma) = trailing {
+        let end = chars[pos];
+        pos = comma;
+        if end == ']' {
+            "Illegal trailing comma before end of array"
         } else {
-            "Expecting value"
-        };
-        let before = &chars[..pos.min(chars.len())];
-        let line = before.iter().filter(|&&c| c == '\n').count() + 1;
-        let column = before
-            .iter()
-            .rposition(|&c| c == '\n')
-            .map_or(pos + 1, |n| pos - n);
-        ApiError::new(
-            400,
-            format!("{message}: line {line} column {column} (char {pos})"),
-        )
-    })
+            "Illegal trailing comma before end of object"
+        }
+    } else if text.starts_with("expected `:`") {
+        "Expecting ':' delimiter"
+    } else if text.starts_with("expected `,`") {
+        "Expecting ',' delimiter"
+    } else if text.starts_with("key must be a string")
+        || text.starts_with("EOF while parsing an object")
+            && previous.is_some_and(|p| chars[p] == '{' || chars[p] == ',')
+    {
+        "Expecting property name enclosed in double quotes"
+    } else if text.starts_with("EOF while parsing an object")
+        || text.starts_with("EOF while parsing a list")
+            && !previous.is_some_and(|p| chars[p] == '[' || chars[p] == ',')
+    {
+        "Expecting ',' delimiter"
+    } else if text.starts_with("trailing characters") {
+        "Extra data"
+    } else if text.starts_with("EOF while parsing a string") {
+        let mut open = None;
+        let mut escaped = false;
+        for (i, &c) in chars.iter().enumerate() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if c == '\\' {
+                escaped = true
+            } else if c == '"' {
+                open = if open.is_some() { None } else { Some(i) }
+            }
+        }
+        pos = open.unwrap_or(pos);
+        "Unterminated string starting at"
+    } else if text.starts_with("invalid escape") {
+        pos = pos.saturating_sub(1);
+        "Invalid \\escape"
+    } else if text.starts_with("control character") {
+        "Invalid control character at"
+    } else if text.starts_with("expected ident") || text.starts_with("EOF while parsing a value") {
+        while pos > 0 && chars[pos - 1].is_ascii_alphabetic() {
+            pos -= 1;
+        }
+        "Expecting value"
+    } else {
+        "Expecting value"
+    };
+    let before = &chars[..pos.min(chars.len())];
+    let line = before.iter().filter(|&&c| c == '\n').count() + 1;
+    let column = before
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(pos + 1, |n| pos - n);
+    ApiError::new(
+        400,
+        format!("{message}: line {line} column {column} (char {pos})"),
+    )
 }
 
 fn install_authorizer(db: &Connection) -> rusqlite::Result<()> {
@@ -637,6 +779,49 @@ fn install_authorizer(db: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn m2_json_boundary_preserves_literal_keys_and_integer_limit() {
+        for value in [
+            serde_json::json!({"nested":{"$serde_json::private::Number":"123"}}),
+            serde_json::json!({"nested":{"$serde_json::private::Number":"123","other":true}}),
+            serde_json::json!({"nested":[{"$serde_json::private::RawValue":"[]"}]}),
+        ] {
+            assert_eq!(
+                parse_json(&String::from_utf8(crate::http::json_bytes(&value)).unwrap()).unwrap(),
+                value
+            );
+        }
+        let error = parse_json(&format!("{{\"x\":{}}}", "1".repeat(4301))).unwrap_err();
+        assert_eq!(error.status, 400);
+        assert_eq!(
+            error.message,
+            "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+        );
+        assert!(parse_json(&"1".repeat(4300)).is_ok());
+        assert!(parse_json(&format!("\"{}\"", "1".repeat(4301))).is_ok());
+        assert_eq!(
+            String::from_utf8(crate::http::json_bytes(
+                &parse_json("{\"a\":1,\"b\":2,\"a\":3}").unwrap()
+            ))
+            .unwrap(),
+            "{\"a\": 3, \"b\": 2}"
+        );
+    }
+    #[test]
+    fn m2_json_depth_preserves_reference_valid_settings() {
+        for depth in [127, 128, 256, 512, 983] {
+            let text = format!("{{\"depth\":{}0{}}}", "[".repeat(depth), "]".repeat(depth));
+            let value = parse_json(&text).unwrap();
+            assert_eq!(
+                crate::http::json_bytes(&value),
+                text.replace(':', ": ").as_bytes()
+            );
+        }
+        let over = format!("{{\"depth\":{}0{}}}", "[".repeat(984), "]".repeat(984));
+        let error = parse_json(&over).unwrap_err();
+        assert_eq!(error.status, 400);
+        assert_eq!(error.message, "Dữ liệu JSON lồng quá sâu.");
+    }
     #[test]
     fn parser() {
         assert_eq!(

@@ -3,7 +3,7 @@ use crate::{
     library::{checked_path, decode},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use http_body_util::Full;
+use http_body_util::BodyExt;
 use hyper::{Response, body::Bytes};
 use regex::Regex;
 use serde_json::{Value, json};
@@ -99,11 +99,14 @@ pub fn public_content(value: &mut Value) -> Result<(), ApiError> {
                 map.insert("html".into(), html.into());
             }
         }
+        Value::Number(_) => {
+            validate_finite_json(value)?;
+        }
         _ => {}
     }
     Ok(())
 }
-fn truthy(v: &Value) -> bool {
+pub(crate) fn truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,
@@ -113,12 +116,63 @@ fn truthy(v: &Value) -> bool {
         Value::Number(n) => n.as_f64() != Some(0.0),
     }
 }
-fn py_string(v: &Value) -> String {
+pub(crate) fn validate_finite_json(value: &Value) -> Result<(), ApiError> {
+    match value {
+        Value::Number(n) => {
+            let raw = n.to_string();
+            if raw.contains(['.', 'e', 'E']) && n.as_f64().is_none() {
+                return Err(ApiError::new(
+                    400,
+                    format!(
+                        "Out of range float values are not JSON compliant: {}inf",
+                        if raw.starts_with('-') { "-" } else { "" }
+                    ),
+                ));
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                validate_finite_json(item)?;
+            }
+        }
+        Value::Object(items) => {
+            for item in items.values() {
+                validate_finite_json(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+pub(crate) fn py_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => "None".into(),
         Value::Bool(b) => if *b { "True" } else { "False" }.into(),
-        _ => v.to_string(),
+        Value::Array(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(py_value_repr)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Object(items) => format!(
+            "{{{}}}",
+            items
+                .iter()
+                .map(|(k, v)| format!("{}: {}", crate::library::py_repr_full(k), py_value_repr(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Number(_) => String::from_utf8(json_bytes(v)).expect("JSON UTF8"),
+    }
+}
+fn py_value_repr(v: &Value) -> String {
+    if let Value::String(s) = v {
+        crate::library::py_repr_full(s)
+    } else {
+        py_string(v)
     }
 }
 pub fn json_bytes(v: &Value) -> Vec<u8> {
@@ -163,6 +217,9 @@ pub fn json_bytes(v: &Value) -> Vec<u8> {
                 } else {
                     out.push_str(&text);
                 }
+            }
+            Value::Number(n) if n.as_i64().is_some() => {
+                out.push_str(&n.as_i64().expect("checked integer").to_string())
             }
             _ => out.push_str(&v.to_string()),
         }
@@ -373,6 +430,135 @@ fn remote(s: &str) -> String {
             format!("?{query}")
         }
     )
+}
+pub(crate) fn asset_image_urls(value: &str, base: &str) -> Result<Vec<String>, ApiError> {
+    let (path_query, _) = value.split_once('#').unwrap_or((value, ""));
+    let (prefix, query) = path_query.split_once('?').unwrap_or((path_query, ""));
+    let (authority, path) = if let Some((_, rest)) = prefix.split_once("://") {
+        let end = rest.find('/').unwrap_or(rest.len());
+        (Some(&rest[..end]), &rest[end..])
+    } else if let Some(rest) = prefix.strip_prefix("//") {
+        let end = rest.find('/').unwrap_or(rest.len());
+        (Some(&rest[..end]), &rest[end..])
+    } else {
+        (None, prefix)
+    };
+    if let Some(authority) = authority {
+        let host = authority.rsplit('@').next().unwrap_or("");
+        if host.contains(['[', ']']) {
+            let valid = host
+                .strip_prefix('[')
+                .and_then(|s| s.split_once(']'))
+                .is_some_and(|(host, _)| {
+                    host.split('%')
+                        .next()
+                        .unwrap_or("")
+                        .parse::<std::net::Ipv6Addr>()
+                        .is_ok()
+                        || cached_regex!(r"^[vV][0-9a-fA-F]+\..+$").is_match(host)
+                });
+            if !valid {
+                return Err(ApiError::new(400, "Invalid IPv6 URL"));
+            }
+        }
+    }
+    let local = authority.is_none_or(|a| {
+        let host = if let Some(bracketed) = a.strip_prefix('[') {
+            bracketed.split(']').next().unwrap_or("")
+        } else {
+            a.rsplit('@')
+                .next()
+                .unwrap_or("")
+                .split(':')
+                .next()
+                .unwrap_or("")
+        };
+        ["localhost", "127.0.0.1", "::1"].contains(&host.to_ascii_lowercase().as_str())
+    });
+    let candidates = if path == "/api/image" && local {
+        query
+            .split('&')
+            .filter_map(|pair| {
+                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                (decode(key, true) == "url" && !value.is_empty()).then(|| decode(value, true))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![value.to_owned()]
+    };
+    let mut urls = std::collections::BTreeSet::new();
+    for candidate in candidates {
+        let url = relative_remote(&candidate, base);
+        if !url.is_empty() {
+            urls.insert(url);
+        }
+    }
+    Ok(urls.into_iter().collect())
+}
+fn relative_remote(value: &str, base: &str) -> String {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|c| c <= ' ' || c == '\u{7f}' || c == '\\')
+    {
+        return String::new();
+    }
+    if value.split_once(':').is_some_and(|(s, _)| {
+        !s.is_empty()
+            && s.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+    }) {
+        return remote(value);
+    }
+    let base = remote(base);
+    let Some((scheme, rest)) = base.split_once("://") else {
+        return String::new();
+    };
+    if value.starts_with("//") {
+        return remote(&format!("{scheme}:{value}"));
+    }
+    let split = rest.find('/').unwrap_or(rest.len());
+    let origin = format!("{scheme}://{}", &rest[..split]);
+    let base_path = &rest[split..];
+    if value.starts_with('#') {
+        return remote(&format!("{origin}{base_path}{value}"));
+    }
+    let base_path = base_path.split('?').next().unwrap_or("/");
+    if value.starts_with('?') {
+        return remote(&format!("{origin}{base_path}{value}"));
+    }
+    let (path, suffix) = value
+        .find(['?', '#'])
+        .map_or((value, ""), |at| (&value[..at], &value[at..]));
+    let joined = if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!(
+            "{}{path}",
+            base_path
+                .rsplit_once('/')
+                .map_or("/", |(dir, _)| &base_path[..dir.len() + 1])
+        )
+    };
+    let mut segments = Vec::new();
+    let parts = joined.split('/').collect::<Vec<_>>();
+    for (i, part) in parts.iter().enumerate() {
+        match *part {
+            "." => {}
+            ".." => {
+                if segments.len() > 1 {
+                    segments.pop();
+                }
+            }
+            "" if !path.starts_with('/') && i > 0 && i + 1 < parts.len() => {}
+            _ => segments.push(*part),
+        }
+    }
+    if parts.last().is_some_and(|part| [".", ".."].contains(part)) {
+        segments.push("");
+    }
+    remote(&format!("{origin}{}{suffix}", segments.join("/")))
 }
 fn public_ip(ip: std::net::IpAddr) -> bool {
     fn within(n: u128, networks: &[(u128, u8)], width: u8) -> bool {
@@ -856,6 +1042,753 @@ fn svg_data(s: &str) -> String {
 }
 
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; media-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+type ReadTask = tokio::task::JoinHandle<std::io::Result<Vec<u8>>>;
+struct ServiceBody {
+    bytes: Option<Bytes>,
+    file: Option<Arc<std::sync::Mutex<std::fs::File>>>,
+    pending: Option<ReadTask>,
+    remaining: u64,
+    library: Option<Arc<Library>>,
+    permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+}
+impl ServiceBody {
+    fn bytes(bytes: Vec<u8>) -> Self {
+        let remaining = bytes.len() as u64;
+        Self {
+            bytes: Some(bytes.into()),
+            file: None,
+            pending: None,
+            remaining,
+            library: None,
+            permit: None,
+        }
+    }
+    fn file(file: std::fs::File, len: u64) -> Self {
+        Self {
+            bytes: None,
+            file: Some(Arc::new(std::sync::Mutex::new(file))),
+            pending: None,
+            remaining: len,
+            library: None,
+            permit: None,
+        }
+    }
+}
+impl hyper::body::Body for ServiceBody {
+    type Data = Bytes;
+    type Error = std::io::Error;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        use std::{future::Future, io::Read, task::Poll};
+        if let Some(bytes) = self.bytes.take() {
+            self.remaining = 0;
+            return if bytes.is_empty() {
+                Poll::Ready(None)
+            } else {
+                Poll::Ready(Some(Ok(hyper::body::Frame::data(bytes))))
+            };
+        }
+        if self.remaining == 0 {
+            return Poll::Ready(None);
+        }
+        if self.pending.is_none() {
+            let file = self.file.as_ref().expect("stream file").clone();
+            let library = self.library.clone();
+            let permit = self.permit.clone();
+            let len = self.remaining.min(65536) as usize;
+            self.pending = Some(tokio::task::spawn_blocking(move || {
+                let _library = library;
+                let _permit = permit;
+                let mut buf = vec![0; len];
+                let n = file
+                    .lock()
+                    .map_err(|_| std::io::Error::other("file lock poisoned"))?
+                    .read(&mut buf)?;
+                if n == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "stream shortened",
+                    ));
+                }
+                buf.truncate(n);
+                Ok(buf)
+            }));
+        }
+        match std::pin::Pin::new(self.pending.as_mut().unwrap()).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(result) => {
+                self.pending = None;
+                match result {
+                    Ok(Ok(bytes)) => {
+                        self.remaining -= bytes.len() as u64;
+                        Poll::Ready(Some(Ok(hyper::body::Frame::data(bytes.into()))))
+                    }
+                    Ok(Err(e)) => {
+                        self.remaining = 0;
+                        Poll::Ready(Some(Err(e)))
+                    }
+                    Err(e) => {
+                        self.remaining = 0;
+                        Poll::Ready(Some(Err(std::io::Error::other(e))))
+                    }
+                }
+            }
+        }
+    }
+    fn is_end_stream(&self) -> bool {
+        self.remaining == 0
+    }
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        hyper::body::SizeHint::with_exact(self.remaining)
+    }
+}
+fn guard(parts: &hyper::http::request::Parts, port: u16) -> Result<(), ApiError> {
+    let header = |name: &str| parts.headers.get(name).and_then(|v| v.to_str().ok());
+    let allowed = [format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    if !header("Host").is_some_and(|h| allowed.iter().any(|a| h == a)) {
+        return Err(ApiError::new(403, "Địa chỉ máy chủ không hợp lệ."));
+    }
+    if header("Origin")
+        .is_some_and(|o| !o.is_empty() && !allowed.iter().any(|a| o == format!("http://{a}")))
+    {
+        return Err(ApiError::new(
+            403,
+            "Ứng dụng chỉ nhận yêu cầu từ cửa sổ cục bộ của nó.",
+        ));
+    }
+    if !["GET", "HEAD"].contains(&parts.method.as_str())
+        && header("Sec-Fetch-Site") == Some("cross-site")
+    {
+        return Err(ApiError::new(403, "Từ chối yêu cầu ngoài ứng dụng."));
+    }
+    Ok(())
+}
+fn session(parts: &hyper::http::request::Parts, token: &str) -> bool {
+    parts
+        .headers
+        .get("Cookie")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|s| {
+            s.split(';')
+                .filter_map(|p| p.trim().split_once('='))
+                .any(|(k, v)| k == "ke_truyen_session" && v.trim_matches('"') == token)
+        })
+}
+fn json_route(parts: &hyper::http::request::Parts) -> bool {
+    if parts.method != "POST" {
+        return false;
+    }
+    let path = decode(parts.uri.path(), false);
+    let pieces = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    [
+        "/api/settings",
+        "/api/readers",
+        "/api/notes",
+        "/api/shutdown",
+    ]
+    .contains(&path.as_str())
+        || (pieces.len() == 4
+            && pieces[..2] == ["api", "books"]
+            && ["progress", "update"].contains(&pieces[3]))
+}
+async fn request_json(
+    parts: &hyper::http::request::Parts,
+    body: &mut hyper::body::Incoming,
+    token: &str,
+    port: u16,
+) -> Result<Option<Value>, ApiError> {
+    if !json_route(parts) {
+        return Ok(None);
+    }
+    guard(parts, port)?;
+    let content_type = parts
+        .headers
+        .get("Content-Type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if decode(parts.uri.path(), false) == "/api/shutdown" {
+        if content_type != "application/json" {
+            return Err(ApiError::new(
+                403,
+                "Tắt máy chủ cần Content-Type: application/json.",
+            ));
+        }
+        if !session(parts, token)
+            || parts
+                .headers
+                .get("X-Shutdown-Token")
+                .and_then(|v| v.to_str().ok())
+                != Some(token)
+        {
+            return Err(ApiError::new(
+                403,
+                "Cần mở giao diện của phiên máy chủ này để tắt ứng dụng.",
+            ));
+        }
+    }
+    if content_type != "application/json" {
+        return Err(ApiError::new(400, "Yêu cầu phải dùng application/json."));
+    }
+    if parts.headers.contains_key("Transfer-Encoding") {
+        return Err(ApiError::new(400, "Không hỗ trợ kiểu truyền dữ liệu này."));
+    }
+    let length = crate::library::integer(
+        parts
+            .headers
+            .get("Content-Length")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("0"),
+    )?;
+    if !(0..=128 * 1024 * 1024).contains(&length) {
+        return Err(ApiError::new(400, "Tệp vượt giới hạn tải lên 128 MiB."));
+    }
+    if length > 2 * 1024 * 1024 {
+        return Err(ApiError::new(400, "Dữ liệu JSON quá lớn."));
+    }
+    let mut raw = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|_| ApiError::new(400, "Dữ liệu tải lên chưa đầy đủ."))?;
+        if let Ok(data) = frame.into_data() {
+            if raw.len() + data.len() > 2 * 1024 * 1024 {
+                return Err(ApiError::new(400, "Dữ liệu JSON quá lớn."));
+            }
+            raw.extend_from_slice(&data);
+        }
+    }
+    if raw.len() != length as usize {
+        return Err(ApiError::new(400, "Dữ liệu tải lên chưa đầy đủ."));
+    }
+    Ok(Some(parse_request_bytes(&raw)?))
+}
+fn permission_drain_length(parts: &hyper::http::request::Parts) -> Option<usize> {
+    if parts.method == "OPTIONS" || parts.headers.contains_key("Transfer-Encoding") {
+        return None;
+    }
+    let length = crate::library::integer(
+        parts
+            .headers
+            .get("Content-Length")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("0"),
+    )
+    .ok()?;
+    (1..=65536).contains(&length).then_some(length as usize)
+}
+async fn drain_permission_body<B: hyper::body::Body<Data = Bytes> + Unpin>(
+    body: &mut B,
+    length: Option<usize>,
+) {
+    let Some(mut remaining) = length else { return };
+    // Match Python's small permission-error drain so Windows can deliver the 403 before closing.
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(200), async {
+        while remaining > 0 {
+            match body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        remaining = remaining.saturating_sub(data.len());
+                    }
+                }
+                _ => break,
+            }
+        }
+    })
+    .await;
+}
+fn parse_request_bytes(raw: &[u8]) -> Result<Value, ApiError> {
+    if raw.is_empty() {
+        return parse_request_json("{}");
+    }
+    let (width, little, bom) = if raw.starts_with(&[0xff, 0xfe, 0, 0]) {
+        (4, true, 4)
+    } else if raw.starts_with(&[0, 0, 0xfe, 0xff]) {
+        (4, false, 4)
+    } else if raw.starts_with(&[0xff, 0xfe]) {
+        (2, true, 2)
+    } else if raw.starts_with(&[0xfe, 0xff]) {
+        (2, false, 2)
+    } else if raw.starts_with(&[0xef, 0xbb, 0xbf]) {
+        (1, false, 3)
+    } else if raw.len() >= 4 && raw[0] == 0 {
+        (if raw[1] == 0 { 4 } else { 2 }, false, 0)
+    } else if raw.len() >= 4 && raw[1] == 0 {
+        (if raw[2] == 0 && raw[3] == 0 { 4 } else { 2 }, true, 0)
+    } else if raw.len() == 2 && raw[0] == 0 {
+        (2, false, 0)
+    } else if raw.len() == 2 && raw[1] == 0 {
+        (2, true, 0)
+    } else {
+        (1, false, 0)
+    };
+    let data = &raw[bom..];
+    if width == 1 {
+        let text = std::str::from_utf8(data).map_err(|error| {
+            let start = error.valid_up_to();
+            let end = start + error.error_len().unwrap_or(data.len() - start);
+            let reason = if error.error_len().is_none() {
+                "unexpected end of data"
+            } else if matches!(data[start], 0xc2..=0xf4) {
+                "invalid continuation byte"
+            } else {
+                "invalid start byte"
+            };
+            unicode_error("utf-8", data, start, end, reason)
+        })?;
+        return parse_request_json(text);
+    }
+    let codec = match (width, little) {
+        (2, true) => "utf-16-le",
+        (2, false) => "utf-16-be",
+        (4, true) => "utf-32-le",
+        _ => "utf-32-be",
+    };
+    if !data.len().is_multiple_of(width) {
+        let start = bom + data.len() / width * width;
+        return Err(unicode_error(
+            codec,
+            raw,
+            start,
+            raw.len(),
+            "truncated data",
+        ));
+    }
+    let text = if width == 2 {
+        let units = data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| {
+                if little {
+                    u16::from_le_bytes([bytes[0], bytes[1]])
+                } else {
+                    u16::from_be_bytes([bytes[0], bytes[1]])
+                }
+            })
+            .collect::<Vec<_>>();
+        String::from_utf16(&units).map_err(|_| ApiError::from(rusqlite::Error::InvalidQuery))?
+    } else {
+        let mut text = String::new();
+        for (i, bytes) in data.as_chunks::<4>().0.iter().enumerate() {
+            let bytes = [bytes[0], bytes[1], bytes[2], bytes[3]];
+            let value = if little {
+                u32::from_le_bytes(bytes)
+            } else {
+                u32::from_be_bytes(bytes)
+            };
+            let Some(c) = char::from_u32(value) else {
+                if value > 0x10ffff {
+                    return Err(unicode_error(
+                        codec,
+                        raw,
+                        bom + i * 4,
+                        bom + i * 4 + 4,
+                        "code point not in range(0x110000)",
+                    ));
+                }
+                return Err(rusqlite::Error::InvalidQuery.into());
+            };
+            text.push(c);
+        }
+        text
+    };
+    parse_request_json(&text)
+}
+fn unicode_error(codec: &str, raw: &[u8], start: usize, end: usize, reason: &str) -> ApiError {
+    let message = if end == start + 1 {
+        format!(
+            "'{codec}' codec can't decode byte 0x{:02x} in position {start}: {reason}",
+            raw[start]
+        )
+    } else {
+        format!(
+            "'{codec}' codec can't decode bytes in position {start}-{}: {reason}",
+            end - 1
+        )
+    };
+    ApiError::new(400, message)
+}
+fn parse_request_json(text: &str) -> Result<Value, ApiError> {
+    let value = crate::library::parse_json(text).map_err(|error| {
+        let position = error
+            .message
+            .rsplit_once("(char ")
+            .and_then(|(_, s)| s.strip_suffix(')'))
+            .and_then(|s| s.parse::<usize>().ok());
+        if let Some(position) = position.filter(|_| error.message.starts_with("Expecting value:")) {
+            let tail = text.chars().skip(position).collect::<String>();
+            for token in ["-Infinity", "Infinity", "NaN"] {
+                if tail.starts_with(token) {
+                    let token = if token == "Infinity"
+                        && position > 0
+                        && text.chars().nth(position - 1) == Some('-')
+                    {
+                        "-Infinity"
+                    } else {
+                        token
+                    };
+                    return ApiError::new(400, format!("Giá trị số không hợp lệ: {token}"));
+                }
+            }
+        }
+        error
+    })?;
+    if !value.is_object() {
+        return Err(ApiError::new(400, "Dữ liệu JSON phải là object."));
+    }
+    Ok(value)
+}
+fn api_response(
+    status: u16,
+    value: Value,
+    head: bool,
+    extra: Vec<(String, String)>,
+) -> Response<ServiceBody> {
+    let result = (|| {
+        let mut value = value;
+        public_content(&mut value)?;
+        Ok::<_, ApiError>(json_bytes(&value))
+    })();
+    let (status, bytes) = match result {
+        Ok(bytes) => (status, bytes),
+        Err(e) => (e.status, json_bytes(&e.json())),
+    };
+    let len = bytes.len();
+    let mut response = Response::builder()
+        .status(status)
+        .header("Content-Type", "application/json; charset=utf-8")
+        .header("Content-Length", len)
+        .header("Cache-Control", "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .header("Cross-Origin-Resource-Policy", "same-origin")
+        .header("Content-Security-Policy", CSP);
+    if status >= 400 {
+        response = response.header("Connection", "close");
+    }
+    for (k, v) in extra {
+        response = response.header(k, v);
+    }
+    response
+        .body(ServiceBody::bytes(if head { Vec::new() } else { bytes }))
+        .expect("validated API headers")
+}
+fn error_response(error: ApiError) -> Response<ServiceBody> {
+    api_response(error.status, error.json(), false, Vec::new())
+}
+#[allow(clippy::too_many_arguments)]
+fn respond_writable(
+    library: &Library,
+    root: &Path,
+    token: &str,
+    port: u16,
+    parts: hyper::http::request::Parts,
+    body: Option<Value>,
+    shutdown_busy: &std::sync::Mutex<()>,
+    accepted: &std::sync::atomic::AtomicBool,
+) -> Response<ServiceBody> {
+    let head = parts.method == "HEAD";
+    let method = if head { "GET" } else { parts.method.as_str() };
+    let path = decode(parts.uri.path(), false);
+    if !path.starts_with("/api/")
+        || path == "/api/books"
+        || parts.method == "OPTIONS"
+        || !["GET", "HEAD", "POST", "DELETE"].contains(&parts.method.as_str())
+    {
+        return respond(library, root, token, port, parts);
+    }
+    let result = (|| {
+        guard(&parts, port)?;
+        let body = body.as_ref().unwrap_or(&Value::Null);
+        let mut extra = Vec::new();
+        let mut status = 200;
+        let pieces = path
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+        let mut query = std::collections::HashMap::new();
+        for pair in parts.uri.query().unwrap_or("").split('&') {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            if !v.is_empty() {
+                query
+                    .entry(decode(k, true))
+                    .or_insert_with(|| decode(v, true));
+            }
+        }
+        let value = match (path.as_str(), method) {
+            ("/api/instance", "GET") => {
+                json!({"app":"ke-truyen-local","data_directory":display_path(library.root()),"pid":std::process::id()})
+            }
+            ("/api/settings", _) => {
+                if method == "GET" && session(&parts, token) {
+                    extra.push(("X-Shutdown-Token".into(), token.into()));
+                }
+                library.settings(if method == "POST" { Some(body) } else { None })?
+            }
+            ("/api/groups", "GET") => library.groups()?,
+            ("/api/sources", "GET") => {
+                json!([{"id":"qq","name":"Truyện QQ"},{"id":"full","name":"Truyện Full"},{"id":"hako","name":"Hako"},{"id":"stv","name":"Sáng Tác Việt"}])
+            }
+            ("/api/readers", "POST") => library.reader(body)?,
+            ("/api/notes", "GET") => library.notes(query.get("book_id").map(String::as_str))?,
+            ("/api/notes", "POST") => library.save_note(body)?,
+            ("/api/shutdown", "POST") => {
+                let _busy = match shutdown_busy.try_lock() {
+                    Ok(lock) => lock,
+                    Err(_) => {
+                        return Ok(api_response(
+                            409,
+                            json!({"error":"Đang lưu trạng thái tắt máy chủ.","code":"busy_operation"}),
+                            head,
+                            Vec::new(),
+                        ));
+                    }
+                };
+                let value = match library.pause_downloads(body["pause_downloads"] == true) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        json!({"error":"Thư viện đang ghi dữ liệu; hãy thử lại.","code":"busy_operation"})
+                    }
+                };
+                if value["accepted"] == true {
+                    extra.push(("Connection".into(), "close".into()));
+                    accepted.store(true, std::sync::atomic::Ordering::Release);
+                } else {
+                    status = 409;
+                }
+                value
+            }
+            ("/api/image", "GET") => {
+                let url = query.get("url").ok_or_else(|| ApiError::new(404, "url"))?;
+                return image_response(
+                    library,
+                    url,
+                    query.get("referer").map_or("", String::as_str),
+                    &parts,
+                );
+            }
+            _ => {
+                if pieces.len() == 3 && pieces[..2] == ["api", "notes"] && method == "DELETE" {
+                    library.delete_note(pieces[2])?
+                } else if pieces.len() >= 3 && pieces[..2] == ["api", "books"] {
+                    let id = pieces[2];
+                    match (pieces.len(), method) {
+                        (3, "GET") => library.get_book(id)?,
+                        (4, "GET") if pieces[3] == "chapters" => library.chapters(id)?,
+                        (4, "GET") if pieces[3] == "cover" => {
+                            let book = library.get_book(id)?;
+                            let image = image_response(
+                                library,
+                                book["cover"].as_str().unwrap_or(""),
+                                book["path"].as_str().unwrap_or(""),
+                                &parts,
+                            );
+                            if let Ok(ref response) = image
+                                && response.status().as_u16() != 503
+                            {
+                                return image;
+                            }
+                            let message = if remote(book["path"].as_str().unwrap_or("")).is_empty()
+                            {
+                                "Chỉ chấp nhận URL HTTP(S) công khai, không kèm tài khoản hoặc cổng riêng"
+                            } else {
+                                "Nguồn không khả dụng trong chế độ ngoại tuyến."
+                            };
+                            return Err(ApiError::new(
+                                400,
+                                format!(
+                                    "Không tải được bìa cũ hoặc bìa trên trang nguồn: {message}"
+                                ),
+                            ));
+                        }
+                        (4, "POST") if pieces[3] == "progress" => library.progress(id, body)?,
+                        (4, "POST") if pieces[3] == "update" => library.update_book(id, body)?,
+                        (5, "GET") if pieces[3] == "chapters" => {
+                            let index = crate::library::integer(pieces[4])?;
+                            let reader = parts
+                                .headers
+                                .get("X-Reader-ID")
+                                .and_then(|v| v.to_str().ok());
+                            let sequence = crate::library::integer(
+                                parts
+                                    .headers
+                                    .get("X-Reader-Seq")
+                                    .and_then(|v| v.to_str().ok())
+                                    .unwrap_or("0"),
+                            )?;
+                            library.chapter(id, index, reader, sequence)?
+                        }
+                        _ => return Err(ApiError::new(404, "Không tìm thấy API.")),
+                    }
+                } else {
+                    return Err(ApiError::new(404, "Không tìm thấy API."));
+                }
+            }
+        };
+        Ok(api_response(status, value, head, extra))
+    })();
+    result.unwrap_or_else(|e| api_response(e.status, e.json(), head, Vec::new()))
+}
+fn display_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_owned()
+}
+fn image_kind(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        "image/jpeg"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        "image/gif"
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else if bytes.starts_with(b"BM") {
+        "image/bmp"
+    } else {
+        "application/octet-stream"
+    }
+}
+fn image_response(
+    library: &Library,
+    url: &str,
+    referer: &str,
+    parts: &hyper::http::request::Parts,
+) -> Result<Response<ServiceBody>, ApiError> {
+    use std::io::{Read, Seek};
+    let url = remote(url);
+    if url.is_empty() {
+        return Err(ApiError::new(
+            400,
+            "Chỉ chấp nhận URL HTTP(S) công khai, không kèm tài khoản hoặc cổng riêng",
+        )
+        .with_code("source_error"));
+    }
+    let name = format!("{:x}", Sha256::digest(url.as_bytes()));
+    let candidate = library.root().join("images").join(&name);
+    if !candidate.exists() {
+        if !referer.is_empty() && remote(referer).is_empty() {
+            return Err(ApiError::new(
+                400,
+                "Chỉ chấp nhận URL HTTP(S) công khai, không kèm tài khoản hoặc cổng riêng",
+            )
+            .with_code("source_error"));
+        }
+        return Ok(api_response(
+            503,
+            json!({"error":"Nguồn không khả dụng trong chế độ ngoại tuyến.","code":"network_error"}),
+            parts.method == "HEAD",
+            Vec::new(),
+        ));
+    }
+    let path = checked_path(&candidate)?;
+    if !path.starts_with(library.root()) {
+        return Err(ApiError::new(403, "Đường dẫn cache ảnh không hợp lệ."));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(1);
+    }
+    // Deny replacement while the safe Windows identity helper opens its metadata handle.
+    let mut file = options.open(&path)?;
+    let info = file.metadata()?;
+    let mut signature = [0; 12];
+    let n = file.read(&mut signature)?;
+    file.rewind()?;
+    let kind = image_kind(&signature[..n]);
+    library.touch_image(&name, info.len())?;
+    let identity = file_identity(&path, &info, &file)?;
+    let etag = format!("W/\"{:x}\"", Sha256::digest(identity.as_bytes()));
+    let unchanged = if let Some(matching) = parts
+        .headers
+        .get("If-None-Match")
+        .and_then(|v| v.to_str().ok())
+    {
+        matching.trim() == "*"
+            || matching
+                .split(',')
+                .any(|v| v.trim().trim_start_matches("W/") == etag.trim_start_matches("W/"))
+    } else {
+        parts
+            .headers
+            .get("If-Modified-Since")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| httpdate::parse_http_date(s).ok())
+            .is_some_and(|date| {
+                info.modified().ok().is_some_and(|mtime| {
+                    mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|t| t.as_secs())
+                        .unwrap_or(0)
+                        <= date
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|t| t.as_secs())
+                            .unwrap_or(0)
+                })
+            })
+    };
+    let mut response = Response::builder()
+        .status(if unchanged { 304 } else { 200 })
+        .header("Content-Type", kind)
+        .header("ETag", etag)
+        .header("Last-Modified", httpdate::fmt_http_date(info.modified()?))
+        .header("Cache-Control", "private, max-age=60, must-revalidate")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .header("Cross-Origin-Resource-Policy", "same-origin")
+        .header("Content-Security-Policy", CSP);
+    if !unchanged {
+        response = response.header("Content-Length", info.len());
+    }
+    Ok(response
+        .body(if unchanged || parts.method == "HEAD" {
+            ServiceBody::bytes(Vec::new())
+        } else {
+            ServiceBody::file(file, info.len())
+        })
+        .expect("image headers"))
+}
+fn file_identity(
+    path: &Path,
+    info: &std::fs::Metadata,
+    file: &std::fs::File,
+) -> Result<String, ApiError> {
+    let modified = info
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    #[cfg(windows)]
+    let (inode, changed_ns) = crate::windows_metadata::identity(file)?;
+    #[cfg(unix)]
+    let inode = {
+        use std::os::unix::fs::MetadataExt;
+        info.ino()
+    };
+    #[cfg(unix)]
+    let changed_ns = {
+        use std::os::unix::fs::MetadataExt;
+        i128::from(info.ctime()) * 1000000000 + i128::from(info.ctime_nsec())
+    };
+    #[cfg(not(windows))]
+    let _ = file;
+    Ok(format!(
+        "{}:{inode}:{}:{}:{}",
+        display_path(path),
+        info.len(),
+        modified.as_nanos(),
+        changed_ns
+    ))
+}
 struct IdleIo {
     stream: tokio::net::TcpStream,
     read: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
@@ -920,6 +1853,30 @@ pub fn serve(
     web_root: &Path,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+    run_server(library, web_root, listener)
+}
+pub fn serve_fixture(
+    fixture: &Path,
+    web_root: &Path,
+    port: u16,
+    writable: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    checked_path(web_root)?;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+    let library = if writable {
+        Library::open_writable_fixture(fixture)?
+    } else {
+        Library::open_fixture(fixture)?
+    };
+    run_server(library, web_root, listener)
+}
+fn run_server(
+    library: Library,
+    web_root: &Path,
+    listener: std::net::TcpListener,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    listener.set_nonblocking(true)?;
     let root = Arc::new(checked_path(web_root)?);
     let library = Arc::new(library);
     let mut entropy = [0u8; 32];
@@ -936,46 +1893,67 @@ pub fn serve(
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+        let listener = tokio::net::TcpListener::from_std(listener)?;
         let port = listener.local_addr()?.port();
         println!("{}", json!({"port":port}));
         std::io::stdout().flush()?;
         let permits = Arc::new(tokio::sync::Semaphore::new(64));
         let work_permits = Arc::new(tokio::sync::Semaphore::new(64));
+        let shutdown = Arc::new(tokio::sync::Notify::new());
+        let shutdown_busy = Arc::new(std::sync::Mutex::new(()));
+        let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut connections = tokio::task::JoinSet::new();
         loop {
-            let permit = permits.clone().acquire_owned().await?;
-            let (stream, _) = listener.accept().await?;
+            while connections.try_join_next().is_some() {}
+            let permit = tokio::select! { _ = shutdown.notified() => break, p = permits.clone().acquire_owned() => p? };
+            let (stream, _) = tokio::select! { _ = shutdown.notified() => break, r = listener.accept() => r? };
             let library = library.clone();
             let root = root.clone();
             let token = token.clone();
             let work_permits = work_permits.clone();
-            tokio::spawn(async move {
+            let shutdown = shutdown.clone();
+            let shutdown_busy = shutdown_busy.clone();
+            let stopping = stopping.clone();
+            connections.spawn(async move {
                 let _permit = permit;
+                let accepted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let accepted_service = accepted.clone();
+                let stopping_service = stopping.clone();
                 let service = hyper::service::service_fn(
                     move |request: hyper::Request<hyper::body::Incoming>| {
                         let library = library.clone();
                         let root = root.clone();
                         let token = token.clone();
                         let work_permits = work_permits.clone();
-                        let (parts, _body) = request.into_parts();
+                        let accepted = accepted_service.clone();
+                        let shutdown_busy = shutdown_busy.clone();
+                        let stopping = stopping_service.clone();
+                        let (parts, mut incoming) = request.into_parts();
                         async move {
+                            if stopping.load(std::sync::atomic::Ordering::Acquire) { return Ok::<_,std::convert::Infallible>(error_response(ApiError::new(503,"Máy chủ đang tắt; hãy mở lại ứng dụng sau khi hoàn tất."))); }
                             let work_permit = work_permits
                                 .acquire_owned()
                                 .await
                                 .expect("server-owned admission semaphore");
+                            let drain_length=permission_drain_length(&parts);
+                            let body = if library.writable() { match request_json(&parts, &mut incoming, &token, port).await { Ok(body) => body, Err(error) => {if error.status==403{drain_permission_body(&mut incoming,drain_length).await;}return Ok(error_response(error));} } } else { None };
                             let result = tokio::task::spawn_blocking(move || {
                                 // Keep admission until synchronous work ends, even if the client disconnects.
-                                let _work_permit = work_permit;
-                                respond(&library, &root, &token, port, parts)
+                                let mut response = if library.writable() { respond_writable(&library, &root, &token, port, parts, body, &shutdown_busy, &accepted) } else { respond(&library, &root, &token, port, parts) };
+                                response.body_mut().library = Some(library);
+                                response.body_mut().permit = Some(Arc::new(work_permit));
+                                response
                             })
                             .await;
-                            Ok::<_, std::convert::Infallible>(result.unwrap_or_else(|_| {
+                            let response=result.unwrap_or_else(|_| {
                                 Response::builder()
                                     .status(500)
                                     .header("Connection", "close")
-                                    .body(Full::new(Bytes::new()))
+                                    .body(ServiceBody::bytes(Vec::new()))
                                     .expect("fixed response")
-                            }))
+                            });
+                            if response.status()==403{drain_permission_body(&mut incoming,drain_length).await;}
+                            Ok::<_, std::convert::Infallible>(response)
                         }
                     },
                 );
@@ -990,9 +1968,15 @@ pub fn serve(
                         service,
                     );
                 let _ = connection.await;
+                if accepted.load(std::sync::atomic::Ordering::Acquire) { stopping.store(true,std::sync::atomic::Ordering::Release); shutdown.notify_one(); }
             });
         }
-        #[allow(unreachable_code)]
+        drop(listener);
+        stopping.store(true,std::sync::atomic::Ordering::Release);
+        if tokio::time::timeout(std::time::Duration::from_secs(2), async { while connections.join_next().await.is_some() {} }).await.is_err() { connections.abort_all(); while connections.join_next().await.is_some() {} }
+        // Blocking work retains its admission and library lock after a disconnected request is cancelled.
+        while work_permits.available_permits()!=64 { tokio::time::sleep(std::time::Duration::from_millis(50)).await; }
+        if library.writable() { loop {let owner=library.clone();if tokio::task::spawn_blocking(move||owner.checkpoint()).await?.is_ok(){break;}tokio::time::sleep(std::time::Duration::from_secs(1)).await;} }
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
 }
@@ -1002,7 +1986,7 @@ fn respond(
     token: &str,
     port: u16,
     parts: hyper::http::request::Parts,
-) -> Response<Full<Bytes>> {
+) -> Response<ServiceBody> {
     let method = parts.method.as_str().to_owned();
     let uri = parts.uri.to_string();
     let header = |name: &str| parts.headers.get(name).and_then(|v| v.to_str().ok());
@@ -1111,8 +2095,7 @@ fn respond(
         }
         Ok((200, body))
     })();
-    let (status, body) =
-        result.unwrap_or_else(|e| (e.status, json_bytes(&json!({"error":e.message}))));
+    let (status, body) = result.unwrap_or_else(|e| (e.status, json_bytes(&e.json())));
     if supported {
         headers.extend([
             ("X-Content-Type-Options".into(), "nosniff".into()),
@@ -1140,10 +2123,10 @@ fn respond(
         response = response.header(k, v);
     }
     response
-        .body(Full::new(if method == "HEAD" {
-            Bytes::new()
+        .body(ServiceBody::bytes(if method == "HEAD" {
+            Vec::new()
         } else {
-            Bytes::from(body)
+            body
         }))
         .expect("validated response headers")
 }
@@ -1151,6 +2134,268 @@ fn respond(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn permission_body_drain_is_small_and_time_bounded() {
+        fn parts(length: &str) -> hyper::http::request::Parts {
+            hyper::Request::builder()
+                .method("POST")
+                .header("Content-Length", length)
+                .body(())
+                .unwrap()
+                .into_parts()
+                .0
+        }
+        assert_eq!(permission_drain_length(&parts("65536")), Some(65536));
+        let mut options = parts("2");
+        options.method = hyper::Method::OPTIONS;
+        assert_eq!(permission_drain_length(&options), None);
+        assert_eq!(
+            permission_drain_length(&hyper::Request::new(()).into_parts().0),
+            None
+        );
+        for length in ["0", "-1", "65537", "invalid"] {
+            assert_eq!(permission_drain_length(&parts(length)), None);
+        }
+        let mut chunked = parts("2");
+        chunked.headers.insert(
+            "Transfer-Encoding",
+            hyper::header::HeaderValue::from_static("chunked"),
+        );
+        assert_eq!(permission_drain_length(&chunked), None);
+        struct Stalled;
+        impl hyper::body::Body for Stalled {
+            type Data = Bytes;
+            type Error = std::convert::Infallible;
+            fn poll_frame(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>>
+            {
+                std::task::Poll::Pending
+            }
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut complete = http_body_util::Full::new(Bytes::from_static(b"{}"));
+            drain_permission_body(&mut complete, Some(2)).await;
+            assert!(hyper::body::Body::is_end_stream(&complete));
+            let start = std::time::Instant::now();
+            drain_permission_body(&mut Stalled, Some(2)).await;
+            assert!(start.elapsed() < std::time::Duration::from_secs(1));
+            let mut ignored = http_body_util::Full::new(Bytes::from_static(b"{}"));
+            drain_permission_body(&mut ignored, None).await;
+            assert!(!hyper::body::Body::is_end_stream(&ignored));
+        });
+    }
+    #[test]
+    fn m2_json_depth_walkers_fit_bounded_worker_stack() {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                for (depth, object) in [(512, false), (984, false), (512, true), (984, true)] {
+                    let mut value = json!(0);
+                    for _ in 0..depth {
+                        value = if object {
+                            let mut map = serde_json::Map::new();
+                            map.insert("a".into(), value);
+                            Value::Object(map)
+                        } else {
+                            Value::Array(vec![value])
+                        };
+                    }
+                    validate_finite_json(&value).unwrap();
+                    public_content(&mut value).unwrap();
+                    let bytes = json_bytes(&value);
+                    assert_eq!(bytes.len(), depth * if object { 7 } else { 2 } + 1);
+                    assert_eq!(py_string(&value).len(), bytes.len());
+                    let mut book = serde_json::Map::new();
+                    book.insert("warnings".into(), value);
+                    let mut page = serde_json::Map::new();
+                    page.insert("items".into(), Value::Array(vec![Value::Object(book)]));
+                    let mut page = Value::Object(page);
+                    validate_finite_json(&page).unwrap();
+                    public_content(&mut page).unwrap();
+                    assert!(!json_bytes(&page).is_empty());
+                    assert!(!py_string(&page).is_empty());
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+    #[test]
+    fn m2_json_boundary_distinguishes_empty_body_from_bom_only() {
+        assert_eq!(parse_request_bytes(&[]).unwrap(), json!({}));
+        for raw in [
+            &[0xef, 0xbb, 0xbf][..],
+            &[0xff, 0xfe][..],
+            &[0xfe, 0xff][..],
+            &[0xff, 0xfe, 0, 0][..],
+            &[0, 0, 0xfe, 0xff][..],
+        ] {
+            assert_eq!(
+                parse_request_bytes(raw).unwrap_err().message,
+                "Expecting value: line 1 column 1 (char 0)"
+            );
+        }
+    }
+    #[test]
+    fn m2_review_body_encodings_match_python() {
+        assert_eq!(
+            parse_request_bytes(&[0xff]).unwrap_err().message,
+            "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+        );
+        assert_eq!(
+            parse_request_bytes(&[0xff, 0xfe, b'{', 0, 0xff])
+                .unwrap_err()
+                .message,
+            "'utf-16-le' codec can't decode byte 0xff in position 4: truncated data"
+        );
+        assert_eq!(
+            parse_request_bytes(&[0, 0, 0xfe, 0xff, 0, 0x11, 0, 0])
+                .unwrap_err()
+                .message,
+            "'utf-32-be' codec can't decode bytes in position 4-7: code point not in range(0x110000)"
+        );
+        let value = "{\"name\":\"Việt\"}";
+        let expected = json!({"name":"Việt"});
+        let mut utf8 = vec![0xef, 0xbb, 0xbf];
+        utf8.extend_from_slice(value.as_bytes());
+        assert_eq!(parse_request_bytes(&utf8).unwrap(), expected);
+        for little in [true, false] {
+            for bom in [true, false] {
+                let mut utf16 = if bom {
+                    if little {
+                        vec![0xff, 0xfe]
+                    } else {
+                        vec![0xfe, 0xff]
+                    }
+                } else {
+                    Vec::new()
+                };
+                for unit in value.encode_utf16() {
+                    utf16.extend_from_slice(&if little {
+                        unit.to_le_bytes()
+                    } else {
+                        unit.to_be_bytes()
+                    });
+                }
+                assert_eq!(parse_request_bytes(&utf16).unwrap(), expected);
+                let mut utf32 = if bom {
+                    if little {
+                        vec![0xff, 0xfe, 0, 0]
+                    } else {
+                        vec![0, 0, 0xfe, 0xff]
+                    }
+                } else {
+                    Vec::new()
+                };
+                for unit in value.chars().map(u32::from) {
+                    utf32.extend_from_slice(&if little {
+                        unit.to_le_bytes()
+                    } else {
+                        unit.to_be_bytes()
+                    });
+                }
+                assert_eq!(parse_request_bytes(&utf32).unwrap(), expected);
+            }
+        }
+    }
+    #[test]
+    fn m2_review_image_miss_validates_referer_and_source_error() {
+        let (_fixture, library) = crate::reader::tests::writable();
+        for uri in [
+            "/api/image?url=https%3A%2F%2Fcdn.example.org%2Fabsent&referer=http%3A%2F%2F127.0.0.1%2F",
+            "/api/image?url=http%3A%2F%2F127.0.0.1%2F",
+        ] {
+            let (parts, _) = hyper::Request::builder()
+                .uri(uri)
+                .header("Host", "127.0.0.1:1234")
+                .body(())
+                .unwrap()
+                .into_parts();
+            let response = respond_writable(
+                &library,
+                Path::new("."),
+                "token",
+                1234,
+                parts,
+                None,
+                &std::sync::Mutex::new(()),
+                &std::sync::atomic::AtomicBool::new(false),
+            );
+            assert_eq!(response.status(), 400);
+            assert_eq!(
+                serde_json::from_slice::<Value>(response.body().bytes.as_ref().unwrap()).unwrap()["code"],
+                "source_error"
+            );
+        }
+    }
+    #[test]
+    fn m2_review_python_string_coercion_keeps_container_repr() {
+        assert_eq!(
+            py_string(&json!(["Việt",true,null,{"key":false}])),
+            "['Việt', True, None, {'key': False}]"
+        );
+        assert_eq!(json_bytes(&crate::library::parse_json("-0").unwrap()), b"0");
+        assert_eq!(
+            validate_finite_json(&crate::library::parse_json("1e999").unwrap())
+                .unwrap_err()
+                .status,
+            400
+        );
+    }
+    #[test]
+    fn request_json_rejects_nonfinite_constants_with_reference_error() {
+        assert_eq!(
+            parse_request_json("{\"x\" NaN}").unwrap_err().message,
+            crate::library::parse_json("{\"x\" NaN}")
+                .unwrap_err()
+                .message
+        );
+        for token in ["NaN", "Infinity", "-Infinity"] {
+            assert_eq!(
+                parse_request_json(&format!("{{\"value\":{token}}}"))
+                    .unwrap_err()
+                    .message,
+                format!("Giá trị số không hợp lệ: {token}")
+            );
+        }
+        assert_eq!(
+            parse_request_json("[]").unwrap_err().message,
+            "Dữ liệu JSON phải là object."
+        );
+        assert_eq!(
+            parse_request_json("{\"x\":\"NaN\"}").unwrap(),
+            json!({"x":"NaN"})
+        );
+    }
+    #[test]
+    fn file_identity_matches_python_fstat() {
+        let path = std::env::temp_dir().join(format!("reader-m2-identity-{}", std::process::id()));
+        std::fs::write(&path, b"image").unwrap();
+        let change = std::process::Command::new("python")
+            .args([
+                "-B",
+                "-c",
+                "import os,sys;os.utime(sys.argv[1],ns=(1700000000000000000,1700000000000000000))",
+            ])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(change.success());
+        let path = checked_path(&path).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let actual = file_identity(&path, &file.metadata().unwrap(), &file).unwrap();
+        let expected=std::process::Command::new("python").args(["-B","-X","utf8","-c","import os,sys;f=open(sys.argv[1],'rb');s=os.fstat(f.fileno());print(f'{sys.argv[1]}:{s.st_ino}:{s.st_size}:{s.st_mtime_ns}:{s.st_ctime_ns}')"]).arg(display_path(&path)).output().unwrap();
+        assert!(expected.status.success());
+        assert_eq!(actual, String::from_utf8(expected.stdout).unwrap().trim());
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn nested_output() {
         let mut v = json!({"warnings":[{"id":"a/b","source":"local","cover":"https://example.org/x","html":"<p>Hello<script>x</script><b>bold</b></p>"}]});
