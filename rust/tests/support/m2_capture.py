@@ -545,7 +545,6 @@ def durable_eviction(binary, canonical, output):
     with store.db() as db:
         db.execute("UPDATE books SET source='hako' WHERE id='0'")
         db.execute("UPDATE chapter_cache SET kind='cache',offline=0 WHERE book_id='0'")
-        db.execute("UPDATE chapter_cache_state SET max_chapters=0 WHERE id=1")
     store.close_inventory()
     store.checkpoint()
     with m1.child(command(binary, root), output / "lease-kill.log") as (port, process):
@@ -554,12 +553,15 @@ def durable_eviction(binary, canonical, output):
         process.wait(timeout=10)
     def python_evict(expected_removed):
         store = Store(root)
+        # Give the reference exclusive control of eviction while testing Rust's persisted lease.
+        store.set_chapter_cache_limit(0)
         with store.db() as db:
             rows = [dict(r) for r in db.execute("SELECT * FROM chapter_cache WHERE book_id='0' AND idx IN (0,1) ORDER BY idx")]
         assert all(r["kind"] == "cache" and r["offline"] == 0 for r in rows), rows
         assert store.evict_chapters(rows) == expected_removed
         with store.db() as db:
             states = dict(db.execute("SELECT idx,downloaded FROM chapters WHERE book_id='0' AND idx IN (0,1)"))
+        store.set_chapter_cache_limit(100)
         store.close_inventory()
         store.checkpoint()
         return states

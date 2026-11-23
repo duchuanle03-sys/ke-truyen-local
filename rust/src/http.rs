@@ -32,7 +32,7 @@ pub fn quote(s: &str, plus: bool) -> String {
     }
     out
 }
-fn escape(s: &str) -> String {
+pub(crate) fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -252,7 +252,7 @@ fn attr<'a>(node: &'a Node, key: &str) -> &'a str {
 }
 fn parse_html(s: &str) -> Result<Node, ApiError> {
     let token = cached_regex!(
-        r#"(?s)<!--.*?-->|<![^>]*>|<\?.*?>|</\s*([A-Za-z][A-Za-z0-9:-]*)[^>]*>|<([A-Za-z][A-Za-z0-9:-]*)(\s(?:[^<>"']|"[^"]*"|'[^']*')*)?\s*/?>"#
+        r#"(?s)<!--.*?-->|<![^>]*>|<\?.*?>|</\s*([A-Za-z][A-Za-z0-9:_.-]*)[^>]*>|<([A-Za-z][A-Za-z0-9:_.-]*)([\s/](?:[^<>"']|"[^"]*"|'[^']*')*)?\s*/?>"#
     );
     let attributes = cached_regex!(r#"([^\s=/'">]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]*)))?"#);
     let mut stack = vec![Node::default()];
@@ -332,6 +332,10 @@ fn remote(s: &str) -> String {
     if s.is_empty() || s.chars().any(|c| c <= ' ' || c == '\u{7f}' || c == '\\') {
         return String::new();
     }
+    remote_url(s)
+}
+
+fn remote_url(s: &str) -> String {
     let Some((scheme, rest)) = s.split_once("://") else {
         return String::new();
     };
@@ -432,30 +436,26 @@ fn remote(s: &str) -> String {
     )
 }
 pub(crate) fn asset_image_urls(value: &str, base: &str) -> Result<Vec<String>, ApiError> {
-    let (path_query, _) = value.split_once('#').unwrap_or((value, ""));
-    let (prefix, query) = path_query.split_once('?').unwrap_or((path_query, ""));
-    let (authority, path) = if let Some((_, rest)) = prefix.split_once("://") {
-        let end = rest.find('/').unwrap_or(rest.len());
-        (Some(&rest[..end]), &rest[end..])
-    } else if let Some(rest) = prefix.strip_prefix("//") {
-        let end = rest.find('/').unwrap_or(rest.len());
-        (Some(&rest[..end]), &rest[end..])
-    } else {
-        (None, prefix)
-    };
+    let parsed = asset_url_text(value);
+    let (_, authority, path, query) = split_asset_url(&parsed);
+    let authority = authority
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.rsplit('@').next());
     if let Some(authority) = authority {
         let host = authority.rsplit('@').next().unwrap_or("");
         if host.contains(['[', ']']) {
             let valid = host
                 .strip_prefix('[')
                 .and_then(|s| s.split_once(']'))
-                .is_some_and(|(host, _)| {
-                    host.split('%')
-                        .next()
-                        .unwrap_or("")
-                        .parse::<std::net::Ipv6Addr>()
-                        .is_ok()
-                        || cached_regex!(r"^[vV][0-9a-fA-F]+\..+$").is_match(host)
+                .is_some_and(|(host, port)| {
+                    (port.is_empty() || port.starts_with(':'))
+                        && (host
+                            .split('%')
+                            .next()
+                            .unwrap_or("")
+                            .parse::<std::net::Ipv6Addr>()
+                            .is_ok()
+                            || cached_regex!(r"^[vV][0-9a-fA-F]+\..+$").is_match(host))
                 });
             if !valid {
                 return Err(ApiError::new(400, "Invalid IPv6 URL"));
@@ -477,6 +477,7 @@ pub(crate) fn asset_image_urls(value: &str, base: &str) -> Result<Vec<String>, A
     });
     let candidates = if path == "/api/image" && local {
         query
+            .unwrap_or("")
             .split('&')
             .filter_map(|pair| {
                 let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -495,6 +496,26 @@ pub(crate) fn asset_image_urls(value: &str, base: &str) -> Result<Vec<String>, A
     }
     Ok(urls.into_iter().collect())
 }
+
+pub(crate) fn asset_markup_urls(markup: &str, base: &str) -> Result<Vec<String>, ApiError> {
+    fn collect(node: &Node, base: &str, urls: &mut Vec<String>) -> Result<(), ApiError> {
+        if node.tag == "img"
+            && let Some(value) = ["data-original", "data-src", "src"]
+                .into_iter()
+                .map(|attribute| attr(node, attribute))
+                .find(|value| !value.is_empty())
+        {
+            urls.extend(asset_image_urls(value, base)?);
+        }
+        for child in &node.children {
+            collect(child, base, urls)?;
+        }
+        Ok(())
+    }
+    let mut urls = Vec::new();
+    collect(&parse_html(markup)?, base, &mut urls)?;
+    Ok(urls)
+}
 fn relative_remote(value: &str, base: &str) -> String {
     if value.is_empty()
         || value
@@ -503,53 +524,38 @@ fn relative_remote(value: &str, base: &str) -> String {
     {
         return String::new();
     }
-    if value.split_once(':').is_some_and(|(s, _)| {
-        !s.is_empty()
-            && s.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
-    }) {
-        return remote(value);
-    }
-    let base = remote(base);
-    let Some((scheme, rest)) = base.split_once("://") else {
+    let base = asset_url_text(base);
+    let (base_scheme, base_authority, base_path, base_query) = split_asset_url(&base);
+    let (value_scheme, authority, path, query) = split_asset_url(value);
+    let Some(scheme) = value_scheme.or(base_scheme) else {
         return String::new();
     };
-    if value.starts_with("//") {
-        return remote(&format!("{scheme}:{value}"));
+    if !base_scheme.is_some_and(|base_scheme| scheme.eq_ignore_ascii_case(base_scheme)) {
+        return remote(value);
     }
-    let split = rest.find('/').unwrap_or(rest.len());
-    let origin = format!("{scheme}://{}", &rest[..split]);
-    let base_path = &rest[split..];
-    if value.starts_with('#') {
-        return remote(&format!("{origin}{base_path}{value}"));
+    if let Some(authority) = authority.filter(|s| !s.is_empty()) {
+        return normalized_asset_url(scheme, authority, path, query);
     }
-    let base_path = base_path.split('?').next().unwrap_or("/");
-    if value.starts_with('?') {
-        return remote(&format!("{origin}{base_path}{value}"));
-    }
-    let (path, suffix) = value
-        .find(['?', '#'])
-        .map_or((value, ""), |at| (&value[..at], &value[at..]));
-    let joined = if path.starts_with('/') {
-        path.to_owned()
-    } else {
-        format!(
-            "{}{path}",
-            base_path
-                .rsplit_once('/')
-                .map_or("/", |(dir, _)| &base_path[..dir.len() + 1])
-        )
+    let Some(authority) = base_authority.filter(|s| !s.is_empty()) else {
+        return String::new();
     };
+    if path.is_empty() {
+        return normalized_asset_url(scheme, authority, base_path, query.or(base_query));
+    }
+    let mut parts = Vec::new();
+    if !path.starts_with('/') {
+        parts.extend(base_path.split('/'));
+        if parts.last().is_some_and(|s| !s.is_empty()) {
+            parts.pop();
+        }
+    }
+    parts.extend(path.split('/'));
     let mut segments = Vec::new();
-    let parts = joined.split('/').collect::<Vec<_>>();
     for (i, part) in parts.iter().enumerate() {
         match *part {
             "." => {}
             ".." => {
-                if segments.len() > 1 {
-                    segments.pop();
-                }
+                segments.pop();
             }
             "" if !path.starts_with('/') && i > 0 && i + 1 < parts.len() => {}
             _ => segments.push(*part),
@@ -558,7 +564,44 @@ fn relative_remote(value: &str, base: &str) -> String {
     if parts.last().is_some_and(|part| [".", ".."].contains(part)) {
         segments.push("");
     }
-    remote(&format!("{origin}{}{suffix}", segments.join("/")))
+    normalized_asset_url(scheme, authority, &segments.join("/"), query)
+}
+
+fn normalized_asset_url(scheme: &str, authority: &str, path: &str, query: Option<&str>) -> String {
+    let slash = if path.starts_with('/') { "" } else { "/" };
+    let query = query.map_or_else(String::new, |q| format!("?{q}"));
+    remote_url(&format!("{scheme}://{authority}{slash}{path}{query}"))
+}
+
+fn asset_url_text(value: &str) -> std::borrow::Cow<'_, str> {
+    let text = value.trim_start_matches(|c| c <= ' ');
+    if text.contains(['\t', '\n', '\r']) {
+        text.replace(['\t', '\n', '\r'], "").into()
+    } else {
+        text.into()
+    }
+}
+
+fn split_asset_url(value: &str) -> (Option<&str>, Option<&str>, &str, Option<&str>) {
+    let scheme = value.split_once(':').filter(|(prefix, _)| {
+        prefix
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic())
+            && prefix
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+    });
+    let (scheme, rest) = scheme.map_or((None, value), |(prefix, rest)| (Some(prefix), rest));
+    let rest = rest.split_once('#').map_or(rest, |(left, _)| left);
+    let (path, query) = rest
+        .split_once('?')
+        .map_or((rest, None), |(path, query)| (path, Some(query)));
+    let (authority, path) = path.strip_prefix("//").map_or((None, path), |rest| {
+        let end = rest.find('/').unwrap_or(rest.len());
+        (Some(&rest[..end]), &rest[end..])
+    });
+    (scheme, authority, path, query)
 }
 fn public_ip(ip: std::net::IpAddr) -> bool {
     fn within(n: u128, networks: &[(u128, u8)], width: u8) -> bool {
@@ -642,26 +685,84 @@ fn public_ip(ip: std::net::IpAddr) -> bool {
         }
     }
 }
+fn hidden_node(node: &Node) -> bool {
+    let drop = [
+        "script", "style", "iframe", "object", "embed", "svg", "math", "template", "noscript",
+        "form", "button", "input", "select", "textarea",
+    ];
+    let hidden_style = cached_regex!(
+        r"(?i)(?:display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?:px|em|rem|pt)?(?:\s*[;!]|$))"
+    );
+    drop.contains(&node.tag.as_str())
+        || node.attrs.iter().any(|(k, _)| k == "hidden")
+        || attr(node, "aria-hidden") == "true"
+        || hidden_style.is_match(attr(node, "style"))
+        || attr(node, "class")
+            .split(crate::casefold::python_whitespace)
+            .any(|s| ["ads-responsive", "adsbygoogle"].contains(&s))
+}
+
+pub(crate) fn html_to_text(markup: &str) -> Result<String, ApiError> {
+    fn append(node: &Node, out: &mut String) {
+        let block = [
+            "p",
+            "div",
+            "section",
+            "article",
+            "header",
+            "footer",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "blockquote",
+            "pre",
+            "li",
+            "ul",
+            "ol",
+            "tr",
+        ]
+        .contains(&node.tag.as_str());
+        if let Some(text) = &node.text {
+            out.push_str(text);
+        } else if !hidden_node(node) {
+            if block || ["br", "hr"].contains(&node.tag.as_str()) {
+                out.push('\n');
+            }
+            for child in &node.children {
+                append(child, out);
+            }
+            if block {
+                out.push('\n');
+            }
+        }
+    }
+    let mut value = String::new();
+    append(&parse_html(markup)?, &mut value);
+    Ok(value
+        .split([
+            '\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}',
+            '\u{2029}',
+        ])
+        .map(|line| {
+            line.split(crate::casefold::python_whitespace)
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
 fn sanitize_html(s: &str) -> Result<String, ApiError> {
     fn clean(n: &Node) -> String {
         if let Some(text) = &n.text {
             return escape(text);
         };
-        let drop = [
-            "script", "style", "iframe", "object", "embed", "svg", "math", "template", "noscript",
-            "form", "button", "input", "select", "textarea",
-        ];
-        let hidden = cached_regex!(
-            r"(?i)(?:display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?:px|em|rem|pt)?(?:\s*[;!]|$))"
-        );
-        if drop.contains(&n.tag.as_str())
-            || n.attrs.iter().any(|(k, _)| k == "hidden")
-            || attr(n, "aria-hidden") == "true"
-            || hidden.is_match(attr(n, "style"))
-            || attr(n, "class")
-                .split_whitespace()
-                .any(|s| ["ads-responsive", "adsbygoogle"].contains(&s))
-        {
+        if hidden_node(n) {
             return String::new();
         }
         if n.tag == "img" {
@@ -1050,6 +1151,7 @@ struct ServiceBody {
     remaining: u64,
     library: Option<Arc<Library>>,
     permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+    asset: Option<Arc<crate::lifecycle::Lease<std::path::PathBuf>>>,
 }
 impl ServiceBody {
     fn bytes(bytes: Vec<u8>) -> Self {
@@ -1061,9 +1163,14 @@ impl ServiceBody {
             remaining,
             library: None,
             permit: None,
+            asset: None,
         }
     }
-    fn file(file: std::fs::File, len: u64) -> Self {
+    fn file(
+        file: std::fs::File,
+        len: u64,
+        asset: crate::lifecycle::Lease<std::path::PathBuf>,
+    ) -> Self {
         Self {
             bytes: None,
             file: Some(Arc::new(std::sync::Mutex::new(file))),
@@ -1071,6 +1178,7 @@ impl ServiceBody {
             remaining: len,
             library: None,
             permit: None,
+            asset: Some(Arc::new(asset)),
         }
     }
 }
@@ -1097,10 +1205,12 @@ impl hyper::body::Body for ServiceBody {
             let file = self.file.as_ref().expect("stream file").clone();
             let library = self.library.clone();
             let permit = self.permit.clone();
+            let asset = self.asset.clone();
             let len = self.remaining.min(65536) as usize;
             self.pending = Some(tokio::task::spawn_blocking(move || {
                 let _library = library;
                 let _permit = permit;
+                let _asset = asset;
                 let mut buf = vec![0; len];
                 let n = file
                     .lock()
@@ -1190,11 +1300,40 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
         "/api/readers",
         "/api/notes",
         "/api/shutdown",
+        "/api/cache/chapters",
+        "/api/cache/chapters/clear",
+        "/api/cache/chapters/legacy",
+        "/api/cache/chapters/compact",
+        "/api/cache/images",
+        "/api/cache/images/clear",
     ]
     .contains(&path.as_str())
         || (pieces.len() == 4
             && pieces[..2] == ["api", "books"]
-            && ["progress", "update"].contains(&pieces[3]))
+            && ["progress", "update", "trash", "restore"].contains(&pieces[3]))
+        || (pieces.len() == 6
+            && pieces[..2] == ["api", "books"]
+            && pieces[3] == "chapters"
+            && ["edit", "restore"].contains(&pieces[5]))
+}
+
+fn critical_operation(parts: &hyper::http::request::Parts) -> Option<&'static str> {
+    if !["POST", "DELETE"].contains(&parts.method.as_str()) {
+        return None;
+    }
+    let path = decode(parts.uri.path(), false);
+    let pieces = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    match (parts.method.as_str(), pieces.as_slice()) {
+        ("POST", ["api", "cache", "chapters", "compact"]) => Some("thu gọn SQLite"),
+        ("POST", ["api", "books", _, "chapters", _, "edit" | "restore"]) => {
+            Some("sửa/khôi phục chương")
+        }
+        ("DELETE", ["api", "books", _]) => Some("xóa vĩnh viễn truyện"),
+        _ => None,
+    }
 }
 async fn request_json(
     parts: &hyper::http::request::Parts,
@@ -1206,6 +1345,12 @@ async fn request_json(
         return Ok(None);
     }
     guard(parts, port)?;
+    if critical_operation(parts) == Some("sửa/khôi phục chương") {
+        let path = decode(parts.uri.path(), false);
+        if let Some(index) = path.split('/').filter(|s| !s.is_empty()).nth(4) {
+            crate::library::integer(index)?;
+        }
+    }
     let content_type = parts
         .headers
         .get("Content-Type")
@@ -1493,13 +1638,14 @@ fn respond_writable(
     parts: hyper::http::request::Parts,
     body: Option<Value>,
     shutdown_busy: &std::sync::Mutex<()>,
-    accepted: &std::sync::atomic::AtomicBool,
+    accepted: &crate::lifecycle::ShutdownAck,
+    stopping: &std::sync::atomic::AtomicBool,
 ) -> Response<ServiceBody> {
     let head = parts.method == "HEAD";
-    let method = if head { "GET" } else { parts.method.as_str() };
+    let request_method = parts.method.clone();
+    let method = if head { "GET" } else { request_method.as_str() };
     let path = decode(parts.uri.path(), false);
     if !path.starts_with("/api/")
-        || path == "/api/books"
         || parts.method == "OPTIONS"
         || !["GET", "HEAD", "POST", "DELETE"].contains(&parts.method.as_str())
     {
@@ -1507,6 +1653,22 @@ fn respond_writable(
     }
     let result = (|| {
         guard(&parts, port)?;
+        let _database = if path == "/api/cache/chapters/compact" && method == "POST"
+            || matches!(
+                path.as_str(),
+                "/api/instance" | "/api/sources" | "/api/shutdown"
+            ) {
+            None
+        } else {
+            Some(
+                library.database_gate.try_read().map_err(|_| {
+                    ApiError::new(400, "Đang thu gọn cơ sở dữ liệu; hãy thử lại sau.")
+                })?,
+            )
+        };
+        if path == "/api/books" {
+            return Ok(respond(library, root, token, port, parts));
+        }
         let body = body.as_ref().unwrap_or(&Value::Null);
         let mut extra = Vec::new();
         let mut status = 200;
@@ -1538,6 +1700,20 @@ fn respond_writable(
                 json!([{"id":"qq","name":"Truyện QQ"},{"id":"full","name":"Truyện Full"},{"id":"hako","name":"Hako"},{"id":"stv","name":"Sáng Tác Việt"}])
             }
             ("/api/readers", "POST") => library.reader(body)?,
+            ("/api/cache/chapters", "GET") => library.chapter_cache_stats()?,
+            ("/api/cache/chapters", "POST") => {
+                library.set_chapter_cache_limit(&body["max_chapters"])?
+            }
+            ("/api/cache/chapters/clear", "POST") => library.clear_chapter_cache()?,
+            ("/api/cache/chapters/legacy", "POST") => {
+                library.reclassify_legacy_chapters(body["confirmed"] == true)?
+            }
+            ("/api/cache/chapters/compact", "POST") => {
+                library.compact_database(body["confirmed"] == true)?
+            }
+            ("/api/cache/images", "GET") => library.image_cache_stats()?,
+            ("/api/cache/images", "POST") => library.set_image_cache_limit(&body["max_bytes"])?,
+            ("/api/cache/images/clear", "POST") => library.clear_image_cache()?,
             ("/api/notes", "GET") => library.notes(query.get("book_id").map(String::as_str))?,
             ("/api/notes", "POST") => library.save_note(body)?,
             ("/api/shutdown", "POST") => {
@@ -1552,6 +1728,26 @@ fn respond_writable(
                         ));
                     }
                 };
+                let operations = library.critical_operations.lock();
+                let names = operations.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+                let database = library.database_gate.try_read();
+                if !names.is_empty() || database.is_err() {
+                    let joined = if names.is_empty() {
+                        "thu gọn SQLite".to_owned()
+                    } else {
+                        names.join(", ")
+                    };
+                    return Ok(api_response(
+                        409,
+                        json!({
+                            "error": format!("Hãy chờ thao tác kết thúc: {joined}"),
+                            "code":"busy_operation","operations":names
+                        }),
+                        head,
+                        Vec::new(),
+                    ));
+                }
+                let _database = database;
                 let value = match library.pause_downloads(body["pause_downloads"] == true) {
                     Ok(v) => v,
                     Err(_) => {
@@ -1560,7 +1756,8 @@ fn respond_writable(
                 };
                 if value["accepted"] == true {
                     extra.push(("Connection".into(), "close".into()));
-                    accepted.store(true, std::sync::atomic::Ordering::Release);
+                    stopping.store(true, std::sync::atomic::Ordering::Release);
+                    accepted.accepted();
                 } else {
                     status = 409;
                 }
@@ -1582,7 +1779,13 @@ fn respond_writable(
                     let id = pieces[2];
                     match (pieces.len(), method) {
                         (3, "GET") => library.get_book(id)?,
+                        (3, "DELETE") => library.purge_book(id)?,
                         (4, "GET") if pieces[3] == "chapters" => library.chapters(id)?,
+                        (4, "GET") if pieces[3] == "search" => library.search_content(
+                            id,
+                            query.get("q").map_or("", String::as_str),
+                            query.get("after").map_or("-1", String::as_str),
+                        )?,
                         (4, "GET") if pieces[3] == "cover" => {
                             let book = library.get_book(id)?;
                             let image = image_response(
@@ -1611,6 +1814,12 @@ fn respond_writable(
                         }
                         (4, "POST") if pieces[3] == "progress" => library.progress(id, body)?,
                         (4, "POST") if pieces[3] == "update" => library.update_book(id, body)?,
+                        (4, "POST") if pieces[3] == "trash" => library.trash_book(id)?,
+                        (4, "POST") if pieces[3] == "restore" => library.restore_book(id)?,
+                        (6, "POST") if pieces[3] == "chapters" && pieces[5] == "edit" => library
+                            .edit_chapter(id, crate::library::sqlite_integer(pieces[4])?, body)?,
+                        (6, "POST") if pieces[3] == "chapters" && pieces[5] == "restore" => library
+                            .restore_chapter(id, crate::library::sqlite_integer(pieces[4])?)?,
                         (5, "GET") if pieces[3] == "chapters" => {
                             let index = crate::library::integer(pieces[4])?;
                             let reader = parts
@@ -1673,6 +1882,7 @@ fn image_response(
     }
     let name = format!("{:x}", Sha256::digest(url.as_bytes()));
     let candidate = library.root().join("images").join(&name);
+    let asset = library.asset_leases.acquire(candidate.clone());
     if !candidate.exists() {
         if !referer.is_empty() && remote(referer).is_empty() {
             return Err(ApiError::new(
@@ -1754,7 +1964,7 @@ fn image_response(
         .body(if unchanged || parts.method == "HEAD" {
             ServiceBody::bytes(Vec::new())
         } else {
-            ServiceBody::file(file, info.len())
+            ServiceBody::file(file, info.len(), asset)
         })
         .expect("image headers"))
 }
@@ -1902,6 +2112,72 @@ fn run_server(
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let shutdown_busy = Arc::new(std::sync::Mutex::new(()));
         let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let maintenance_stop = Arc::new(tokio::sync::Notify::new());
+        let maintenance = library.writable().then(|| {
+            let library = library.clone();
+            let stopping = stopping.clone();
+            let maintenance_stop = maintenance_stop.clone();
+            tokio::spawn(async move {
+                let mut failures = 0usize;
+                let mut next_trash = std::time::Instant::now();
+                let mut inventory = crate::assets::Inventory::default();
+                while !stopping.load(std::sync::atomic::Ordering::Acquire) {
+                    let owner = library.clone();
+                    let stop = stopping.clone();
+                    let check_trash = std::time::Instant::now() >= next_trash;
+                    let result = tokio::task::spawn_blocking(move || {
+                        let result = (|| {
+                            let Ok(_database) = owner.database_gate.try_read() else {
+                                return Ok((false, 0));
+                            };
+                            if stop.load(std::sync::atomic::Ordering::Acquire) {
+                                return Ok((false, 0));
+                            }
+                            let expired = check_trash && owner.purge_expired_book()?;
+                            let chapters = owner.maintain_chapter_cache()?;
+                            let assets = owner.index_assets(&stop)?;
+                            let search = owner.index_search(&stop)?;
+                            let scanned = owner.inventory_assets(&mut inventory, &stop)?;
+                            let queued = owner.queue_image_evictions(&stop)?;
+                            let cleaned = owner.cleanup_assets(&stop)?;
+                            Ok::<_,ApiError>((expired, chapters + assets + search + scanned + queued + cleaned))
+                        })();
+                        (result, inventory)
+                    }).await;
+                    let result = match result {
+                        Ok((result,next)) => {
+                            inventory = next;
+                            result
+                        }
+                        Err(error) => {
+                            inventory = crate::assets::Inventory::default();
+                            Err(ApiError::new(500, error.to_string()))
+                        }
+                    };
+                    let delay = match result {
+                        Ok((expired, work)) => {
+                            failures = 0;
+                            if check_trash && !expired {
+                                next_trash = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                            }
+                            if work == 0 && !expired { 250 } else { 10 }
+                        }
+                        error => {
+                            if failures == 0 {
+                                eprintln!("Library maintenance will retry: {error:?}");
+                            }
+                            let delay = [250, 1000, 5000, 30000][failures.min(3)];
+                            failures = failures.saturating_add(1);
+                            delay
+                        }
+                    };
+                    tokio::select! {
+                        _ = maintenance_stop.notified() => break,
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => (),
+                    }
+                }
+            })
+        });
         let mut connections = tokio::task::JoinSet::new();
         loop {
             while connections.try_join_next().is_some() {}
@@ -1916,7 +2192,7 @@ fn run_server(
             let stopping = stopping.clone();
             connections.spawn(async move {
                 let _permit = permit;
-                let accepted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let accepted = Arc::new(crate::lifecycle::ShutdownAck::new(shutdown));
                 let accepted_service = accepted.clone();
                 let stopping_service = stopping.clone();
                 let service = hyper::service::service_fn(
@@ -1936,10 +2212,23 @@ fn run_server(
                                 .await
                                 .expect("server-owned admission semaphore");
                             let drain_length=permission_drain_length(&parts);
+                            let critical = if library.writable() {
+                                match critical_operation(&parts).map(|name| {
+                                    guard(&parts, port)?;
+                                    library.critical_operations.enter(name, &stopping)
+                                }).transpose() {
+                                    Ok(operation) => operation,
+                                    Err(error) => {
+                                        if error.status == 403 { drain_permission_body(&mut incoming, drain_length).await; }
+                                        return Ok(error_response(error));
+                                    }
+                                }
+                            } else { None };
                             let body = if library.writable() { match request_json(&parts, &mut incoming, &token, port).await { Ok(body) => body, Err(error) => {if error.status==403{drain_permission_body(&mut incoming,drain_length).await;}return Ok(error_response(error));} } } else { None };
                             let result = tokio::task::spawn_blocking(move || {
+                                let _critical = critical;
                                 // Keep admission until synchronous work ends, even if the client disconnects.
-                                let mut response = if library.writable() { respond_writable(&library, &root, &token, port, parts, body, &shutdown_busy, &accepted) } else { respond(&library, &root, &token, port, parts) };
+                                let mut response = if library.writable() { respond_writable(&library, &root, &token, port, parts, body, &shutdown_busy, &accepted, &stopping) } else { respond(&library, &root, &token, port, parts) };
                                 response.body_mut().library = Some(library);
                                 response.body_mut().permit = Some(Arc::new(work_permit));
                                 response
@@ -1968,11 +2257,13 @@ fn run_server(
                         service,
                     );
                 let _ = connection.await;
-                if accepted.load(std::sync::atomic::Ordering::Acquire) { stopping.store(true,std::sync::atomic::Ordering::Release); shutdown.notify_one(); }
+                accepted.closed();
             });
         }
         drop(listener);
         stopping.store(true,std::sync::atomic::Ordering::Release);
+        maintenance_stop.notify_one();
+        if let Some(maintenance) = maintenance { maintenance.await?; }
         if tokio::time::timeout(std::time::Duration::from_secs(2), async { while connections.join_next().await.is_some() {} }).await.is_err() { connections.abort_all(); while connections.join_next().await.is_some() {} }
         // Blocking work retains its admission and library lock after a disconnected request is cancelled.
         while work_permits.available_permits()!=64 { tokio::time::sleep(std::time::Duration::from_millis(50)).await; }
@@ -2134,6 +2425,47 @@ fn respond(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn m3_asset_resolution_preserves_python_same_scheme_references() {
+        let base = "https://cdn.example.org/books/original.html?a=4";
+        for (input, expected) in [
+            ("https:panel.png", "https://cdn.example.org/books/panel.png"),
+            ("HTTPS:panel.png", "https://cdn.example.org/books/panel.png"),
+            ("https:/panel.png", "https://cdn.example.org/panel.png"),
+            ("https:///panel.png", "https://cdn.example.org/panel.png"),
+            ("///panel.png", "https://cdn.example.org/panel.png"),
+            ("https:", base),
+            ("//", base),
+            ("https:#part", base),
+            (
+                "https:?x=1",
+                "https://cdn.example.org/books/original.html?x=1",
+            ),
+            (
+                "//public.example.org/panel.png",
+                "https://public.example.org/panel.png",
+            ),
+            (
+                "https:/api/image?url=https%3A%2F%2Fpublic.example.org%2Fpanel.png",
+                "https://public.example.org/panel.png",
+            ),
+            (
+                "http://user@[::1]/api/image?url=https%3A%2F%2Fpublic.example.org%2Fpanel.png",
+                "https://public.example.org/panel.png",
+            ),
+        ] {
+            assert_eq!(
+                asset_image_urls(input, base).unwrap(),
+                [expected],
+                "{input}"
+            );
+        }
+        assert!(asset_image_urls("http://[broken", base).is_err());
+        assert_eq!(
+            asset_markup_urls(r#"<img/src="https:panel.png">"#, base).unwrap(),
+            ["https://cdn.example.org/books/panel.png"],
+        );
+    }
     #[test]
     fn permission_body_drain_is_small_and_time_bounded() {
         fn parts(length: &str) -> hyper::http::request::Parts {
@@ -2325,6 +2657,7 @@ mod tests {
                 parts,
                 None,
                 &std::sync::Mutex::new(()),
+                &crate::lifecycle::ShutdownAck::new(Arc::new(tokio::sync::Notify::new())),
                 &std::sync::atomic::AtomicBool::new(false),
             );
             assert_eq!(response.status(), 400);

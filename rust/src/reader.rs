@@ -5,6 +5,7 @@ use crate::{
 };
 use rusqlite::{Connection, OptionalExtension, params, types::ValueRef};
 use serde_json::{Map, Value, json};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 pub(crate) fn now() -> f64 {
@@ -193,17 +194,42 @@ fn metadata(item: &mut Value) -> Result<Value, ApiError> {
     let raw = item
         .as_object_mut()
         .expect("row")
-        .remove("raw")
+        .shift_remove("raw")
         .unwrap_or_else(|| json!("{}"));
     parse_json(raw.as_str().unwrap_or(""))
 }
-fn track(db: &Connection, id: &str, index: i64) -> Result<(), ApiError> {
+pub(crate) fn ensure_chapter_cache(db: &Connection, id: &str, index: i64) -> Result<(), ApiError> {
     db.execute("INSERT INTO chapter_cache(book_id,idx,kind,bytes) SELECT c.book_id,c.idx,CASE WHEN b.source NOT IN ('qq','full','hako','stv') OR c.original_html IS NOT NULL OR c.original_text IS NOT NULL THEN 'protected' WHEN c.downloaded=1 THEN 'legacy' ELSE 'cache' END,length(CAST(c.html AS BLOB))+length(CAST(c.text AS BLOB))+length(CAST(c.images AS BLOB))+COALESCE(length(CAST(c.original_html AS BLOB)),0)+COALESCE(length(CAST(c.original_text AS BLOB)),0)+length(CAST(c.raw AS BLOB)) FROM chapters c JOIN books b ON b.id=c.book_id WHERE c.book_id=? AND c.idx=? AND NOT EXISTS(SELECT 1 FROM chapter_cache WHERE book_id=c.book_id AND idx=c.idx)",params![id,index])?;
+    Ok(())
+}
+
+pub(crate) fn track(db: &Connection, id: &str, index: i64) -> Result<(), ApiError> {
+    ensure_chapter_cache(db, id, index)?;
     db.execute(
         "UPDATE chapter_cache SET last_used=?,version=version+1 WHERE book_id=? AND idx=?",
         params![now(), id, index],
     )?;
     Ok(())
+}
+
+pub(crate) fn chapter_value(mut item: Value) -> Result<Value, ApiError> {
+    let meta = metadata(&mut item)?;
+    item["index"] = item
+        .as_object_mut()
+        .expect("row")
+        .shift_remove("idx")
+        .unwrap();
+    let images = parse_json(item["images"].as_str().unwrap_or(""))?;
+    item["images"] = images;
+    item["downloaded"] = truthy(&item["downloaded"]).into();
+    if meta.get("is_vip").is_some_and(Value::is_boolean) {
+        item["is_vip"] = meta["is_vip"].clone();
+    }
+    if meta["translation"] == "source" && meta["language"] == "vi" {
+        item["translation"] = json!("source");
+        item["language"] = json!("vi");
+    }
+    Ok(item)
 }
 impl Library {
     pub fn get_book(&self, id: &str) -> Result<Value, ApiError> {
@@ -238,27 +264,17 @@ impl Library {
         reader: Option<&str>,
         sequence: i64,
     ) -> Result<Value, ApiError> {
+        let _lease = self.chapter_leases.acquire((id.to_owned(), index));
         let book = self.get_book(id)?;
         let db = self.reader_connection()?;
-        let mut item = rows(
+        let item = rows(
             &db,
             "SELECT * FROM chapters WHERE book_id=? AND idx=?",
             params![id, index],
         )?
         .pop()
         .ok_or_else(|| ApiError::new(404, "Không tìm thấy chương."))?;
-        let meta = metadata(&mut item)?;
-        item["index"] = item.as_object_mut().expect("row").remove("idx").unwrap();
-        let images = parse_json(item["images"].as_str().unwrap_or(""))?;
-        item["images"] = images;
-        item["downloaded"] = truthy(&item["downloaded"]).into();
-        if meta.get("is_vip").is_some_and(Value::is_boolean) {
-            item["is_vip"] = meta["is_vip"].clone();
-        }
-        if meta["translation"] == "source" && meta["language"] == "vi" {
-            item["translation"] = json!("source");
-            item["language"] = json!("vi");
-        }
+        let mut item = chapter_value(item)?;
         if item["downloaded"] != true {
             return Err(
                 if ["qq", "full", "hako", "stv"].contains(&book["source"].as_str().unwrap_or("")) {
@@ -507,72 +523,10 @@ impl Library {
                 params![String::from_utf8(json_bytes(&json!(groups))).unwrap(), id],
             )?;
         }
-        if body.get("cover").is_some() {
-            let book = rows(&tx, "SELECT cover,path FROM books WHERE id=?", [id])?
-                .pop()
-                .unwrap();
-            match crate::http::asset_image_urls(
-                book["cover"].as_str().unwrap_or(""),
-                book["path"].as_str().unwrap_or(""),
-            ) {
-                Err(_) => {
-                    tx.execute(
-                        "UPDATE asset_pending SET blocked=1 WHERE book_id=? AND idx=-1",
-                        [id],
-                    )?;
-                }
-                Ok(urls) => {
-                    let mut references = urls
-                        .into_iter()
-                        .map(|url| {
-                            (
-                                "images".to_owned(),
-                                format!("{:x}", Sha256::digest(url.as_bytes())),
-                            )
-                        })
-                        .collect::<std::collections::BTreeSet<_>>();
-                    let file = book["path"]
-                        .as_str()
-                        .unwrap_or("")
-                        .rsplit(['/', '\\'])
-                        .next()
-                        .unwrap_or("")
-                        .to_ascii_lowercase();
-                    if let Some((name, extension)) = file.rsplit_once('.')
-                        && name.len() == 64
-                        && name.bytes().all(|b| b.is_ascii_hexdigit())
-                        && !extension.is_empty()
-                        && extension.bytes().all(|b| b.is_ascii_alphanumeric())
-                    {
-                        references.insert(("files".to_owned(), file));
-                    }
-                    let old = rows(
-                        &tx,
-                        "SELECT kind,name FROM asset_refs WHERE book_id=? AND idx=-1",
-                        [id],
-                    )?
-                    .into_iter()
-                    .map(|r| {
-                        (
-                            r["kind"].as_str().unwrap().to_owned(),
-                            r["name"].as_str().unwrap().to_owned(),
-                        )
-                    })
-                    .collect::<std::collections::BTreeSet<_>>();
-                    for (kind, name) in old.difference(&references) {
-                        tx.execute("DELETE FROM asset_refs WHERE book_id=? AND idx=-1 AND kind=? AND name=?",params![id,kind,name])?;
-                    }
-                    for (kind, name) in references.difference(&old) {
-                        tx.execute(
-                            "INSERT INTO asset_refs(book_id,idx,kind,name) VALUES(?,-1,?,?)",
-                            params![id, kind, name],
-                        )?;
-                    }
-                    tx.execute("DELETE FROM asset_pending WHERE book_id=? AND idx=-1", [id])?;
-                }
-            }
-        }
         tx.commit()?;
+        if body.get("cover").is_some() {
+            self.index_book_assets(id)?;
+        }
         self.get_book(id)
     }
     pub fn touch_image(&self, name: &str, size: u64) -> Result<(), ApiError> {

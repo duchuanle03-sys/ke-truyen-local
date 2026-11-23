@@ -154,7 +154,7 @@ pub(crate) fn sqlite_integer(s: &str) -> Result<i64, ApiError> {
     }
     Ok(value)
 }
-fn parse_integer(s: &str) -> Result<(i64, bool), ApiError> {
+pub(crate) fn parse_integer(s: &str) -> Result<(i64, bool), ApiError> {
     let raw = s.trim_matches(crate::casefold::integer_whitespace);
     let (negative, digits) = if let Some(v) = raw.strip_prefix('-') {
         (true, v)
@@ -252,7 +252,13 @@ pub struct ShelfPage {
 pub struct Library {
     path: PathBuf,
     writable: bool,
+    // Keep WAL coordination live between requests. Close SQLite before releasing the library lock.
+    _wal_connection: Option<std::sync::Mutex<Connection>>,
     _lock: Option<std::fs::File>,
+    pub(crate) chapter_leases: crate::lifecycle::Leases<(String, i64)>,
+    pub(crate) asset_leases: crate::lifecycle::Leases<PathBuf>,
+    pub(crate) database_gate: std::sync::RwLock<()>,
+    pub(crate) critical_operations: crate::lifecycle::CriticalOperations,
 }
 pub fn checked_path(path: &Path) -> Result<PathBuf, ApiError> {
     let absolute = std::path::absolute(path)?;
@@ -328,8 +334,16 @@ impl Library {
         let mut library = Self {
             path,
             writable: false,
+            _wal_connection: None,
             _lock: lock,
+            chapter_leases: Default::default(),
+            asset_leases: Default::default(),
+            database_gate: Default::default(),
+            critical_operations: Default::default(),
         };
+        if writable {
+            crate::schema::upgrade(&mut library.base_connection(true)?)?;
+        }
         let db = library.connection()?;
         db.prepare("SELECT id,name,author,source,path,cover,kind,format,description,progress,chapter_index,position,groups_json,added_at,updated_at,read_at,chapter_count,raw,archived,trashed_at FROM books LIMIT 0")?;
         db.prepare("SELECT book_id,group_id FROM book_groups LIMIT 0")?;
@@ -383,25 +397,14 @@ impl Library {
             "book_group_lookup",
             "CREATE INDEX book_group_lookup ON book_groups(group_id,book_id)",
         )?;
-        if writable {
-            use sha2::{Digest, Sha256};
-            let sql = db
-                .prepare("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name")?
-                .query_map([], |r| r.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?
-                .join("\n");
-            if format!("{:x}", Sha256::digest(sql.as_bytes()))
-                != "55fd8c47098a02d88d4cade8ebd04cf4fb40be8d75f0e501643b34b35d9580f0"
-            {
-                return Err(ApiError::new(400, "Unsupported writable fixture schema"));
-            }
-        }
         drop(db);
         if writable {
             library.writable = true;
-            library
-                .write_connection()?
-                .pragma_update(None, "journal_mode", "WAL")?;
+            let db = library.write_connection()?;
+            db.pragma_update(None, "journal_mode", "WAL")?;
+            crate::chapters::recover_trashed_jobs(&db)?;
+            db.query_row("SELECT 1 FROM sqlite_schema LIMIT 1", [], |_| Ok(()))?;
+            library._wal_connection = Some(std::sync::Mutex::new(db));
         }
         Ok(library)
     }
@@ -837,6 +840,30 @@ mod tests {
 }
 #[cfg(test)]
 mod path_tests {
+    #[test]
+    fn m3_writable_owner_keeps_wal_open_between_requests() {
+        let (_fixture, library) = crate::reader::tests::writable();
+        let wal = library.root().join("library.sqlite3-wal");
+        let db = library.write_connection().unwrap();
+        db.execute(
+            "UPDATE chapter_cache_state SET max_chapters=39 WHERE id=1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+        assert!(
+            wal.metadata().is_ok_and(|m| m.len() > 0),
+            "WAL disappeared between requests"
+        );
+        assert_eq!(library.chapter_cache_stats().unwrap()["max_chapters"], 39);
+        let root = library.root().to_path_buf();
+        drop(library);
+        assert!(
+            !wal.exists(),
+            "idle connection must close with the writable owner"
+        );
+        assert!(crate::lifecycle::library_lock(&root).is_ok());
+    }
     #[test]
     fn rooted_workspace_is_valid() {
         assert!(
