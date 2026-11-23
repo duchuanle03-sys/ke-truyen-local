@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 #[cfg(test)]
 static SQL_FOLDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -254,7 +255,8 @@ pub struct Library {
     writable: bool,
     // Keep WAL coordination live between requests. Close SQLite before releasing the library lock.
     _wal_connection: Option<std::sync::Mutex<Connection>>,
-    _lock: Option<std::fs::File>,
+    qt: Mutex<Option<Arc<crate::qt::QtDictionary>>>,
+    _lock: Option<Arc<std::fs::File>>,
     pub(crate) chapter_leases: crate::lifecycle::Leases<(String, i64)>,
     pub(crate) asset_leases: crate::lifecycle::Leases<PathBuf>,
     pub(crate) database_gate: std::sync::RwLock<()>,
@@ -282,6 +284,29 @@ pub fn checked_path(path: &Path) -> Result<PathBuf, ApiError> {
     }
     Ok(absolute.canonicalize()?)
 }
+
+pub(crate) fn checked_qt_slot(root: &Path, name: &str) -> Result<(), ApiError> {
+    let path = root.join(name);
+    let invalid = || ApiError::new(400, "Đường dẫn từ điển QT không hợp lệ.");
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+        Ok(metadata) if !metadata.is_file() => return Err(invalid()),
+        Ok(_) => {}
+    }
+    if checked_path(&path)? != path {
+        return Err(invalid());
+    }
+    #[cfg(windows)]
+    let links = crate::windows_metadata::link_count(&std::fs::File::open(path)?)?;
+    #[cfg(unix)]
+    let links = std::os::unix::fs::MetadataExt::nlink(&std::fs::metadata(path)?);
+    if links != 1 {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 impl Library {
     pub fn open_fixture(path: &Path) -> Result<Self, ApiError> {
         Self::open_fixture_mode(path, false)
@@ -327,7 +352,7 @@ impl Library {
             return Err(ApiError::new(400, "Fixture database escapes root"));
         }
         let lock = if writable {
-            Some(crate::lifecycle::library_lock(&root)?)
+            Some(Arc::new(crate::lifecycle::library_lock(&root)?))
         } else {
             None
         };
@@ -335,6 +360,7 @@ impl Library {
             path,
             writable: false,
             _wal_connection: None,
+            qt: Mutex::new(None),
             _lock: lock,
             chapter_leases: Default::default(),
             asset_leases: Default::default(),
@@ -413,6 +439,20 @@ impl Library {
     }
     pub fn writable(&self) -> bool {
         self.writable
+    }
+    pub(crate) fn writable_lock(&self) -> Result<Arc<std::fs::File>, ApiError> {
+        self._lock
+            .clone()
+            .ok_or_else(|| ApiError::new(400, "QT requires a writable synthetic fixture"))
+    }
+    pub fn qt(&self) -> Result<Arc<crate::qt::QtDictionary>, ApiError> {
+        let mut qt = self.qt.lock().map_err(|_| rusqlite::Error::InvalidQuery)?;
+        if let Some(qt) = qt.as_ref() {
+            return Ok(qt.clone());
+        }
+        let dictionary = Arc::new(crate::qt::QtDictionary::open(self)?);
+        *qt = Some(dictionary.clone());
+        Ok(dictionary)
     }
     fn base_connection(&self, writable: bool) -> Result<Connection, ApiError> {
         let db = Connection::open_with_flags(
@@ -840,6 +880,17 @@ mod tests {
 }
 #[cfg(test)]
 mod path_tests {
+    #[test]
+    fn qt_rejects_existing_database_hardlink_before_opening_it() {
+        let (fixture, library) = crate::reader::tests::writable();
+        let outside = fixture.root.join("separate-test-data.sqlite3");
+        std::fs::write(&outside, b"synthetic sentinel").unwrap();
+        std::fs::hard_link(&outside, library.root().join("qt.sqlite3")).unwrap();
+        assert_eq!(library.qt().err().unwrap().status, 400);
+        assert_eq!(std::fs::read(outside).unwrap(), b"synthetic sentinel");
+        assert!(!library.root().join("qt.sqlite3-wal").exists());
+    }
+
     #[test]
     fn m3_writable_owner_keeps_wal_open_between_requests() {
         let (_fixture, library) = crate::reader::tests::writable();

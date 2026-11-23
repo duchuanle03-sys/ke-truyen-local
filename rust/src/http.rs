@@ -1306,6 +1306,10 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
         "/api/cache/chapters/compact",
         "/api/cache/images",
         "/api/cache/images/clear",
+        "/api/dictionaries",
+        "/api/dictionaries/import",
+        "/api/dictionaries/rules/preview",
+        "/api/qt",
     ]
     .contains(&path.as_str())
         || (pieces.len() == 4
@@ -1327,6 +1331,10 @@ fn critical_operation(parts: &hyper::http::request::Parts) -> Option<&'static st
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
     match (parts.method.as_str(), pieces.as_slice()) {
+        ("POST", ["api", "dictionaries"]) | ("POST", ["api", "dictionaries", "import"]) => {
+            Some("ghi/nhập từ điển QT")
+        }
+        ("DELETE", ["api", "dictionaries"]) => Some("xóa mục từ QT"),
         ("POST", ["api", "cache", "chapters", "compact"]) => Some("thu gọn SQLite"),
         ("POST", ["api", "books", _, "chapters", _, "edit" | "restore"]) => {
             Some("sửa/khôi phục chương")
@@ -1629,6 +1637,131 @@ fn api_response(
 fn error_response(error: ApiError) -> Response<ServiceBody> {
     api_response(error.status, error.json(), false, Vec::new())
 }
+
+fn qt_member<'a>(body: &'a Value, key: &str) -> Result<&'a Value, ApiError> {
+    body.get(key).ok_or_else(|| ApiError::new(404, key))
+}
+
+fn qt_kind(kind: &Value) -> Result<&'static str, ApiError> {
+    if kind.is_object() || kind.is_array() {
+        return Err(rusqlite::Error::InvalidQuery.into());
+    }
+    match kind.as_str() {
+        Some(kind) => crate::qt::kind(kind),
+        None => crate::qt::kind(&py_string(kind)),
+    }
+}
+
+fn qt_string<'a>(value: &'a Value, error: &str) -> Result<&'a str, ApiError> {
+    value.as_str().ok_or_else(|| ApiError::new(400, error))
+}
+
+fn qt_scope(body: &Value) -> Result<&str, ApiError> {
+    crate::qt::scope(body.get("scope").map_or("*", |v| v.as_str().unwrap_or("")))
+}
+
+fn qt_response(
+    library: &Library,
+    path: &str,
+    method: &str,
+    query: &std::collections::HashMap<String, String>,
+    body: &Value,
+) -> Result<Value, ApiError> {
+    let qt = library.qt()?;
+    let kind = query.get("kind").map_or("name", String::as_str);
+    let scope = query.get("scope").map_or("*", String::as_str);
+    let q = query.get("q").map_or("", String::as_str);
+    let word_error = "Từ và nghĩa phải là văn bản.";
+    match (path, method) {
+        ("/api/capabilities", "GET") => Ok(json!({
+            "name":"Kệ Truyện", "qt":qt.status()?,
+            "data_directory":display_path(library.root()),
+            "tts":{"browser":true,"offline":"Theo giọng localService của trình duyệt",
+                "online":"Theo giọng online của trình duyệt","audio_export":false,"voice_models":false}
+        })),
+        ("/api/dictionaries", "GET") => {
+            if query.contains_key("offset") || query.contains_key("limit") {
+                let (offset, overflow) =
+                    crate::library::parse_integer(query.get("offset").map_or("0", String::as_str))?;
+                let limit =
+                    crate::library::integer(query.get("limit").map_or("100", String::as_str))?;
+                let offset = (!(overflow && offset > 0)).then_some(offset);
+                qt.page_input(kind, scope, q, offset, limit)
+            } else {
+                qt.list(kind, scope, q)
+            }
+        }
+        ("/api/dictionaries", "POST") => {
+            let kind = qt_member(body, "kind")?;
+            let word = qt_member(body, "word")?;
+            let meaning = qt_member(body, "meaning")?;
+            let kind = qt_kind(kind)?;
+            let scope = qt_scope(body)?;
+            qt.save(
+                kind,
+                qt_string(word, word_error)?,
+                qt_string(meaning, word_error)?,
+                scope,
+            )
+        }
+        ("/api/dictionaries", "DELETE") => {
+            let kind = query
+                .get("kind")
+                .ok_or_else(|| ApiError::new(404, "kind"))?;
+            let word = query
+                .get("word")
+                .ok_or_else(|| ApiError::new(404, "word"))?;
+            qt.delete(kind, word, scope)
+        }
+        ("/api/dictionaries/import", "POST") => {
+            let kind = qt_member(body, "kind")?;
+            let text = qt_member(body, "text")?;
+            let kind = qt_kind(kind)?;
+            let scope = qt_scope(body)?;
+            let mode = body
+                .get("mode")
+                .map_or("merge", |v| v.as_str().unwrap_or(""));
+            if !["merge", "missing", "replace"].contains(&mode) {
+                return Err(ApiError::new(
+                    400,
+                    "Chế độ nhập phải là merge, missing hoặc replace.",
+                ));
+            }
+            let text = qt_string(text, "Tệp từ điển phải là văn bản, tối đa 32 triệu ký tự.")?;
+            qt.import_text(kind, text, mode, scope)
+        }
+        ("/api/dictionaries/export", "GET") => Ok(json!({"text":qt.export_text(kind, scope)?})),
+        ("/api/dictionaries/rules/preview", "POST") => {
+            let pattern = qt_member(body, "pattern")?.as_str();
+            let replacement = qt_member(body, "replacement")?.as_str();
+            let sample = qt_string(
+                qt_member(body, "sample")?,
+                "Mẫu thử luật tối đa 100.000 ký tự.",
+            )?;
+            let book_id = body.get("book_id").unwrap_or(&Value::Null);
+            qt.preview_rule_input(pattern, replacement, sample, book_id)
+        }
+        ("/api/qt", "POST") => {
+            let text = qt_string(
+                qt_member(body, "text")?,
+                "Nội dung QT phải là văn bản, tối đa 2 triệu ký tự.",
+            )?;
+            if text.chars().count() > 2_000_000 {
+                return Err(ApiError::new(
+                    400,
+                    "Nội dung QT phải là văn bản, tối đa 2 triệu ký tự.",
+                ));
+            }
+            let book_id = body
+                .get("book_id")
+                .map(|v| qt_string(v, "Mã truyện không hợp lệ."))
+                .transpose()?
+                .unwrap_or("");
+            Ok(json!({"text":qt.translate(text, book_id)?}))
+        }
+        _ => Err(ApiError::new(404, "Không tìm thấy API.")),
+    }
+}
 #[allow(clippy::too_many_arguments)]
 fn respond_writable(
     library: &Library,
@@ -1686,6 +1819,15 @@ fn respond_writable(
             }
         }
         let value = match (path.as_str(), method) {
+            ("/api/capabilities", "GET")
+            | ("/api/dictionaries", "GET" | "POST" | "DELETE")
+            | (
+                "/api/dictionaries/import" | "/api/dictionaries/rules/preview" | "/api/qt",
+                "POST",
+            )
+            | ("/api/dictionaries/export", "GET") => {
+                qt_response(library, &path, method, &query, body)?
+            }
             ("/api/instance", "GET") => {
                 json!({"app":"ke-truyen-local","data_directory":display_path(library.root()),"pid":std::process::id()})
             }
@@ -2072,6 +2214,19 @@ pub fn serve_fixture(
     port: u16,
     writable: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    serve_fixture_with_pack(fixture, web_root, port, writable, None)
+}
+
+pub fn serve_fixture_with_pack(
+    fixture: &Path,
+    web_root: &Path,
+    port: u16,
+    writable: bool,
+    pack: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if pack.is_some() && !writable {
+        return Err("--import-qt requires --writable".into());
+    }
     checked_path(web_root)?;
     let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
     let library = if writable {
@@ -2079,6 +2234,9 @@ pub fn serve_fixture(
     } else {
         Library::open_fixture(fixture)?
     };
+    if let Some(pack) = pack {
+        crate::qt_pack::install(&library, pack)?;
+    }
     run_server(library, web_root, listener)
 }
 fn run_server(

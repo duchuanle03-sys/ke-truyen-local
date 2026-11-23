@@ -14,7 +14,7 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             writable = true;
             continue;
         }
-        if !["--fixture", "--web-root", "--port"].contains(&key.as_str())
+        if !["--fixture", "--web-root", "--port", "--import-qt"].contains(&key.as_str())
             || options.contains_key(&key)
         {
             return Err(format!("Unknown or duplicate argument: {key}").into());
@@ -30,5 +30,6 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fixture = PathBuf::from(get("--fixture")?);
     let web = PathBuf::from(get("--web-root")?);
     let port = get("--port")?.parse::<u16>()?;
-    reader_local::http::serve_fixture(&fixture, &web, port, writable)
+    let pack = options.get("--import-qt").map(std::path::Path::new);
+    reader_local::http::serve_fixture_with_pack(&fixture, &web, port, writable, pack)
 }
