@@ -148,6 +148,7 @@ pub fn library_lock(root: &Path) -> Result<File, ApiError> {
             400,
             "Thư viện đang được một máy chủ khác sử dụng hoặc đang hoàn tất tắt.",
         )
+        .with_code("library_busy")
     })?;
     Ok(file)
 }

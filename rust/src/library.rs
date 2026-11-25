@@ -436,13 +436,21 @@ impl Library {
             return Err(ApiError::new(400, "Thư mục dữ liệu không hợp lệ."));
         }
         let database = root.join("library.sqlite3");
-        if !database.exists() {
-            // First run: create the catalog before the shared open path validates it.
+        {
             let _owner = crate::lifecycle::library_lock(&root)?;
-            let mut db = Connection::open(&database)?;
-            register_shelf_fold(&db)?;
-            db.pragma_update(None, "journal_mode", "WAL")?;
-            crate::schema::create(&mut db)?;
+            // First run, or a first run that was interrupted before its catalog committed.
+            let empty = !database.exists() || {
+                let db = Connection::open(&database)?;
+                db.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+                    r.get::<_, i64>(0)
+                })? == 0
+            };
+            if empty {
+                let mut db = Connection::open(&database)?;
+                register_shelf_fold(&db)?;
+                db.pragma_update(None, "journal_mode", "WAL")?;
+                crate::schema::create(&mut db)?;
+            }
         }
         Self::open_root(root, true)
     }
@@ -1007,6 +1015,25 @@ mod tests {
             test_common::python(DUMP, &[dir.join("library.sqlite3").to_str().unwrap()])
         };
         assert_eq!(dump(&ours), dump(&theirs));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn interrupted_first_run_leaves_a_recoverable_empty_database() {
+        let base = fresh_dirs("empty-db");
+        let root = base.join("user-data");
+        std::fs::create_dir_all(&root).unwrap();
+        // An interrupted first run can leave a database file with no catalog.
+        drop(Connection::open(root.join("library.sqlite3")).unwrap());
+        let library = Library::open_production(&root).expect("empty database must be initialised");
+        assert_eq!(
+            library
+                .list_books(&ShelfQuery::from_uri("/api/books").unwrap())
+                .unwrap()
+                .total,
+            0
+        );
+        drop(library);
         let _ = std::fs::remove_dir_all(&base);
     }
 

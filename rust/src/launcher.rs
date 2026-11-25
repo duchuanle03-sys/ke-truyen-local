@@ -135,11 +135,49 @@ fn open_window(url: &str) {
     }
 }
 
+/// `reader.log` rotates to `reader.log.1` past 2 MiB (reference: RotatingFileHandler).
+const LOG_LIMIT: u64 = 2 * 1024 * 1024;
+/// Set once a console-less launch has sent stderr to `reader.log`.
+static LOGGING_TO_FILE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn open_log(path: &Path) -> std::io::Result<std::fs::File> {
+    if std::fs::metadata(path).is_ok_and(|meta| meta.len() > LOG_LIMIT) {
+        std::fs::rename(path, path.with_extension("log.1"))?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+}
+
+/// A double-clicked app has no stderr: send it to `reader.log` and record panics there.
+fn log_to_file(path: &Path) {
+    #[cfg(windows)]
+    if let Ok(file) = open_log(path) {
+        use std::os::windows::io::IntoRawHandle;
+        use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, SetStdHandle};
+        // SAFETY: the handle is intentionally leaked and stays valid for the process lifetime.
+        if unsafe { SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle()) } != 0 {
+            LOGGING_TO_FILE.store(true, std::sync::atomic::Ordering::Release);
+            let default = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                default(info);
+                report(&format!(
+                    "Kệ Truyện gặp lỗi và phải dừng: {info}. Xem reader.log."
+                ));
+            }));
+        }
+    }
+}
+
 /// Write to an attached stderr; a double-clicked GUI app has none, so show a message box.
 pub fn report(message: &str) {
+    let to_file = LOGGING_TO_FILE.load(std::sync::atomic::Ordering::Acquire);
     if has_stderr() {
         eprintln!("{message}");
-        return;
+        if !to_file {
+            return;
+        }
     }
     #[cfg(windows)]
     {
@@ -195,6 +233,9 @@ fn launch(options: Options) -> Result<i32, Box<dyn std::error::Error + Send + Sy
         .data_dir
         .clone()
         .unwrap_or_else(|| project.join("user-data"));
+    if !has_stderr() {
+        log_to_file(&data_dir.parent().unwrap_or(&project).join("reader.log"));
+    }
     let query = options.book.as_deref().map_or(String::new(), |book| {
         format!("/?book={}", crate::http::quote(book, true))
     });
@@ -224,6 +265,11 @@ fn launch(options: Options) -> Result<i32, Box<dyn std::error::Error + Send + Sy
                     show(options.port);
                     return Ok(0);
                 }
+                // Anything but a busy port or a library still held by another server is final.
+                if !port_busy && error.code() != Some("library_busy") {
+                    report(&format!("Không mở được Kệ Truyện: {}", error.message));
+                    return Ok(1);
+                }
                 if !reuse || std::time::Instant::now() >= deadline {
                     report(&format!(
                         "Không mở được Kệ Truyện. Cổng/thư viện đang được dùng hoặc máy chủ cũ chưa tắt xong: {}",
@@ -246,7 +292,12 @@ fn launch(options: Options) -> Result<i32, Box<dyn std::error::Error + Send + Sy
     if let Some(pack) = &options.import_qt {
         crate::qt_pack::install(&library, pack)?;
     }
-    show(listener.local_addr()?.port());
+    let port = listener.local_addr()?.port();
+    eprintln!(
+        "Kệ Truyện đang chạy tại http://127.0.0.1:{port} · dữ liệu: {}",
+        resolved(&data_dir)
+    );
+    show(port);
     crate::http::serve_library(library, &project.join("web"), listener)?;
     Ok(0)
 }
@@ -254,6 +305,28 @@ fn launch(options: Options) -> Result<i32, Box<dyn std::error::Error + Send + Sy
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_file_appends_and_rotates_past_the_limit() {
+        let dir = std::env::temp_dir().join(format!("reader-m7-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("reader.log");
+        std::fs::write(&log, b"old line\n").unwrap();
+        writeln!(open_log(&log).unwrap(), "new line").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "old line\nnew line\n"
+        );
+        std::fs::write(&log, vec![b'x'; LOG_LIMIT as usize + 1]).unwrap();
+        writeln!(open_log(&log).unwrap(), "fresh").unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "fresh\n");
+        assert_eq!(
+            std::fs::metadata(dir.join("reader.log.1")).unwrap().len(),
+            LOG_LIMIT + 1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn identity_matches_python_normcase() {

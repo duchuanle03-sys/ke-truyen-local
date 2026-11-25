@@ -17,7 +17,10 @@ fn signature(db: &Connection) -> Result<String, ApiError> {
 }
 
 fn unsupported() -> ApiError {
-    ApiError::new(400, "Unsupported writable fixture schema")
+    ApiError::new(
+        400,
+        "Cơ sở dữ liệu thư viện có cấu trúc chưa được hỗ trợ; dữ liệu chưa bị thay đổi.",
+    )
 }
 
 pub(crate) fn upgrade(db: &mut Connection) -> Result<(), ApiError> {
