@@ -426,6 +426,18 @@ impl Library {
                 "Writable mode requires an unsealed synthetic fixture",
             ));
         }
+        Self::open_root(root, writable)
+    }
+    /// Open a real data directory (no fixture marker) for serving.
+    pub fn open_production(root: &Path) -> Result<Self, ApiError> {
+        std::fs::create_dir_all(root)?;
+        let root = checked_path(root)?;
+        if !root.is_dir() {
+            return Err(ApiError::new(400, "Thư mục dữ liệu không hợp lệ."));
+        }
+        Self::open_root(root, true)
+    }
+    fn open_root(root: PathBuf, writable: bool) -> Result<Self, ApiError> {
         let path = checked_path(&root.join("library.sqlite3"))?;
         if path.parent() != Some(root.as_path()) {
             return Err(ApiError::new(400, "Fixture database escapes root"));
@@ -937,6 +949,40 @@ fn install_authorizer(db: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn production_opens_python_library_without_marker() {
+        let fixture = test_common::Fixture::new("empty");
+        let root = fixture.db.parent().unwrap().to_owned();
+        std::fs::remove_file(root.join("m1-fixture.json")).unwrap();
+        let library = Library::open_production(&root).unwrap();
+        assert!(library.writable());
+        let db = library.write_connection().unwrap();
+        db.execute(
+            "INSERT INTO books(id,name,added_at,updated_at) VALUES('real','Truyện',1,1)",
+            [],
+        )
+        .unwrap();
+        drop(db);
+        assert_eq!(library.get_book("real").unwrap()["name"], "Truyện");
+        // The cross-language owner lock keeps a second server off the same library.
+        assert!(Library::open_production(&root).is_err());
+    }
+    #[test]
+    fn production_refuses_unknown_schema_without_writing() {
+        let fixture = test_common::Fixture::new("empty");
+        let root = fixture.db.parent().unwrap().to_owned();
+        std::fs::remove_file(root.join("m1-fixture.json")).unwrap();
+        Connection::open(&fixture.db)
+            .unwrap()
+            .execute_batch("CREATE TABLE unknown_shape(v TEXT)")
+            .unwrap();
+        let before = std::fs::read(&fixture.db).unwrap();
+        let error = Library::open_production(&root)
+            .err()
+            .expect("unknown schema must be refused");
+        assert_eq!(error.status, 400);
+        assert_eq!(std::fs::read(&fixture.db).unwrap(), before);
+    }
     #[test]
     fn pooled_connections_are_reset_before_reuse() {
         let (_fixture, library) = crate::reader::tests::writable();
