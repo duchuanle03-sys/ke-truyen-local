@@ -414,6 +414,61 @@ impl Library {
         )?
         .into())
     }
+    /// New groups get a random id, so the id never depends on the name.
+    pub fn create_group(&self, body: &Value) -> Result<Value, ApiError> {
+        let name = group_name(body)?;
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).map_err(|e| ApiError::new(500, e.to_string()))?;
+        let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let mut db = self.write_connection()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        unique_group_name(&tx, &name, None)?;
+        tx.execute("INSERT INTO groups_list VALUES(?,?)", params![id, name])?;
+        tx.commit()?;
+        Ok(json!({"id":id,"name":name}))
+    }
+    pub fn rename_group(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
+        let name = group_name(body)?;
+        let mut db = self.write_connection()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        unique_group_name(&tx, &name, Some(id))?;
+        if tx.execute(
+            "UPDATE groups_list SET name=? WHERE id=?",
+            params![name, id],
+        )? == 0
+        {
+            return Err(ApiError::new(404, "Không tìm thấy nhóm."));
+        }
+        tx.commit()?;
+        Ok(json!({"id":id,"name":name}))
+    }
+    /// Removes the group and drops its id from the books that had it; nothing else changes.
+    pub fn delete_group(&self, id: &str) -> Result<Value, ApiError> {
+        let mut db = self.write_connection()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if tx.execute("DELETE FROM groups_list WHERE id=?", [id])? == 0 {
+            return Err(ApiError::new(404, "Không tìm thấy nhóm."));
+        }
+        let members: Vec<(String, String)> = tx
+            .prepare(
+                "SELECT id,groups_json FROM books WHERE id IN \
+                 (SELECT book_id FROM book_groups INDEXED BY book_group_lookup WHERE group_id=?)",
+            )?
+            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (book, groups) in &members {
+            let mut groups = crate::library::parse_json(groups)?;
+            if let Some(items) = groups.as_array_mut() {
+                items.retain(|item| item.as_str() != Some(id));
+            }
+            tx.execute(
+                "UPDATE books SET groups_json=? WHERE id=?",
+                params![String::from_utf8(json_bytes(&groups)).unwrap(), book],
+            )?;
+        }
+        tx.commit()?;
+        Ok(json!({"deleted":true,"books":members.len()}))
+    }
     pub fn progress(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
         let index = int(body
             .get("index")
@@ -584,10 +639,126 @@ impl Library {
     }
 }
 
+fn group_name(body: &Value) -> Result<String, ApiError> {
+    let name = body
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+        return Err(fail("Tên nhóm phải có từ 1 đến 100 ký tự."));
+    }
+    Ok(name.to_owned())
+}
+
+/// Group names are unique ignoring case, so the shelf never shows two look-alike groups.
+fn unique_group_name(
+    db: &rusqlite::Connection,
+    name: &str,
+    except: Option<&str>,
+) -> Result<(), ApiError> {
+    let folded = crate::casefold::casefold(name);
+    let mut statement = db.prepare("SELECT id,name FROM groups_list")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let (id, other): (String, String) = (row.get(0)?, row.get(1)?);
+        if Some(id.as_str()) != except && crate::casefold::casefold(&other) == folded {
+            return Err(ApiError::new(409, "Đã có nhóm tên này."));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::library::test_common as common;
+    #[test]
+    fn group_membership_changes_keep_the_group_identity() {
+        let (_fixture, library) = writable();
+        let group = library.create_group(&json!({"name":" Seinen "})).unwrap();
+        assert_eq!(group["name"], "Seinen");
+        let before = library.groups().unwrap();
+        assert_eq!(before, json!([group.clone()]));
+        library
+            .update_book("book", &json!({"groups":[group["id"]]}))
+            .unwrap();
+        assert_eq!(library.groups().unwrap(), before, "adding a book");
+        library.update_book("book", &json!({"groups":[]})).unwrap();
+        assert_eq!(library.groups().unwrap(), before, "removing the last book");
+    }
+    #[test]
+    fn renaming_a_group_keeps_its_id_and_books() {
+        let (_fixture, library) = writable();
+        let group = library.create_group(&json!({"name":"Seinen"})).unwrap();
+        let id = group["id"].as_str().unwrap();
+        library
+            .update_book("book", &json!({"groups":[id]}))
+            .unwrap();
+        let renamed = library
+            .rename_group(id, &json!({"name":"Thanh niên"}))
+            .unwrap();
+        assert_eq!(renamed, json!({"id":id,"name":"Thanh niên"}));
+        assert_eq!(library.groups().unwrap(), json!([renamed]));
+        assert_eq!(library.get_book("book").unwrap()["groups"], json!([id]));
+    }
+    #[test]
+    fn deleting_a_group_only_removes_it_from_its_books() {
+        let (_fixture, library) = writable();
+        let (a, b) = (
+            library.create_group(&json!({"name":"A"})).unwrap(),
+            library.create_group(&json!({"name":"B"})).unwrap(),
+        );
+        library
+            .update_book("book", &json!({"groups":[a["id"], b["id"]]}))
+            .unwrap();
+        let before = library.get_book("book").unwrap();
+        library.delete_group(a["id"].as_str().unwrap()).unwrap();
+        assert_eq!(library.groups().unwrap(), json!([b]));
+        let mut after = library.get_book("book").unwrap();
+        assert_eq!(after["groups"], json!([b["id"]]));
+        after["groups"] = before["groups"].clone();
+        assert_eq!(after, before, "nothing else about the book changes");
+    }
+    #[test]
+    fn group_names_are_required_and_unique() {
+        let (_fixture, library) = writable();
+        let group = library.create_group(&json!({"name":"Seinen"})).unwrap();
+        let id = group["id"].as_str().unwrap();
+        for bad in [
+            json!({}),
+            json!({"name":"  "}),
+            json!({"name":"x".repeat(101)}),
+        ] {
+            assert_eq!(library.create_group(&bad).unwrap_err().status, 400, "{bad}");
+        }
+        assert_eq!(
+            library
+                .create_group(&json!({"name":"SEINEN"}))
+                .unwrap_err()
+                .status,
+            409
+        );
+        let other = library.create_group(&json!({"name":"Shounen"})).unwrap();
+        let other = other["id"].as_str().unwrap();
+        assert_eq!(
+            library
+                .rename_group(other, &json!({"name":"seinen"}))
+                .unwrap_err()
+                .status,
+            409
+        );
+        // Renaming a group to its own name (any case) is allowed.
+        assert!(library.rename_group(id, &json!({"name":"SEINEN"})).is_ok());
+        assert_eq!(
+            library
+                .rename_group("missing", &json!({"name":"x"}))
+                .unwrap_err()
+                .status,
+            404
+        );
+        assert_eq!(library.delete_group("missing").unwrap_err().status, 404);
+    }
     #[test]
     fn m2_json_boundary_survives_settings_and_book_metadata() {
         let (_fixture, library) = writable();

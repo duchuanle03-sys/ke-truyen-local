@@ -221,6 +221,30 @@ async function loadGroups() {
   } catch (error) { notify(`Không lấy được nhóm sách: ${error.message}`, true); }
 }
 
+function manageGroups() {
+  const name = el('input', { placeholder: 'Tên nhóm mới', maxLength: 100, 'aria-label': 'Tên nhóm mới' });
+  const list = el('div', { class: 'dictionary-list' });
+  const error = el('p', { class: 'inline-error', hidden: true });
+  const run = async (work) => {
+    error.hidden = true;
+    try { await work(); await loadGroups(); render(); loadLibrary(); return true; }
+    catch (problem) { error.textContent = problem.message; error.hidden = false; return false; }
+  };
+  const render = () => list.replaceChildren(...(state.groups.length ? state.groups.map((group) => {
+    const input = el('input', { value: group.name, maxLength: 100, class: 'grow', 'aria-label': `Tên nhóm ${group.name}` });
+    return el('div', { class: 'dictionary-entry' }, [input,
+      el('button', { class: 'button', text: 'Đổi tên', onclick: () => run(() => api(`/api/groups/${encodeURIComponent(group.id)}/rename`, { name: input.value })) }),
+      el('button', { class: 'button danger', text: 'Xóa', onclick: () => confirm(`Xóa nhóm “${group.name}”? Truyện trong nhóm vẫn được giữ, chỉ bỏ khỏi nhóm này.`) && run(() => api(`/api/groups/${encodeURIComponent(group.id)}`, undefined, { method: 'DELETE' })) })]);
+  }) : [el('p', { class: 'muted', text: 'Chưa có nhóm nào.' })]));
+  const create = el('form', { class: 'dictionary-form', onsubmit: async (event) => {
+    event.preventDefault();
+    if (await run(() => api('/api/groups', { name: name.value }))) name.value = '';
+  } }, [name, el('button', { class: 'button primary', type: 'submit', text: 'Tạo nhóm' })]);
+  showDialog('Quản lý nhóm', [el('p', { class: 'muted', text: 'Thêm truyện vào nhóm trong mục Sửa thông tin của từng truyện. Đổi tên giữ nguyên các truyện trong nhóm.' }), create, error, list]);
+  render();
+}
+$('manage-groups').onclick = () => loadGroups().then(manageGroups);
+
 async function navigate(view) {
   state.activeView = view;
   for (const section of document.querySelectorAll('.view')) section.hidden = section.id !== `${view}-view`;
@@ -425,7 +449,7 @@ function editBook(book) {
   const author = el('input', { value: book.author || '' });
   const groups = el('div', { class: 'checkbox-list' }, state.groups.map((group) => el('label', {}, [el('input', { type: 'checkbox', value: group.id, checked: (book.groups || []).some((item) => String(typeof item === 'object' ? item.id : item) === String(group.id)) }), group.name])));
   const error = el('p', { class: 'inline-error', hidden: true });
-  const dialog = showDialog('Sửa thông tin truyện', [el('label', { class: 'field', text: 'Tên truyện' }, [name]), el('label', { class: 'field', text: 'Tác giả' }, [author]), el('h3', { text: 'Nhóm hiện có' }), groups, error]);
+  const dialog = showDialog('Sửa thông tin truyện', [el('label', { class: 'field', text: 'Tên truyện' }, [name]), el('label', { class: 'field', text: 'Tác giả' }, [author]), el('h3', { text: 'Nhóm hiện có' }), state.groups.length ? groups : el('p', { class: 'muted', text: 'Chưa có nhóm. Tạo nhóm bằng nút Quản lý nhóm trên kệ.' }), error]);
   dialog.actions.append(el('button', { class: 'button primary', text: 'Lưu thông tin', onclick: async () => {
     if (!name.reportValidity()) return;
     try { await api(`/api/books/${encodeURIComponent(book.id)}/update`, { name: name.value.trim(), author: author.value.trim(), groups: [...groups.querySelectorAll('input:checked')].map((input) => input.value) }); dialog.close(); loadLibrary(); }

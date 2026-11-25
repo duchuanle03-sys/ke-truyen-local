@@ -1355,6 +1355,7 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
         "/api/settings",
         "/api/readers",
         "/api/notes",
+        "/api/groups",
         "/api/shutdown",
         "/api/cache/chapters",
         "/api/cache/chapters/clear",
@@ -1380,6 +1381,7 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
                     "refresh" | "verify" | "cancel"
                 ]
                 | ["api", "jobs", _, _]
+                | ["api", "groups", _, "rename"]
         )
         || (pieces.len() == 4
             && pieces[..2] == ["api", "books"]
@@ -2144,6 +2146,7 @@ fn respond_writable(
                 library.settings(if method == "POST" { Some(body) } else { None })?
             }
             ("/api/groups", "GET") => library.groups()?,
+            ("/api/groups", "POST") => library.create_group(body)?,
             ("/api/sources", "GET") => crate::sources::catalog(),
             ("/api/sources/stv/captcha", "GET") => {
                 library
@@ -2287,6 +2290,14 @@ fn respond_writable(
                 } else if pieces.len() == 3 && pieces[..2] == ["api", "notes"] && method == "DELETE"
                 {
                     library.delete_note(pieces[2])?
+                } else if let ["api", "groups", id] = pieces.as_slice()
+                    && method == "DELETE"
+                {
+                    library.delete_group(id)?
+                } else if let ["api", "groups", id, "rename"] = pieces.as_slice()
+                    && method == "POST"
+                {
+                    library.rename_group(id, body)?
                 } else if pieces.len() >= 3 && pieces[..2] == ["api", "books"] {
                     let id = pieces[2];
                     match (pieces.len(), method) {
@@ -3358,6 +3369,21 @@ mod tests {
                 .status,
             400
         );
+    }
+    #[test]
+    fn group_writes_take_json_bodies() {
+        let parts = |method: &str, uri: &str| {
+            hyper::Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(())
+                .unwrap()
+                .into_parts()
+                .0
+        };
+        assert!(json_route(&parts("POST", "/api/groups")));
+        assert!(json_route(&parts("POST", "/api/groups/abc/rename")));
+        assert!(!json_route(&parts("POST", "/api/groups/abc/other")));
     }
     #[test]
     fn request_json_rejects_nonfinite_constants_with_reference_error() {
