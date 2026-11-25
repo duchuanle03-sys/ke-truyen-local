@@ -88,3 +88,15 @@ Not measured:
 - Decide which reference quirks, including the two above, remain part of the contract.
 
 **PASS for the M6 synthetic and Windows-integration gate.**
+
+## Post-M6 performance follow-up (2026-11-25)
+
+A review of every milestone report traced the recorded write-path regressions (M2 progress p50 31.9 vs 10.8 ms, M3 cached-chapter p50 17.9 vs 11.6 ms) to Windows real-time antivirus, not to Rust code. Defender rescans a file on its first open after modification, about 18 ms on this machine at any size from 4 KiB to 64 MiB. The writable library keeps one SQLite connection open (the M3 `SQLITE_PROTOCOL` fix), so the WAL persists, and each request's fresh connection reopened the just-committed WAL. Python closes every connection, so SQLite deletes its WAL.
+
+- `Library` now reuses up to eight idle connections. A returned connection is reset (busy timeout, authorizer, progress handler) and is closed instead of pooled if it is still inside a transaction. Reads get `query_only`, and read-only fixtures only ever receive read-only handles. The pool is dropped before the library lock.
+- New writable connections set `journal_size_limit` to 64 MiB. The maintenance loop runs `wal_checkpoint(TRUNCATE)` on an idle tick at most every 30 s, with a 50 ms busy timeout so it skips instead of blocking.
+- Release binary SHA-256 `d91953368d78a89401eef2d0351ea71e38c726dc9d234fcbb2e283c545ab40cc`. Kept-alive connections on the 100k-chapter / 512-body profile, p50 Rust vs Python: cached chapter 1.0 vs 9.3 ms, progress 1.0 vs 10.3 ms, shelf 0.96 vs 2.96 ms, search 2.7 vs 4.5 ms. Before the change, Rust's cached chapter and progress were 21.5 and 21.8 ms. Under 3,000 sustained progress writes with concurrent reads, Rust write p50 fell from 44 to about 1 ms.
+- The ~30 ms p95 recorded for simple GETs in M1–M3 is a harness artifact. The drivers open a new loopback TCP connection per request; with keep-alive, Rust shelf p95 is about 1.3 ms.
+- **Open issue:** after a burst of thousands of chapter reads within seconds, an unidentified in-process read snapshot (taken mid-burst) blocks the idle truncate, so the WAL stays at 20–90 MB until restart. The WAL is deleted on shutdown. The burst reproduced the failure in most runs. Ruled out: pooled connections (none busy or in a transaction), the WAL connection, connections whose close failed (all 5 opened connections accounted for), and the test harness. The same growth existed before this change (M3: up to 567 MB). The impact is disk space during unusually heavy sessions; there is no data loss or latency effect.
+- Not worth changing: M4 delete (+12 µs), M5 fresh source TLS connections (same as Python, STV paced at 10 s), and the `/api/capabilities` PowerShell probe (370–460 ms in both engines, optional caching).
+- The M6 differential now waits for the asset collector to settle before comparing upload candidates. Faster requests had exposed a lease-retry race in the comparison, not in behavior.

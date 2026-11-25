@@ -7,6 +7,52 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
+/// Idle connections kept for reuse. Each fresh connection reopens the just-committed WAL,
+/// which Windows real-time antivirus rescans (~18 ms per request on a typical machine).
+const POOL_SIZE: usize = 8;
+type ConnectionPool = Arc<Mutex<Vec<(bool, Connection)>>>;
+
+/// A library connection that returns to the pool when dropped, if it is clean.
+pub(crate) struct Pooled {
+    db: Option<Connection>,
+    opened_writable: bool,
+    pool: ConnectionPool,
+}
+impl std::ops::Deref for Pooled {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.db.as_ref().expect("live pooled connection")
+    }
+}
+impl std::ops::DerefMut for Pooled {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.db.as_mut().expect("live pooled connection")
+    }
+}
+impl Drop for Pooled {
+    fn drop(&mut self) {
+        let Some(db) = self.db.take() else { return };
+        // A connection left inside a transaction, or whose state cannot be reset, is closed instead.
+        if !db.is_autocommit() || db.busy_timeout(std::time::Duration::from_secs(5)).is_err() {
+            return;
+        }
+        if db
+            .authorizer(
+                None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
+            )
+            .is_err()
+            || db.progress_handler(0, None::<fn() -> bool>).is_err()
+        {
+            return;
+        }
+        if let Ok(mut pool) = self.pool.lock()
+            && pool.len() < POOL_SIZE
+        {
+            pool.push((self.opened_writable, db));
+        }
+    }
+}
+
 #[cfg(test)]
 static SQL_FOLDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 #[cfg(test)]
@@ -287,6 +333,7 @@ pub struct Library {
     pub(crate) sources: crate::sources::Sources,
     // Keep WAL coordination live between requests. Close SQLite before releasing the library lock.
     _wal_connection: Option<std::sync::Mutex<Connection>>,
+    pool: ConnectionPool,
     qt: Mutex<Option<Arc<crate::qt::QtDictionary>>>,
     _lock: Option<Arc<std::fs::File>>,
     pub(crate) chapter_leases: crate::lifecycle::Leases<(String, i64)>,
@@ -397,6 +444,7 @@ impl Library {
                 Default::default()
             },
             _wal_connection: None,
+            pool: Default::default(),
             qt: Mutex::new(None),
             _lock: lock,
             chapter_leases: Default::default(),
@@ -463,7 +511,13 @@ impl Library {
         drop(db);
         if writable {
             library.writable = true;
-            let db = library.write_connection()?;
+            // Read-only handles opened during validation must not serve the writable library.
+            library
+                .pool
+                .lock()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?
+                .clear();
+            let db = library.base_connection(true)?;
             db.pragma_update(None, "journal_mode", "WAL")?;
             crate::chapters::recover_trashed_jobs(&db)?;
             db.query_row("SELECT 1 FROM sqlite_schema LIMIT 1", [], |_| Ok(()))?;
@@ -512,19 +566,43 @@ impl Library {
         )?;
         db.pragma_update(None, "foreign_keys", true)?;
         db.pragma_update(None, "query_only", !writable)?;
+        if writable {
+            // Bound the WAL file whenever SQLite restarts it after a checkpoint.
+            db.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
+        }
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         Ok(db)
     }
-    pub(crate) fn reader_connection(&self) -> Result<Connection, ApiError> {
-        self.base_connection(false)
+    fn pooled(&self, write: bool) -> Result<Pooled, ApiError> {
+        // Reads use read-write handles with query_only in a writable library, read-only handles otherwise.
+        let opened_writable = self.writable;
+        let reused = self.pool.lock().ok().and_then(|mut pool| {
+            let at = pool
+                .iter()
+                .rposition(|(writable, _)| *writable == opened_writable)?;
+            Some(pool.swap_remove(at).1)
+        });
+        let db = match reused {
+            Some(db) => db,
+            None => self.base_connection(opened_writable)?,
+        };
+        db.pragma_update(None, "query_only", !write)?;
+        Ok(Pooled {
+            db: Some(db),
+            opened_writable,
+            pool: self.pool.clone(),
+        })
     }
-    pub(crate) fn write_connection(&self) -> Result<Connection, ApiError> {
+    pub(crate) fn reader_connection(&self) -> Result<Pooled, ApiError> {
+        self.pooled(false)
+    }
+    pub(crate) fn write_connection(&self) -> Result<Pooled, ApiError> {
         if !self.writable {
             return Err(ApiError::new(403, "Writable mode is required"));
         }
-        self.base_connection(true)
+        self.pooled(true)
     }
-    fn connection(&self) -> Result<Connection, ApiError> {
+    fn connection(&self) -> Result<Pooled, ApiError> {
         let db = self.reader_connection()?;
         install_authorizer(&db)?;
         Ok(db)
@@ -859,6 +937,45 @@ fn install_authorizer(db: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pooled_connections_are_reset_before_reuse() {
+        let (_fixture, library) = crate::reader::tests::writable();
+        let pooled = |library: &Library| library.pool.lock().unwrap().len();
+        drop(library.write_connection().unwrap());
+        let idle = pooled(&library);
+        assert!(idle >= 1);
+        // A reused handle still refuses writes when checked out for reading.
+        let reader = library.reader_connection().unwrap();
+        assert!(
+            reader
+                .execute("UPDATE books SET name='x' WHERE id='book'", [])
+                .is_err()
+        );
+        drop(reader);
+        // The shelf authorizer is removed before the handle is reused for writes.
+        drop(library.connection().unwrap());
+        let writer = library.write_connection().unwrap();
+        writer
+            .execute("UPDATE books SET name='Tên mới' WHERE id='book'", [])
+            .unwrap();
+        drop(writer);
+        // A handle dropped inside a transaction is closed, never pooled.
+        let before = pooled(&library);
+        let open = library.write_connection().unwrap();
+        open.execute_batch("BEGIN IMMEDIATE").unwrap();
+        drop(open);
+        assert_eq!(pooled(&library), before - 1);
+        // Read-only fixtures never receive writable handles.
+        let read_only = Library::open_fixture(&library.path).unwrap();
+        assert!(read_only.write_connection().is_err());
+        assert!(
+            read_only
+                .reader_connection()
+                .unwrap()
+                .execute("DELETE FROM notes", [])
+                .is_err()
+        );
+    }
     #[test]
     fn m2_json_boundary_preserves_literal_keys_and_integer_limit() {
         for value in [

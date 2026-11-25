@@ -10,7 +10,7 @@ import zipfile
 import zlib
 
 from m2_capture import PNG, request
-from m3_support import Capture as BaseCapture, db, finish, fixture, run, server, verify_db
+from m3_support import Capture as BaseCapture, db, finish, fixture, query, run, server, verify_db, wait_for
 
 FILE = "/api/import/file"
 BACKUP = "/api/import/backup"
@@ -284,6 +284,8 @@ def documents(root, binary, events):
         api.request(f"/api/books/{identity}/file", 400, project=project)
         # Equal titles tie-break on book id, which embeds each engine's own data path.
         api.request("/api/books", project=lambda v: {**project(v), "items": sorted(project(v)["items"], key=lambda b: b["id"])})
+        # Leased uploads are retried by the background collector; compare the settled state, not a race.
+        wait_for(lambda: not query(root, "SELECT 1 FROM asset_gc_candidates WHERE kind='files' LIMIT 1"), timeout=30)
     with db(root) as connection:
         stored = connection.execute("SELECT kind,name FROM asset_gc_candidates WHERE kind='files' ORDER BY name").fetchall()
         events.append(("candidates", [row[1] for row in stored]))

@@ -2813,11 +2813,13 @@ fn run_server(
             tokio::spawn(async move {
                 let mut failures = 0usize;
                 let mut next_trash = std::time::Instant::now();
+                let mut next_truncate = std::time::Instant::now();
                 let mut inventory = crate::assets::Inventory::default();
                 while !stopping.load(std::sync::atomic::Ordering::Acquire) {
                     let owner = library.clone();
                     let stop = stopping.clone();
                     let check_trash = std::time::Instant::now() >= next_trash;
+                    let check_truncate = std::time::Instant::now() >= next_truncate;
                     let result = tokio::task::spawn_blocking(move || {
                         let result = (|| {
                             let Ok(_database) = owner.database_gate.try_read() else {
@@ -2833,7 +2835,12 @@ fn run_server(
                             let scanned = owner.inventory_assets(&mut inventory, &stop)?;
                             let queued = owner.queue_image_evictions(&stop)?;
                             let cleaned = owner.cleanup_assets(&stop)?;
-                            Ok::<_,ApiError>((expired, chapters + assets + search + scanned + queued + cleaned))
+                            let work = chapters + assets + search + scanned + queued + cleaned;
+                            // Long-lived connections keep the WAL; reset it on an idle tick so it cannot grow without bound.
+                            if check_truncate && work == 0 && !expired {
+                                owner.truncate_wal();
+                            }
+                            Ok::<_,ApiError>((expired, work))
                         })();
                         (result, inventory)
                     }).await;
@@ -2852,6 +2859,9 @@ fn run_server(
                             failures = 0;
                             if check_trash && !expired {
                                 next_trash = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                            }
+                            if check_truncate && work == 0 && !expired {
+                                next_truncate = std::time::Instant::now() + std::time::Duration::from_secs(30);
                             }
                             if work == 0 && !expired { 250 } else { 10 }
                         }

@@ -1060,7 +1060,7 @@ impl crate::Library {
 
     pub(crate) fn raw_chapter(&self, book: &str, index: i64) -> Result<Value, ApiError> {
         crate::reader::rows(
-            &self.reader_connection()?,
+            &*self.reader_connection()?,
             "SELECT * FROM chapters WHERE book_id=? AND idx=?",
             params![book, index],
         )?

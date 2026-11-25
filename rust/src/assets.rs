@@ -251,7 +251,7 @@ impl Library {
     }
 
     pub(crate) fn image_cache_stats(&self) -> Result<Value, ApiError> {
-        let mut result = rows(&self.reader_connection()?,
+        let mut result = rows(&*self.reader_connection()?,
             "SELECT max_bytes,total_bytes,protected_bytes,legacy_bytes,entries,protected_entries,pending_bytes,
              total_bytes-protected_bytes AS cache_bytes,
              (SELECT inventory_images FROM asset_index_state WHERE id=1) AS inventory_complete,
