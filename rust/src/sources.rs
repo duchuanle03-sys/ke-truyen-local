@@ -781,7 +781,7 @@ fn stored_json(value: &Value) -> String {
     String::from_utf8(crate::http::json_bytes(value)).expect("JSON is UTF-8")
 }
 
-fn key(url: &str) -> &str {
+pub(crate) fn key(url: &str) -> &str {
     let url = url.split(['#', '?']).next().unwrap_or_default();
     let url = url
         .split_once("://")
@@ -1060,7 +1060,7 @@ impl crate::Library {
 
     pub(crate) fn raw_chapter(&self, book: &str, index: i64) -> Result<Value, ApiError> {
         crate::reader::rows(
-            &self.reader_connection()?,
+            &*self.reader_connection()?,
             "SELECT * FROM chapters WHERE book_id=? AND idx=?",
             params![book, index],
         )?

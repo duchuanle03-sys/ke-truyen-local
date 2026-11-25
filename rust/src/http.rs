@@ -168,7 +168,7 @@ pub(crate) fn py_string(v: &Value) -> String {
         Value::Number(_) => String::from_utf8(json_bytes(v)).expect("JSON UTF8"),
     }
 }
-fn py_value_repr(v: &Value) -> String {
+pub(crate) fn py_value_repr(v: &Value) -> String {
     if let Value::String(s) = v {
         crate::library::py_repr_full(s)
     } else {
@@ -904,7 +904,7 @@ pub(crate) fn clean_html(
     }
     Ok(clean(&parse_html(s)?, source_base, allow_images))
 }
-fn svg_data(s: &str) -> String {
+pub(crate) fn svg_data(s: &str) -> String {
     use quick_xml::{NsReader, events::Event, name::ResolveResult};
     if s.len() > 3 * 1024 * 1024 {
         return String::new();
@@ -1366,6 +1366,7 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
         "/api/dictionaries/import",
         "/api/dictionaries/rules/preview",
         "/api/qt",
+        "/api/import/backup",
     ]
     .contains(&path.as_str())
         || matches!(
@@ -1382,7 +1383,10 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
         )
         || (pieces.len() == 4
             && pieces[..2] == ["api", "books"]
-            && ["progress", "update", "trash", "restore", "download"].contains(&pieces[3]))
+            && [
+                "progress", "update", "trash", "restore", "download", "shortcut",
+            ]
+            .contains(&pieces[3]))
         || (pieces.len() == 6
             && pieces[..2] == ["api", "books"]
             && pieces[3] == "chapters"
@@ -1400,6 +1404,7 @@ fn critical_operation(parts: &hyper::http::request::Parts) -> Option<&'static st
         .collect::<Vec<_>>();
     match (parts.method.as_str(), pieces.as_slice()) {
         ("POST", ["api", "sources", _, "add"]) => Some("thêm truyện từ nguồn"),
+        ("POST", ["api", "import", _, ..]) => Some("nhập thư viện/tệp/OCR"),
         ("POST", ["api", "dictionaries"]) | ("POST", ["api", "dictionaries", "import"]) => {
             Some("ghi/nhập từ điển QT")
         }
@@ -1491,6 +1496,45 @@ async fn request_json(
         return Err(ApiError::new(400, "Dữ liệu tải lên chưa đầy đủ."));
     }
     Ok(Some(parse_request_bytes(&raw)?))
+}
+/// Raw `/api/import/file` body (reference `Handler._body`), bounded by the 128 MiB upload limit.
+async fn request_upload(
+    parts: &hyper::http::request::Parts,
+    body: &mut hyper::body::Incoming,
+    port: u16,
+) -> Result<Option<Vec<u8>>, ApiError> {
+    if parts.method != "POST" || decode(parts.uri.path(), false) != "/api/import/file" {
+        return Ok(None);
+    }
+    guard(parts, port)?;
+    if parts.headers.contains_key("Transfer-Encoding") {
+        return Err(ApiError::new(400, "Không hỗ trợ kiểu truyền dữ liệu này."));
+    }
+    let length = crate::library::integer(
+        parts
+            .headers
+            .get("Content-Length")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("0"),
+    )?;
+    if !(0..=128 * 1024 * 1024).contains(&length) {
+        return Err(ApiError::new(400, "Tệp vượt giới hạn tải lên 128 MiB."));
+    }
+    // shortcut: buffers one upload in memory like the reference; stream to a managed temp file if concurrent large imports matter.
+    let mut raw = Vec::with_capacity((length as usize).min(1024 * 1024));
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|_| ApiError::new(400, "Dữ liệu tải lên chưa đầy đủ."))?;
+        if let Ok(data) = frame.into_data() {
+            if raw.len() + data.len() > length as usize {
+                return Err(ApiError::new(400, "Dữ liệu tải lên chưa đầy đủ."));
+            }
+            raw.extend_from_slice(&data);
+        }
+    }
+    if raw.len() != length as usize {
+        return Err(ApiError::new(400, "Dữ liệu tải lên chưa đầy đủ."));
+    }
+    Ok(Some(raw))
 }
 fn permission_drain_length(parts: &hyper::http::request::Parts) -> Option<usize> {
     if parts.method == "OPTIONS" || parts.headers.contains_key("Transfer-Encoding") {
@@ -1742,12 +1786,6 @@ fn qt_response(
     let q = query.get("q").map_or("", String::as_str);
     let word_error = "Từ và nghĩa phải là văn bản.";
     match (path, method) {
-        ("/api/capabilities", "GET") => Ok(json!({
-            "name":"Kệ Truyện", "qt":qt.status()?,
-            "data_directory":display_path(library.root()),
-            "tts":{"browser":true,"offline":"Theo giọng localService của trình duyệt",
-                "online":"Theo giọng online của trình duyệt","audio_export":false,"voice_models":false}
-        })),
         ("/api/dictionaries", "GET") => {
             if query.contains_key("offset") || query.contains_key("limit") {
                 let (offset, overflow) =
@@ -1831,6 +1869,185 @@ fn qt_response(
         _ => Err(ApiError::new(404, "Không tìm thấy API.")),
     }
 }
+fn capabilities(library: &Library, project: &Path) -> Result<Value, ApiError> {
+    let mut formats = crate::documents::capabilities();
+    formats["legacy"] = crate::legacy_formats::capabilities();
+    let mut extensions = crate::documents::supported_extensions();
+    extensions.extend(crate::legacy_formats::SUPPORTED_EXTENSIONS);
+    let ocr = crate::platform::ocr_capabilities(&project.join("windows").join("pdfocr.ps1"));
+    let supported = ocr["supported"] == true;
+    formats["ocr"] = ocr.clone();
+    formats["pdf"] = json!({"supported": supported, "details": ocr});
+    if supported {
+        extensions.push(".pdf");
+    }
+    extensions.sort_unstable();
+    extensions.dedup();
+    formats["supported_extensions"] = extensions.into();
+    Ok(json!({
+        "name":"Kệ Truyện", "documents":formats, "sources":crate::sources::catalog(), "qt":library.qt()?.status()?,
+        "tts":{"browser":true,"offline":"Theo giọng localService của trình duyệt",
+            "online":"Theo giọng online của trình duyệt","audio_export":false,"voice_models":false},
+        "ocr":ocr, "data_directory":display_path(library.root()),
+        "limitations":["Chưa nghiệm thu toàn bộ requirements. Giọng TTS phải có trên máy/trình duyệt.",
+            "PDF/OCR và định dạng phụ thuộc converter được báo theo engine thực có."]
+    }))
+}
+
+/// Cover bytes for a Desktop icon; acquisition failures fall back to the default icon.
+fn shortcut_cover(library: &Library, book: &Value) -> Vec<u8> {
+    let cover = book["cover"].as_str().unwrap_or_default();
+    if cover.is_empty() {
+        return Vec::new();
+    }
+    let embedded = raster(cover);
+    if !embedded.is_empty() {
+        return embedded
+            .split_once(',')
+            .and_then(|(_, data)| STANDARD.decode(data).ok())
+            .unwrap_or_default();
+    }
+    let referer = book["path"].as_str().unwrap_or_default();
+    let fetch = |url: &str, referer: &str| -> Option<Vec<u8>> {
+        let url = remote(url);
+        if url.is_empty() {
+            return None;
+        }
+        let name = format!("{:x}", Sha256::digest(url.as_bytes()));
+        let candidate = library.root().join("images").join(&name);
+        let _asset = library.asset_leases.acquire(candidate.clone());
+        if let Ok(bytes) = std::fs::read(&candidate) {
+            return Some(bytes);
+        }
+        library
+            .sources
+            .enabled()
+            .then(|| {
+                library
+                    .save_source_image(&url, referer, None)
+                    .ok()
+                    .flatten()
+            })
+            .flatten()
+    };
+    if let Some(bytes) = fetch(cover, referer) {
+        return bytes;
+    }
+    if !library.sources.enabled() {
+        return Vec::new();
+    }
+    let source = book["source"].as_str().unwrap_or_default();
+    let Ok(metadata) = library.sources.cover(source, referer) else {
+        return Vec::new();
+    };
+    let image = metadata["cover"].as_str().unwrap_or_default().to_owned();
+    let page = metadata["path"].as_str().unwrap_or(referer).to_owned();
+    match fetch(&image, &page) {
+        Some(bytes) => {
+            let _ = library.update_book(
+                book["id"].as_str().unwrap_or_default(),
+                &json!({"cover":image}),
+            );
+            bytes
+        }
+        None => Vec::new(),
+    }
+}
+
+fn pdf_response(
+    library: &Library,
+    book: &Value,
+    head: bool,
+) -> Result<Response<ServiceBody>, ApiError> {
+    // Path.resolve(): canonical when the path exists, absolute otherwise.
+    let resolve = |path: &Path| {
+        std::fs::canonicalize(path)
+            .map(|p| std::path::PathBuf::from(display_path(&p)))
+            .unwrap_or_else(|_| std::path::absolute(path).unwrap_or_else(|_| path.to_owned()))
+    };
+    let uploads = resolve(&library.root().join("files"));
+    let file = resolve(Path::new(book["path"].as_str().unwrap_or_default()));
+    if !file.starts_with(&uploads) {
+        return Err(ApiError::new(
+            403,
+            "Tệp không thuộc thư viện nhập của ứng dụng.",
+        ));
+    }
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if crate::documents::suffix(&name).to_lowercase() != ".pdf" {
+        return Err(ApiError::new(
+            400,
+            "Chức năng xem trang gốc hiện dành cho PDF.",
+        ));
+    }
+    let asset = library
+        .asset_leases
+        .acquire(library.root().join("files").join(&name));
+    let handle = std::fs::File::open(&file).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            // Python: FileNotFoundError -> 404 with str(error).strip("'").
+            let text = format!(
+                "[Errno 2] No such file or directory: {}",
+                crate::library::py_repr_full(&display_path(&file))
+            );
+            ApiError::new(404, text.trim_matches('\''))
+        } else {
+            ApiError::from(e)
+        }
+    })?;
+    let length = handle.metadata()?.len();
+    Ok(Response::builder()
+        .status(200)
+        .header("Content-Type", "application/pdf")
+        .header("Content-Length", length)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .header("Cross-Origin-Resource-Policy", "same-origin")
+        .header("Content-Security-Policy", CSP)
+        .header("Cache-Control", "private, max-age=60")
+        .header("Content-Disposition", "inline; filename=document.pdf")
+        .body(if head {
+            ServiceBody::bytes(Vec::new())
+        } else {
+            ServiceBody::file(handle, length, asset)
+        })
+        .expect("PDF headers"))
+}
+
+fn backup_source(body: &Value, project: &Path) -> Result<std::path::PathBuf, ApiError> {
+    use std::path::PathBuf;
+    // `body.get("path") or default`: every falsy JSON value selects the default.
+    let given = body.get("path").filter(|v| match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    });
+    let text = match given {
+        None => return Ok(project.parent().unwrap_or(project).to_owned()),
+        Some(Value::String(text)) => text.clone(),
+        Some(_) => {
+            return Err(ApiError::new(
+                500,
+                "expected str, bytes or os.PathLike object",
+            ));
+        }
+    };
+    // Path.expanduser: only a leading "~" naming the current user's profile.
+    if let Some(rest) = text.strip_prefix('~')
+        && (rest.is_empty() || rest.starts_with(['/', '\\']))
+        && let Some(home) = std::env::var_os("USERPROFILE")
+    {
+        return Ok(PathBuf::from(home).join(rest.trim_start_matches(['/', '\\'])));
+    }
+    Ok(PathBuf::from(text))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn respond_writable(
     library: &Library,
@@ -1839,6 +2056,7 @@ fn respond_writable(
     port: u16,
     parts: hyper::http::request::Parts,
     body: Option<Value>,
+    upload: Option<Vec<u8>>,
     shutdown_busy: &std::sync::Mutex<()>,
     accepted: &crate::lifecycle::ShutdownAck,
     stopping: &std::sync::atomic::AtomicBool,
@@ -1854,6 +2072,9 @@ fn respond_writable(
     {
         return respond(library, root, token, port, parts);
     }
+    // PowerShell -File rejects verbatim (\?) paths, so hand helpers the display form.
+    let project = std::path::PathBuf::from(display_path(root.parent().unwrap_or(root)));
+    let project = project.as_path();
     let result = (|| {
         guard(&parts, port)?;
         let _database = if path == "/api/cache/chapters/compact" && method == "POST"
@@ -1890,8 +2111,22 @@ fn respond_writable(
             }
         }
         let value = match (path.as_str(), method) {
-            ("/api/capabilities", "GET")
-            | ("/api/dictionaries", "GET" | "POST" | "DELETE")
+            ("/api/capabilities", "GET") => capabilities(library, project)?,
+            ("/api/import/file", "POST") => {
+                let name = parts.headers.get("X-Filename").map_or_else(
+                    || "book.txt".to_owned(),
+                    |v| v.as_bytes().iter().map(|&b| char::from(b)).collect(),
+                );
+                library.import_file(
+                    &decode(&name, false),
+                    upload.as_deref().unwrap_or_default(),
+                    project,
+                )?
+            }
+            ("/api/import/backup", "POST") => {
+                library.import_backup(&backup_source(body, project)?)?
+            }
+            ("/api/dictionaries", "GET" | "POST" | "DELETE")
             | (
                 "/api/dictionaries/import" | "/api/dictionaries/rules/preview" | "/api/qt",
                 "POST",
@@ -2129,6 +2364,36 @@ fn respond_writable(
                             jobs()?.start(id, n("start", 0)?, n("count", -1)?)?
                         }
                         (4, "POST") if pieces[3] == "restore" => library.restore_book(id)?,
+                        (4, "POST") if pieces[3] == "shortcut" => {
+                            let book = library.get_book(id)?;
+                            if book["trashed_at"].as_f64().unwrap_or_default() != 0.0 {
+                                return Err(ApiError::new(
+                                    400,
+                                    "Hãy khôi phục truyện khỏi thùng rác trước khi tạo lối tắt.",
+                                ));
+                            }
+                            let cover = shortcut_cover(library, &book);
+                            let launcher = crate::platform::launcher(project)?;
+                            let mut result = crate::platform::create_shortcut(
+                                &project.join("windows").join("shortcut.ps1"),
+                                &launcher,
+                                book["id"].as_str().unwrap_or_default(),
+                                book["name"].as_str().unwrap_or_default(),
+                                &cover,
+                                library.root(),
+                                port,
+                                None,
+                            )?;
+                            if result["used_cover"] != true {
+                                result["warning"] =
+                                    "Chưa lấy được bìa hợp lệ; lối tắt dùng biểu tượng mặc định."
+                                        .into();
+                            }
+                            result
+                        }
+                        (4, "GET") if pieces[3] == "file" => {
+                            return pdf_response(library, &library.get_book(id)?, head);
+                        }
                         (6, "POST") if pieces[3] == "chapters" && pieces[5] == "original" => {
                             let index = crate::library::integer(pieces[4])?;
                             let book = library.get_book(id)?;
@@ -2364,6 +2629,20 @@ struct IdleIo {
     stream: tokio::net::TcpStream,
     read: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
     write: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+    // Requests still being handled; a slow import or OCR is not an idle client.
+    busy: Arc<std::sync::atomic::AtomicUsize>,
+}
+struct Busy(Arc<std::sync::atomic::AtomicUsize>);
+impl Busy {
+    fn enter(counter: &Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self(counter.clone())
+    }
+}
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 fn idle_poll<T>(
     timer: &mut Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
@@ -2393,6 +2672,10 @@ impl tokio::io::AsyncRead for IdleIo {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let result = std::pin::Pin::new(&mut self.stream).poll_read(cx, buf);
+        if result.is_pending() && self.busy.load(std::sync::atomic::Ordering::Acquire) > 0 {
+            self.read = None;
+            return result;
+        }
         idle_poll(&mut self.read, cx, result)
     }
 }
@@ -2530,11 +2813,13 @@ fn run_server(
             tokio::spawn(async move {
                 let mut failures = 0usize;
                 let mut next_trash = std::time::Instant::now();
+                let mut next_truncate = std::time::Instant::now();
                 let mut inventory = crate::assets::Inventory::default();
                 while !stopping.load(std::sync::atomic::Ordering::Acquire) {
                     let owner = library.clone();
                     let stop = stopping.clone();
                     let check_trash = std::time::Instant::now() >= next_trash;
+                    let check_truncate = std::time::Instant::now() >= next_truncate;
                     let result = tokio::task::spawn_blocking(move || {
                         let result = (|| {
                             let Ok(_database) = owner.database_gate.try_read() else {
@@ -2550,7 +2835,12 @@ fn run_server(
                             let scanned = owner.inventory_assets(&mut inventory, &stop)?;
                             let queued = owner.queue_image_evictions(&stop)?;
                             let cleaned = owner.cleanup_assets(&stop)?;
-                            Ok::<_,ApiError>((expired, chapters + assets + search + scanned + queued + cleaned))
+                            let work = chapters + assets + search + scanned + queued + cleaned;
+                            // Long-lived connections keep the WAL; reset it on an idle tick so it cannot grow without bound.
+                            if check_truncate && work == 0 && !expired {
+                                owner.truncate_wal();
+                            }
+                            Ok::<_,ApiError>((expired, work))
                         })();
                         (result, inventory)
                     }).await;
@@ -2569,6 +2859,9 @@ fn run_server(
                             failures = 0;
                             if check_trash && !expired {
                                 next_trash = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                            }
+                            if check_truncate && work == 0 && !expired {
+                                next_truncate = std::time::Instant::now() + std::time::Duration::from_secs(30);
                             }
                             if work == 0 && !expired { 250 } else { 10 }
                         }
@@ -2605,6 +2898,8 @@ fn run_server(
                 let _permit = permit;
                 let accepted = Arc::new(crate::lifecycle::ShutdownAck::new(shutdown));
                 let accepted_service = accepted.clone();
+                let busy = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let busy_service = busy.clone();
                 let stopping_service = stopping.clone();
                 let service = hyper::service::service_fn(
                     move |request: hyper::Request<hyper::body::Incoming>| {
@@ -2617,6 +2912,7 @@ fn run_server(
                         let shutdown_busy = shutdown_busy.clone();
                         let stopping = stopping_service.clone();
                         let (parts, mut incoming) = request.into_parts();
+                        let busy_service = busy_service.clone();
                         async move {
                             if stopping.load(std::sync::atomic::Ordering::Acquire) { return Ok::<_,std::convert::Infallible>(error_response(ApiError::new(503,"Máy chủ đang tắt; hãy mở lại ứng dụng sau khi hoàn tất."))); }
                             let work_permit = work_permits
@@ -2637,10 +2933,12 @@ fn run_server(
                                 }
                             } else { None };
                             let body = if library.writable() { match request_json(&parts, &mut incoming, &token, port).await { Ok(body) => body, Err(error) => {if error.status==403{drain_permission_body(&mut incoming,drain_length).await;}return Ok(error_response(error));} } } else { None };
+                            let upload = if library.writable() { match request_upload(&parts, &mut incoming, port).await { Ok(upload) => upload, Err(error) => {if error.status==403{drain_permission_body(&mut incoming,drain_length).await;}return Ok(error_response(error));} } } else { None };
+                            let _in_flight = Busy::enter(&busy_service);
                             let result = tokio::task::spawn_blocking(move || {
                                 let _critical = critical;
                                 // Keep admission until synchronous work ends, even if the client disconnects.
-                                let mut response = if library.writable() { respond_writable(&library, &root, &token, port, parts, body, &shutdown_busy, &accepted, &stopping, downloads.as_deref()) } else { respond(&library, &root, &token, port, parts) };
+                                let mut response = if library.writable() { respond_writable(&library, &root, &token, port, parts, body, upload, &shutdown_busy, &accepted, &stopping, downloads.as_deref()) } else { respond(&library, &root, &token, port, parts) };
                                 response.body_mut().library = Some(library);
                                 response.body_mut().permit = Some(Arc::new(work_permit));
                                 response
@@ -2665,6 +2963,7 @@ fn run_server(
                             stream,
                             read: None,
                             write: None,
+                            busy,
                         }),
                         service,
                     );
@@ -3069,6 +3368,7 @@ mod tests {
                 "token",
                 1234,
                 parts,
+                None,
                 None,
                 &std::sync::Mutex::new(()),
                 &crate::lifecycle::ShutdownAck::new(Arc::new(tokio::sync::Notify::new())),

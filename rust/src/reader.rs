@@ -408,7 +408,7 @@ impl Library {
     }
     pub fn groups(&self) -> Result<Value, ApiError> {
         Ok(rows(
-            &self.reader_connection()?,
+            &*self.reader_connection()?,
             "SELECT id,name FROM groups_list ORDER BY name",
             [],
         )?
@@ -565,6 +565,16 @@ impl Library {
         tx.execute("UPDATE download_jobs SET status=CASE WHEN cancelled=1 THEN 'cancelled' ELSE 'paused' END,updated_at=? WHERE status IN ('queued','running','verification_required')",[now()])?;
         tx.commit()?;
         Ok(json!({"accepted":true}))
+    }
+    /// Return the WAL to zero length when no reader holds an old snapshot; skips quickly when busy.
+    pub(crate) fn truncate_wal(&self) {
+        if let Ok(db) = self.write_connection()
+            && db
+                .busy_timeout(std::time::Duration::from_millis(50))
+                .is_ok()
+        {
+            let _ = db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        }
     }
     pub fn checkpoint(&self) -> Result<(), ApiError> {
         let db = self.write_connection()?;

@@ -2,7 +2,7 @@
 use crate::ApiError;
 use regex::Regex;
 use std::sync::LazyLock;
-fn named(name: &str) -> Option<&'static str> {
+pub(crate) fn named(name: &str) -> Option<&'static str> {
     Some(match name {
         "AElig" => "\u{c6}",
         "AElig;" => "\u{c6}",

@@ -492,7 +492,7 @@ impl Scheduler {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn database(&self) -> Result<Connection, ApiError> {
+    fn database(&self) -> Result<crate::library::Pooled, ApiError> {
         let db = self.library.write_connection()?;
         db.busy_timeout(RETRY)?;
         Ok(db)
