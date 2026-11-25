@@ -98,6 +98,14 @@ impl Library {
     }
 
     pub(crate) fn trash_book(&self, book: &str) -> Result<Value, ApiError> {
+        self.trash_with_active_download(book, None)
+    }
+
+    pub(crate) fn trash_with_active_download(
+        &self,
+        book: &str,
+        active: Option<&str>,
+    ) -> Result<Value, ApiError> {
         let mut db = self.write_connection()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let time = now();
@@ -109,10 +117,10 @@ impl Library {
         }
         tx.execute(
             &format!(
-                "UPDATE download_jobs SET status='cancelled',cancelled=1,updated_at=?
+                "UPDATE download_jobs SET status=CASE WHEN id=? THEN status ELSE 'cancelled' END,cancelled=1,updated_at=?
              WHERE book_id=? AND {ACTIVE_JOB}"
             ),
-            params![time, book],
+            params![active,time, book],
         )?;
         tx.commit()?;
         self.get_book(book)

@@ -9,9 +9,14 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut args = std::env::args().skip(1);
     let mut options = HashMap::new();
     let mut writable = false;
+    let mut native_sources = false;
     while let Some(key) = args.next() {
         if key == "--writable" && !writable {
             writable = true;
+            continue;
+        }
+        if key == "--native-sources" && !native_sources {
+            native_sources = true;
             continue;
         }
         if !["--fixture", "--web-root", "--port", "--import-qt"].contains(&key.as_str())
@@ -31,5 +36,12 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let web = PathBuf::from(get("--web-root")?);
     let port = get("--port")?.parse::<u16>()?;
     let pack = options.get("--import-qt").map(std::path::Path::new);
-    reader_local::http::serve_fixture_with_pack(&fixture, &web, port, writable, pack)
+    reader_local::http::serve_fixture_with_sources(
+        &fixture,
+        &web,
+        port,
+        writable,
+        pack,
+        native_sources,
+    )
 }

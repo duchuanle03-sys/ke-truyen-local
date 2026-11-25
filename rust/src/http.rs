@@ -250,15 +250,55 @@ fn attr<'a>(node: &'a Node, key: &str) -> &'a str {
         .find(|(k, _)| k == key)
         .map_or("", |(_, v)| v)
 }
-fn parse_html(s: &str) -> Result<Node, ApiError> {
-    let token = cached_regex!(
+fn html_tokens() -> &'static Regex {
+    cached_regex!(
         r#"(?s)<!--.*?-->|<![^>]*>|<\?.*?>|</\s*([A-Za-z][A-Za-z0-9:_.-]*)[^>]*>|<([A-Za-z][A-Za-z0-9:_.-]*)([\s/](?:[^<>"']|"[^"]*"|'[^']*')*)?\s*/?>"#
-    );
+    )
+}
+
+fn html_limit(stack_len: usize, count: usize) -> Result<(), ApiError> {
+    if stack_len > 256 || count > 100_000 {
+        Err(ApiError::new(400, "HTML exceeds parsing limits"))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_html_limits(markup: &str) -> Result<(), ApiError> {
+    let mut tags: Vec<&str> = Vec::new();
+    let mut count = 0;
+    for tag in html_tokens().captures_iter(markup) {
+        let end = tag.get(1).map(|name| name.as_str());
+        if tags.last().is_some_and(|last| {
+            last.eq_ignore_ascii_case("script") || last.eq_ignore_ascii_case("style")
+        }) && end.is_none_or(|end| !end.eq_ignore_ascii_case(tags.last().unwrap()))
+        {
+            continue;
+        }
+        if let Some(end) = end {
+            if let Some(index) = tags
+                .iter()
+                .rposition(|start| start.eq_ignore_ascii_case(end))
+            {
+                tags.truncate(index);
+            }
+        } else if let Some(start) = tag.get(2).map(|name| name.as_str()) {
+            count += 1;
+            html_limit(tags.len() + 1, count)?;
+            if !tag[0].ends_with("/>") && !void(&start.to_ascii_lowercase()) {
+                tags.push(start);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_html(s: &str) -> Result<Node, ApiError> {
     let attributes = cached_regex!(r#"([^\s=/'">]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]*)))?"#);
     let mut stack = vec![Node::default()];
     let mut pos = 0;
     let mut count = 0;
-    for cap in token.captures_iter(s) {
+    for cap in html_tokens().captures_iter(s) {
         let raw_tag = &stack.last().expect("root").tag;
         let raw_text = ["script", "style"].contains(&raw_tag.as_str());
         if raw_text
@@ -286,9 +326,7 @@ fn parse_html(s: &str) -> Result<Node, ApiError> {
             }
         } else if let Some(start) = cap.get(2) {
             count += 1;
-            if stack.len() > 256 || count > 100000 {
-                return Err(ApiError::new(400, "HTML exceeds parsing limits"));
-            }
+            html_limit(stack.len(), count)?;
             let tag = start.as_str().to_ascii_lowercase();
             let attrs = attributes
                 .captures_iter(cap.get(3).map_or("", |m| m.as_str()))
@@ -516,7 +554,7 @@ pub(crate) fn asset_markup_urls(markup: &str, base: &str) -> Result<Vec<String>,
     collect(&parse_html(markup)?, base, &mut urls)?;
     Ok(urls)
 }
-fn relative_remote(value: &str, base: &str) -> String {
+pub(crate) fn relative_remote(value: &str, base: &str) -> String {
     if value.is_empty()
         || value
             .chars()
@@ -603,7 +641,7 @@ fn split_asset_url(value: &str) -> (Option<&str>, Option<&str>, &str, Option<&st
     });
     (scheme, authority, path, query)
 }
-fn public_ip(ip: std::net::IpAddr) -> bool {
+pub(crate) fn public_ip(ip: std::net::IpAddr) -> bool {
     fn within(n: u128, networks: &[(u128, u8)], width: u8) -> bool {
         networks
             .iter()
@@ -758,7 +796,15 @@ pub(crate) fn html_to_text(markup: &str) -> Result<String, ApiError> {
 }
 
 fn sanitize_html(s: &str) -> Result<String, ApiError> {
-    fn clean(n: &Node) -> String {
+    clean_html(s, None, true)
+}
+
+pub(crate) fn clean_html(
+    s: &str,
+    source_base: Option<&str>,
+    allow_images: bool,
+) -> Result<String, ApiError> {
+    fn clean(n: &Node, source_base: Option<&str>, allow_images: bool) -> String {
         if let Some(text) = &n.text {
             return escape(text);
         };
@@ -766,20 +812,26 @@ fn sanitize_html(s: &str) -> Result<String, ApiError> {
             return String::new();
         }
         if n.tag == "img" {
+            if !allow_images {
+                return String::new();
+            }
             let raw = ["data-original", "data-src", "src"]
                 .into_iter()
                 .map(|k| attr(n, k))
                 .find(|s| !s.is_empty())
                 .unwrap_or("");
-            let mut url = remote(raw);
-            if !url.is_empty() {
-                url = format!("/api/image?url={}", quote(&url, true));
-            } else {
-                url = raster(raw);
-                if url.is_empty() {
-                    url = svg_data(raw);
+            let url = match source_base {
+                Some(base) => relative_remote(raw, base),
+                None => {
+                    let url = remote(raw);
+                    if !url.is_empty() {
+                        format!("/api/image?url={}", quote(&url, true))
+                    } else {
+                        let url = raster(raw);
+                        if url.is_empty() { svg_data(raw) } else { url }
+                    }
                 }
-            }
+            };
             return if url.is_empty() {
                 String::new()
             } else {
@@ -790,7 +842,11 @@ fn sanitize_html(s: &str) -> Result<String, ApiError> {
                 )
             };
         }
-        let body = n.children.iter().map(clean).collect::<String>();
+        let body = n
+            .children
+            .iter()
+            .map(|child| clean(child, source_base, allow_images))
+            .collect::<String>();
         let allowed = [
             "p",
             "div",
@@ -846,7 +902,7 @@ fn sanitize_html(s: &str) -> Result<String, ApiError> {
             body
         }
     }
-    Ok(clean(&parse_html(s)?))
+    Ok(clean(&parse_html(s)?, source_base, allow_images))
 }
 fn svg_data(s: &str) -> String {
     use quick_xml::{NsReader, events::Event, name::ResolveResult};
@@ -1312,13 +1368,25 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
         "/api/qt",
     ]
     .contains(&path.as_str())
+        || matches!(
+            pieces.as_slice(),
+            ["api", "sources", _, "add"]
+                | [
+                    "api",
+                    "sources",
+                    "stv",
+                    "captcha",
+                    "refresh" | "verify" | "cancel"
+                ]
+                | ["api", "jobs", _, _]
+        )
         || (pieces.len() == 4
             && pieces[..2] == ["api", "books"]
-            && ["progress", "update", "trash", "restore"].contains(&pieces[3]))
+            && ["progress", "update", "trash", "restore", "download"].contains(&pieces[3]))
         || (pieces.len() == 6
             && pieces[..2] == ["api", "books"]
             && pieces[3] == "chapters"
-            && ["edit", "restore"].contains(&pieces[5]))
+            && ["edit", "restore", "original"].contains(&pieces[5]))
 }
 
 fn critical_operation(parts: &hyper::http::request::Parts) -> Option<&'static str> {
@@ -1331,6 +1399,7 @@ fn critical_operation(parts: &hyper::http::request::Parts) -> Option<&'static st
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
     match (parts.method.as_str(), pieces.as_slice()) {
+        ("POST", ["api", "sources", _, "add"]) => Some("thêm truyện từ nguồn"),
         ("POST", ["api", "dictionaries"]) | ("POST", ["api", "dictionaries", "import"]) => {
             Some("ghi/nhập từ điển QT")
         }
@@ -1773,6 +1842,7 @@ fn respond_writable(
     shutdown_busy: &std::sync::Mutex<()>,
     accepted: &crate::lifecycle::ShutdownAck,
     stopping: &std::sync::atomic::AtomicBool,
+    downloads: Option<&crate::downloads::Downloads>,
 ) -> Response<ServiceBody> {
     let head = parts.method == "HEAD";
     let request_method = parts.method.clone();
@@ -1803,6 +1873,7 @@ fn respond_writable(
             return Ok(respond(library, root, token, port, parts));
         }
         let body = body.as_ref().unwrap_or(&Value::Null);
+        let jobs = || downloads.ok_or_else(|| ApiError::new(500, "Không mở được hàng đợi tải."));
         let mut extra = Vec::new();
         let mut status = 200;
         let pieces = path
@@ -1838,8 +1909,23 @@ fn respond_writable(
                 library.settings(if method == "POST" { Some(body) } else { None })?
             }
             ("/api/groups", "GET") => library.groups()?,
-            ("/api/sources", "GET") => {
-                json!([{"id":"qq","name":"Truyện QQ"},{"id":"full","name":"Truyện Full"},{"id":"hako","name":"Hako"},{"id":"stv","name":"Sáng Tác Việt"}])
+            ("/api/sources", "GET") => crate::sources::catalog(),
+            ("/api/sources/stv/captcha", "GET") => {
+                library
+                    .sources
+                    .stv
+                    .as_ref()
+                    .ok_or_else(captcha_expired)?
+                    .captcha("image", query.get("id").map_or("", String::as_str), None)?
+                    .body
+            }
+            ("/api/jobs", "GET") => {
+                let (offset, overflow) =
+                    crate::library::parse_integer(query.get("offset").map_or("0", String::as_str))?;
+                if overflow && offset > 0 {
+                    return Err(rusqlite::Error::InvalidQuery.into());
+                }
+                jobs()?.list(offset)?
             }
             ("/api/readers", "POST") => library.reader(body)?,
             ("/api/cache/chapters", "GET") => library.chapter_cache_stats()?,
@@ -1890,7 +1976,11 @@ fn respond_writable(
                     ));
                 }
                 let _database = database;
-                let value = match library.pause_downloads(body["pause_downloads"] == true) {
+                let value = match if let Some(downloads) = downloads {
+                    downloads.pause_for_shutdown(body["pause_downloads"] == true)
+                } else {
+                    library.pause_downloads(body["pause_downloads"] == true)
+                } {
                     Ok(v) => v,
                     Err(_) => {
                         json!({"error":"Thư viện đang ghi dữ liệu; hãy thử lại.","code":"busy_operation"})
@@ -1915,13 +2005,58 @@ fn respond_writable(
                 );
             }
             _ => {
-                if pieces.len() == 3 && pieces[..2] == ["api", "notes"] && method == "DELETE" {
+                if let ["api", "sources", id, action] = pieces.as_slice() {
+                    let url = query.get("url").map_or("", String::as_str);
+                    match (*action, method) {
+                        ("search", "GET") => library.sources.search(
+                            id,
+                            query.get("q").map_or("", String::as_str),
+                            crate::library::integer(query.get("page").map_or("1", String::as_str))?,
+                        )?,
+                        ("detail", "GET") => library.sources.detail(id, url)?,
+                        ("add", "POST") => {
+                            let url = body.get("url").ok_or_else(|| ApiError::new(404, "url"))?;
+                            let url = url.as_str().ok_or(rusqlite::Error::InvalidQuery)?;
+                            library.add_source_book(library.sources.detail(id, url)?)?
+                        }
+                        _ => return Err(ApiError::new(404, "Không tìm thấy API.")),
+                    }
+                } else if let ["api", "jobs", id, action] = pieces.as_slice()
+                    && method == "POST"
+                {
+                    jobs()?.action(id, action)?
+                } else if let ["api", "sources", "stv", "captcha", action] = pieces.as_slice()
+                    && method == "POST"
+                {
+                    if !matches!(*action, "refresh" | "verify" | "cancel") {
+                        return Err(ApiError::new(404, "Không có thao tác CAPTCHA này."));
+                    }
+                    let stv = library.sources.stv.as_ref().ok_or_else(captcha_expired)?;
+                    let result = stv.captcha(
+                        action,
+                        body["id"].as_str().unwrap_or_default(),
+                        body["answer"].as_str(),
+                    )?;
+                    match *action {
+                        "refresh" => jobs()?.update_captcha(
+                            &result.key,
+                            json!({"source":"stv","id":result.body["id"]}),
+                        ),
+                        "verify" => {
+                            jobs()?.resolve_verification(&result.key, true)?;
+                        }
+                        "cancel" => jobs()?.resolve_verification(&result.key, false)?,
+                        _ => (),
+                    }
+                    result.body
+                } else if pieces.len() == 3 && pieces[..2] == ["api", "notes"] && method == "DELETE"
+                {
                     library.delete_note(pieces[2])?
                 } else if pieces.len() >= 3 && pieces[..2] == ["api", "books"] {
                     let id = pieces[2];
                     match (pieces.len(), method) {
                         (3, "GET") => library.get_book(id)?,
-                        (3, "DELETE") => library.purge_book(id)?,
+                        (3, "DELETE") => jobs()?.purge_book(id)?,
                         (4, "GET") if pieces[3] == "chapters" => library.chapters(id)?,
                         (4, "GET") if pieces[3] == "search" => library.search_content(
                             id,
@@ -1941,6 +2076,26 @@ fn respond_writable(
                             {
                                 return image;
                             }
+                            if library.sources.enabled() {
+                                let source = book["source"].as_str().unwrap_or_default();
+                                let referer = book["path"].as_str().unwrap_or_default();
+                                let cover =
+                                    library.sources.cover(source, referer).and_then(|value| {
+                                        let image = value["cover"].as_str().unwrap_or_default();
+                                        let result =
+                                            image_response(library, image, referer, &parts)?;
+                                        library.update_book(id, &json!({"cover":image}))?;
+                                        Ok(result)
+                                    });
+                                return cover.map_err(|err| {
+                                    ApiError::new(
+                                        400,
+                                        format!(
+                                            "Không tải được bìa cũ hoặc bìa trên trang nguồn: {err}"
+                                        ),
+                                    )
+                                });
+                            }
                             let message = if remote(book["path"].as_str().unwrap_or("")).is_empty()
                             {
                                 "Chỉ chấp nhận URL HTTP(S) công khai, không kèm tài khoản hoặc cổng riêng"
@@ -1956,8 +2111,33 @@ fn respond_writable(
                         }
                         (4, "POST") if pieces[3] == "progress" => library.progress(id, body)?,
                         (4, "POST") if pieces[3] == "update" => library.update_book(id, body)?,
-                        (4, "POST") if pieces[3] == "trash" => library.trash_book(id)?,
+                        (4, "POST") if pieces[3] == "trash" => {
+                            if let Some(downloads) = downloads {
+                                downloads.trash_book(id)?
+                            } else {
+                                library.trash_book(id)?
+                            }
+                        }
+                        (4, "POST") if pieces[3] == "download" => {
+                            library.get_book(id)?;
+                            let n = |key, default| {
+                                body.get(key)
+                                    .map(crate::reader::int)
+                                    .transpose()
+                                    .map(|n| n.unwrap_or(default))
+                            };
+                            jobs()?.start(id, n("start", 0)?, n("count", -1)?)?
+                        }
                         (4, "POST") if pieces[3] == "restore" => library.restore_book(id)?,
+                        (6, "POST") if pieces[3] == "chapters" && pieces[5] == "original" => {
+                            let index = crate::library::integer(pieces[4])?;
+                            let book = library.get_book(id)?;
+                            let chapter = library.raw_chapter(id, index)?;
+                            library.sources.open_original(
+                                book["source"].as_str().unwrap_or_default(),
+                                chapter["url"].as_str().unwrap_or_default(),
+                            )?
+                        }
                         (6, "POST") if pieces[3] == "chapters" && pieces[5] == "edit" => library
                             .edit_chapter(id, crate::library::sqlite_integer(pieces[4])?, body)?,
                         (6, "POST") if pieces[3] == "chapters" && pieces[5] == "restore" => library
@@ -1988,11 +2168,53 @@ fn respond_writable(
     })();
     result.unwrap_or_else(|e| api_response(e.status, e.json(), head, Vec::new()))
 }
+fn captcha_expired() -> ApiError {
+    ApiError::new(400, "Yêu cầu CAPTCHA đã hết hiệu lực. Hãy mở lại chương.")
+        .with_code("captcha_expired")
+}
+
 fn display_path(path: &Path) -> String {
     let s = path.to_string_lossy();
     s.strip_prefix(r"\\?\").unwrap_or(&s).to_owned()
 }
-fn image_kind(bytes: &[u8]) -> &'static str {
+fn etag_matches(parts: &hyper::http::request::Parts, etag: &str) -> Option<bool> {
+    parts
+        .headers
+        .get("If-None-Match")
+        .and_then(|v| v.to_str().ok())
+        .map(|matching| {
+            matching.trim() == "*"
+                || matching
+                    .split(',')
+                    .any(|v| v.trim().trim_start_matches("W/") == etag.trim_start_matches("W/"))
+        })
+}
+
+fn uncached_image(bytes: Vec<u8>, parts: &hyper::http::request::Parts) -> Response<ServiceBody> {
+    let etag = format!("\"{:x}\"", Sha256::digest(&bytes));
+    let unchanged = etag_matches(parts, &etag).unwrap_or(false);
+    let mut response = Response::builder()
+        .status(if unchanged { 304 } else { 200 })
+        .header("Content-Type", image_kind(&bytes))
+        .header("ETag", etag)
+        .header("Cache-Control", "private, max-age=60, must-revalidate")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .header("Cross-Origin-Resource-Policy", "same-origin")
+        .header("Content-Security-Policy", CSP);
+    if !unchanged {
+        response = response.header("Content-Length", bytes.len());
+    }
+    response
+        .body(ServiceBody::bytes(if unchanged || parts.method == "HEAD" {
+            Vec::new()
+        } else {
+            bytes
+        }))
+        .expect("fixed image headers")
+}
+
+pub(crate) fn image_kind(bytes: &[u8]) -> &'static str {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         "image/png"
     } else if bytes.starts_with(b"\xff\xd8\xff") {
@@ -2033,12 +2255,18 @@ fn image_response(
             )
             .with_code("source_error"));
         }
-        return Ok(api_response(
-            503,
-            json!({"error":"Nguồn không khả dụng trong chế độ ngoại tuyến.","code":"network_error"}),
-            parts.method == "HEAD",
-            Vec::new(),
-        ));
+        if library.sources.enabled() {
+            if let Some(bytes) = library.save_source_image(&url, referer, None)? {
+                return Ok(uncached_image(bytes, parts));
+            }
+        } else {
+            return Ok(api_response(
+                503,
+                json!({"error":"Nguồn không khả dụng trong chế độ ngoại tuyến.","code":"network_error"}),
+                parts.method == "HEAD",
+                Vec::new(),
+            ));
+        }
     }
     let path = checked_path(&candidate)?;
     if !path.starts_with(library.root()) {
@@ -2061,16 +2289,7 @@ fn image_response(
     library.touch_image(&name, info.len())?;
     let identity = file_identity(&path, &info, &file)?;
     let etag = format!("W/\"{:x}\"", Sha256::digest(identity.as_bytes()));
-    let unchanged = if let Some(matching) = parts
-        .headers
-        .get("If-None-Match")
-        .and_then(|v| v.to_str().ok())
-    {
-        matching.trim() == "*"
-            || matching
-                .split(',')
-                .any(|v| v.trim().trim_start_matches("W/") == etag.trim_start_matches("W/"))
-    } else {
+    let unchanged = etag_matches(parts, &etag).unwrap_or_else(|| {
         parts
             .headers
             .get("If-Modified-Since")
@@ -2088,7 +2307,7 @@ fn image_response(
                             .unwrap_or(0)
                 })
             })
-    };
+    });
     let mut response = Response::builder()
         .status(if unchanged { 304 } else { 200 })
         .header("Content-Type", kind)
@@ -2224,16 +2443,33 @@ pub fn serve_fixture_with_pack(
     writable: bool,
     pack: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    serve_fixture_with_sources(fixture, web_root, port, writable, pack, false)
+}
+
+pub fn serve_fixture_with_sources(
+    fixture: &Path,
+    web_root: &Path,
+    port: u16,
+    writable: bool,
+    pack: Option<&Path>,
+    native_sources: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if pack.is_some() && !writable {
         return Err("--import-qt requires --writable".into());
     }
+    if native_sources && !writable {
+        return Err("--native-sources requires --writable".into());
+    }
     checked_path(web_root)?;
     let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
-    let library = if writable {
+    let mut library = if writable {
         Library::open_writable_fixture(fixture)?
     } else {
         Library::open_fixture(fixture)?
     };
+    if native_sources {
+        library.sources.enable_native()?;
+    }
     if let Some(pack) = pack {
         crate::qt_pack::install(&library, pack)?;
     }
@@ -2247,6 +2483,22 @@ fn run_server(
     listener.set_nonblocking(true)?;
     let root = Arc::new(checked_path(web_root)?);
     let library = Arc::new(library);
+    let downloads = if library.writable() {
+        let owner = library.clone();
+        Some(Arc::new(if owner.sources.enabled() {
+            crate::downloads::Downloads::open(library.clone(), move |job, control| {
+                owner.download_source_chapter(job, control)
+            })?
+        } else {
+            crate::downloads::Downloads::offline(library.clone())
+        }))
+    } else {
+        None
+    };
+    if let (Some(downloads), Some(stv)) = (&downloads, &library.sources.stv) {
+        let stv = stv.clone();
+        assert!(downloads.on_verification_committed(move |key| stv.complete_verification(key)));
+    }
     let mut entropy = [0u8; 32];
     getrandom::fill(&mut entropy).map_err(|e| std::io::Error::other(e.to_string()))?;
     let token = Arc::new(
@@ -2342,6 +2594,7 @@ fn run_server(
             let permit = tokio::select! { _ = shutdown.notified() => break, p = permits.clone().acquire_owned() => p? };
             let (stream, _) = tokio::select! { _ = shutdown.notified() => break, r = listener.accept() => r? };
             let library = library.clone();
+            let downloads = downloads.clone();
             let root = root.clone();
             let token = token.clone();
             let work_permits = work_permits.clone();
@@ -2356,6 +2609,7 @@ fn run_server(
                 let service = hyper::service::service_fn(
                     move |request: hyper::Request<hyper::body::Incoming>| {
                         let library = library.clone();
+                        let downloads = downloads.clone();
                         let root = root.clone();
                         let token = token.clone();
                         let work_permits = work_permits.clone();
@@ -2386,7 +2640,7 @@ fn run_server(
                             let result = tokio::task::spawn_blocking(move || {
                                 let _critical = critical;
                                 // Keep admission until synchronous work ends, even if the client disconnects.
-                                let mut response = if library.writable() { respond_writable(&library, &root, &token, port, parts, body, &shutdown_busy, &accepted, &stopping) } else { respond(&library, &root, &token, port, parts) };
+                                let mut response = if library.writable() { respond_writable(&library, &root, &token, port, parts, body, &shutdown_busy, &accepted, &stopping, downloads.as_deref()) } else { respond(&library, &root, &token, port, parts) };
                                 response.body_mut().library = Some(library);
                                 response.body_mut().permit = Some(Arc::new(work_permit));
                                 response
@@ -2420,6 +2674,8 @@ fn run_server(
         }
         drop(listener);
         stopping.store(true,std::sync::atomic::Ordering::Release);
+        library.sources.close();
+        if let Some(downloads) = downloads { tokio::task::spawn_blocking(move || downloads.join()).await?; }
         maintenance_stop.notify_one();
         if let Some(maintenance) = maintenance { maintenance.await?; }
         if tokio::time::timeout(std::time::Duration::from_secs(2), async { while connections.join_next().await.is_some() {} }).await.is_err() { connections.abort_all(); while connections.join_next().await.is_some() {} }
@@ -2817,6 +3073,7 @@ mod tests {
                 &std::sync::Mutex::new(()),
                 &crate::lifecycle::ShutdownAck::new(Arc::new(tokio::sync::Notify::new())),
                 &std::sync::atomic::AtomicBool::new(false),
+                None,
             );
             assert_eq!(response.status(), 400);
             assert_eq!(

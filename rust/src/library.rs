@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 #[cfg(test)]
 static SQL_FOLDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -17,24 +17,55 @@ pub(crate) mod test_common;
 pub struct ApiError {
     pub status: u16,
     pub message: String,
-    pub code: Option<&'static str>,
+    details: Option<Box<ErrorDetails>>,
+}
+
+#[derive(Debug, Default)]
+struct ErrorDetails {
+    code: Option<&'static str>,
+    fields: serde_json::Map<String, Value>,
+    verification: Option<(String, Arc<OnceLock<bool>>)>,
 }
 impl ApiError {
     pub fn new(status: u16, message: impl Into<String>) -> Self {
         Self {
             status,
             message: message.into(),
-            code: None,
+            details: None,
         }
     }
     pub(crate) fn with_code(mut self, code: &'static str) -> Self {
-        self.code = Some(code);
+        self.details.get_or_insert_with(Box::default).code = Some(code);
+        self
+    }
+    pub fn code(&self) -> Option<&'static str> {
+        self.details.as_ref()?.code
+    }
+    pub(crate) fn with_verification(mut self, verification: (String, Arc<OnceLock<bool>>)) -> Self {
+        self.details.get_or_insert_with(Box::default).verification = Some(verification);
+        self
+    }
+    pub(crate) fn verification(&self) -> Option<&(String, Arc<OnceLock<bool>>)> {
+        self.details.as_ref()?.verification.as_ref()
+    }
+    pub(crate) fn with_details(mut self, fields: Value) -> Self {
+        if let Value::Object(mut fields) = fields {
+            fields.shift_remove("error");
+            fields.shift_remove("code");
+            self.details.get_or_insert_with(Box::default).fields = fields;
+        }
         self
     }
     pub(crate) fn json(&self) -> Value {
         let mut value = serde_json::json!({"error":self.message});
-        if let Some(code) = self.code {
+        if let Some(code) = self.code() {
             value["code"] = code.into();
+        }
+        if let Some(details) = &self.details {
+            value
+                .as_object_mut()
+                .expect("error object")
+                .extend(details.fields.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
         value
     }
@@ -253,6 +284,7 @@ pub struct ShelfPage {
 pub struct Library {
     path: PathBuf,
     writable: bool,
+    pub(crate) sources: crate::sources::Sources,
     // Keep WAL coordination live between requests. Close SQLite before releasing the library lock.
     _wal_connection: Option<std::sync::Mutex<Connection>>,
     qt: Mutex<Option<Arc<crate::qt::QtDictionary>>>,
@@ -359,6 +391,11 @@ impl Library {
         let mut library = Self {
             path,
             writable: false,
+            sources: if writable {
+                crate::sources::Sources::open(&root)?
+            } else {
+                Default::default()
+            },
             _wal_connection: None,
             qt: Mutex::new(None),
             _lock: lock,

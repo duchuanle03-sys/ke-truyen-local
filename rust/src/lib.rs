@@ -1,4 +1,5 @@
 pub mod casefold;
+pub mod downloads;
 pub mod http;
 pub mod library;
 pub mod qt;
@@ -13,5 +14,8 @@ mod qt_pack;
 mod reader;
 mod schema;
 mod search;
+mod source_fetch;
+mod sources;
+mod stv;
 #[cfg(windows)]
 mod windows_metadata;

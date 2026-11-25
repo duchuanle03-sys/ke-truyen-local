@@ -266,15 +266,30 @@ impl Library {
     ) -> Result<Value, ApiError> {
         let _lease = self.chapter_leases.acquire((id.to_owned(), index));
         let book = self.get_book(id)?;
-        let db = self.reader_connection()?;
-        let item = rows(
-            &db,
-            "SELECT * FROM chapters WHERE book_id=? AND idx=?",
-            params![id, index],
-        )?
-        .pop()
-        .ok_or_else(|| ApiError::new(404, "Không tìm thấy chương."))?;
-        let mut item = chapter_value(item)?;
+        let mut item = chapter_value(self.raw_chapter(id, index)?)?;
+        if item["downloaded"] != true
+            && self.sources.enabled()
+            && ["qq", "full", "hako", "stv"].contains(&book["source"].as_str().unwrap_or_default())
+        {
+            let content = self.fetch_source_chapter(
+                id,
+                index,
+                book["source"].as_str().unwrap_or_default(),
+                item["url"].as_str().unwrap_or_default(),
+                None,
+                || false,
+            )?;
+            self.save_source_chapter(
+                id,
+                index,
+                item["revision"]
+                    .as_i64()
+                    .ok_or(rusqlite::Error::InvalidQuery)?,
+                Some(&content),
+                None,
+            )?;
+            item = chapter_value(self.raw_chapter(id, index)?)?;
+        }
         if item["downloaded"] != true {
             return Err(
                 if ["qq", "full", "hako", "stv"].contains(&book["source"].as_str().unwrap_or("")) {
@@ -285,7 +300,6 @@ impl Library {
                 },
             );
         }
-        drop(db);
         let mut db = self.write_connection()?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         track(&tx, id, index)?;
