@@ -36,7 +36,9 @@ app is `491c059`.
 - **Trust boundaries.** Stored HTML passes through `public_content` (allow-listed tags, proxied
   public image URLs, no private, loopback or reserved hosts). JSON nesting is limited to 984
   levels. Shutdown needs the per-start cookie, a matching `X-Shutdown-Token`, and Host/Origin
-  checks. Requests to source websites are throttled to at least 10 s apart.
+  checks. Sáng Tác Việt requests run one at a time, at least 10 s apart, and reader requests go
+  ahead of background downloads. QQ, Truyện Full and Hako have no request spacing; only downloads
+  are limited, to 2 workers.
 - **Paths.** Canonical paths are checked component by component; symlinks and reparse points are
   rejected for data and static files.
 
