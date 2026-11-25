@@ -1,0 +1,15284 @@
+{
+"float_json": "[1e-07, 1e-06, 1e-05, 0.0001, 1000000000000000.0, 1e+16, 1e+20, 1e+21, -0.0, 1.2345678901234567e-12]",
+"tokenizer": {
+"<p title=\"1 > 0\">Text <b data-value='x<y'>bold</b></p>": {
+"html": "<p>Text <b>bold</b></p>"
+},
+"<p><script></p>secret</script></p>": {
+"html": "<p></p>"
+},
+"<p>A&amp;B &#65; &#x42;</p>": {
+"html": "<p>A&amp;B A B</p>"
+}
+},
+"svg": {
+"<s:svg xmlns:s=\"http://www.w3.org/2000/svg\"><s:rect width=\"10\"/></s:svg>": {
+"html": "<img src=\"data:image/svg+xml;base64,PG5zMDpzdmcgeG1sbnM6bnMwPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PG5zMDpyZWN0IHdpZHRoPSIxMCIgLz48L25zMDpzdmc+\" alt=\"\" loading=\"lazy\">"
+},
+"\n<svg><rect width=\"10\"/></svg>\n": {
+"html": "<img src=\"data:image/svg+xml;base64,PG5zMDpzdmcgeG1sbnM6bnMwPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PG5zMDpyZWN0IHdpZHRoPSIxMCIgLz48L25zMDpzdmc+\" alt=\"\" loading=\"lazy\">"
+},
+"<svg><text>A&amp;B &#65; &#x42;</text></svg>": {
+"html": "<img src=\"data:image/svg+xml;base64,PG5zMDpzdmcgeG1sbnM6bnMwPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PG5zMDp0ZXh0PkEmYW1wO0IgQSBCPC9uczA6dGV4dD48L25zMDpzdmc+\" alt=\"\" loading=\"lazy\">"
+}
+},
+"trust_boundary": {
+"https://example.internal/a": {
+"html": ""
+},
+"https://example.lan/a": {
+"html": ""
+},
+"https://example.home/a": {
+"html": ""
+},
+"https://example.test/a": {
+"html": ""
+},
+"https://example.invalid/a": {
+"html": ""
+},
+"https://example.com:80/a": {
+"html": ""
+},
+"https://[example.com]/a": {
+"html": ""
+},
+"https://[8.8.8.8]/a": {
+"html": ""
+},
+"https://example.com:+443/a": {
+"html": ""
+},
+"https://[2001:4860:4860::8888]:+443/a": {
+"html": ""
+},
+"https://[v1.example.com]/a": {
+"html": "<img src=\"/api/image?url=https%3A%2F%2Fv1.example.com%2Fa\" alt=\"\" loading=\"lazy\">"
+},
+"https://[V1.example.com]/a": {
+"html": "<img src=\"/api/image?url=https%3A%2F%2Fv1.example.com%2Fa\" alt=\"\" loading=\"lazy\">"
+},
+"http://example.com:443/a": {
+"html": ""
+},
+"https://[::ffff:127.0.0.1]/a": {
+"html": ""
+},
+"https://[fec0::1]/a": {
+"html": ""
+},
+"https://[2001:db8::1]/a": {
+"html": ""
+},
+"http://192.0.0.8/a": {
+"html": ""
+},
+"http://192.0.0.9/a": {
+"html": "<img src=\"/api/image?url=http%3A%2F%2F192.0.0.9%2Fa\" alt=\"\" loading=\"lazy\">"
+},
+"http://198.18.0.1/a": {
+"html": ""
+},
+"https://example.com/a/../b?x=%FF": {
+"html": "<img src=\"/api/image?url=https%3A%2F%2Fexample.com%2Fa%2F..%2Fb%3Fx%3D%25FF\" alt=\"\" loading=\"lazy\">"
+},
+"https://[2001:4860:4860::8888]/a": {
+"html": "<img src=\"/api/image?url=https%3A%2F%2F%5B2001%3A4860%3A4860%3A%3A8888%5D%2Fa\" alt=\"\" loading=\"lazy\">"
+}
+},
+"malformed_metadata": {
+"{\"x\" 1}": "Expecting ':' delimiter: line 1 column 6 (char 5)",
+"[1,]": "Illegal trailing comma before end of array: line 1 column 3 (char 2)",
+"{\n\"x\":": "Expecting value: line 2 column 5 (char 6)",
+"{": "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+"[": "Expecting value: line 1 column 2 (char 1)",
+"\"unterminated": "Unterminated string starting at: line 1 column 1 (char 0)",
+"true false": "Extra data: line 1 column 6 (char 5)",
+"{\"x\":1,}": "Illegal trailing comma before end of object: line 1 column 7 (char 6)",
+"{\"x\":\"\\u12x4\"}": "Invalid \\uXXXX escape: line 1 column 8 (char 7)",
+"{\"\u96ea\":\"\\u12x4\"}": "Invalid \\uXXXX escape: line 1 column 8 (char 7)",
+"{\"x\":\"\\u123\"}": "Invalid \\uXXXX escape: line 1 column 8 (char 7)",
+"{\"x\":\"\\q\"}": "Invalid \\escape: line 1 column 7 (char 6)",
+"{\"x\":tru}": "Expecting value: line 1 column 6 (char 5)",
+"{\"x\":tru": "Expecting value: line 1 column 6 (char 5)",
+"{\"x\":fals": "Expecting value: line 1 column 6 (char 5)",
+"{\"x\":nul": "Expecting value: line 1 column 6 (char 5)"
+},
+"entities": [
+[
+"<p>&Aacute</p>",
+{
+"html": "<p>\u00c1</p>"
+}
+],
+[
+"<p>&aacute</p>",
+{
+"html": "<p>\u00e1</p>"
+}
+],
+[
+"<p>&Aacute;</p>",
+{
+"html": "<p>\u00c1</p>"
+}
+],
+[
+"<p>&aacute;</p>",
+{
+"html": "<p>\u00e1</p>"
+}
+],
+[
+"<p>&Abreve;</p>",
+{
+"html": "<p>\u0102</p>"
+}
+],
+[
+"<p>&abreve;</p>",
+{
+"html": "<p>\u0103</p>"
+}
+],
+[
+"<p>&ac;</p>",
+{
+"html": "<p>\u223e</p>"
+}
+],
+[
+"<p>&acd;</p>",
+{
+"html": "<p>\u223f</p>"
+}
+],
+[
+"<p>&acE;</p>",
+{
+"html": "<p>\u223e\u0333</p>"
+}
+],
+[
+"<p>&Acirc</p>",
+{
+"html": "<p>\u00c2</p>"
+}
+],
+[
+"<p>&acirc</p>",
+{
+"html": "<p>\u00e2</p>"
+}
+],
+[
+"<p>&Acirc;</p>",
+{
+"html": "<p>\u00c2</p>"
+}
+],
+[
+"<p>&acirc;</p>",
+{
+"html": "<p>\u00e2</p>"
+}
+],
+[
+"<p>&acute</p>",
+{
+"html": "<p>\u00b4</p>"
+}
+],
+[
+"<p>&acute;</p>",
+{
+"html": "<p>\u00b4</p>"
+}
+],
+[
+"<p>&Acy;</p>",
+{
+"html": "<p>\u0410</p>"
+}
+],
+[
+"<p>&acy;</p>",
+{
+"html": "<p>\u0430</p>"
+}
+],
+[
+"<p>&AElig</p>",
+{
+"html": "<p>\u00c6</p>"
+}
+],
+[
+"<p>&aelig</p>",
+{
+"html": "<p>\u00e6</p>"
+}
+],
+[
+"<p>&AElig;</p>",
+{
+"html": "<p>\u00c6</p>"
+}
+],
+[
+"<p>&aelig;</p>",
+{
+"html": "<p>\u00e6</p>"
+}
+],
+[
+"<p>&af;</p>",
+{
+"html": "<p>\u2061</p>"
+}
+],
+[
+"<p>&Afr;</p>",
+{
+"html": "<p>\ud835\udd04</p>"
+}
+],
+[
+"<p>&afr;</p>",
+{
+"html": "<p>\ud835\udd1e</p>"
+}
+],
+[
+"<p>&Agrave</p>",
+{
+"html": "<p>\u00c0</p>"
+}
+],
+[
+"<p>&agrave</p>",
+{
+"html": "<p>\u00e0</p>"
+}
+],
+[
+"<p>&Agrave;</p>",
+{
+"html": "<p>\u00c0</p>"
+}
+],
+[
+"<p>&agrave;</p>",
+{
+"html": "<p>\u00e0</p>"
+}
+],
+[
+"<p>&alefsym;</p>",
+{
+"html": "<p>\u2135</p>"
+}
+],
+[
+"<p>&aleph;</p>",
+{
+"html": "<p>\u2135</p>"
+}
+],
+[
+"<p>&Alpha;</p>",
+{
+"html": "<p>\u0391</p>"
+}
+],
+[
+"<p>&alpha;</p>",
+{
+"html": "<p>\u03b1</p>"
+}
+],
+[
+"<p>&Amacr;</p>",
+{
+"html": "<p>\u0100</p>"
+}
+],
+[
+"<p>&amacr;</p>",
+{
+"html": "<p>\u0101</p>"
+}
+],
+[
+"<p>&amalg;</p>",
+{
+"html": "<p>\u2a3f</p>"
+}
+],
+[
+"<p>&AMP</p>",
+{
+"html": "<p>&amp;</p>"
+}
+],
+[
+"<p>&amp</p>",
+{
+"html": "<p>&amp;</p>"
+}
+],
+[
+"<p>&AMP;</p>",
+{
+"html": "<p>&amp;</p>"
+}
+],
+[
+"<p>&amp;</p>",
+{
+"html": "<p>&amp;</p>"
+}
+],
+[
+"<p>&And;</p>",
+{
+"html": "<p>\u2a53</p>"
+}
+],
+[
+"<p>&and;</p>",
+{
+"html": "<p>\u2227</p>"
+}
+],
+[
+"<p>&andand;</p>",
+{
+"html": "<p>\u2a55</p>"
+}
+],
+[
+"<p>&andd;</p>",
+{
+"html": "<p>\u2a5c</p>"
+}
+],
+[
+"<p>&andslope;</p>",
+{
+"html": "<p>\u2a58</p>"
+}
+],
+[
+"<p>&andv;</p>",
+{
+"html": "<p>\u2a5a</p>"
+}
+],
+[
+"<p>&ang;</p>",
+{
+"html": "<p>\u2220</p>"
+}
+],
+[
+"<p>&ange;</p>",
+{
+"html": "<p>\u29a4</p>"
+}
+],
+[
+"<p>&angle;</p>",
+{
+"html": "<p>\u2220</p>"
+}
+],
+[
+"<p>&angmsd;</p>",
+{
+"html": "<p>\u2221</p>"
+}
+],
+[
+"<p>&angmsdaa;</p>",
+{
+"html": "<p>\u29a8</p>"
+}
+],
+[
+"<p>&angmsdab;</p>",
+{
+"html": "<p>\u29a9</p>"
+}
+],
+[
+"<p>&angmsdac;</p>",
+{
+"html": "<p>\u29aa</p>"
+}
+],
+[
+"<p>&angmsdad;</p>",
+{
+"html": "<p>\u29ab</p>"
+}
+],
+[
+"<p>&angmsdae;</p>",
+{
+"html": "<p>\u29ac</p>"
+}
+],
+[
+"<p>&angmsdaf;</p>",
+{
+"html": "<p>\u29ad</p>"
+}
+],
+[
+"<p>&angmsdag;</p>",
+{
+"html": "<p>\u29ae</p>"
+}
+],
+[
+"<p>&angmsdah;</p>",
+{
+"html": "<p>\u29af</p>"
+}
+],
+[
+"<p>&angrt;</p>",
+{
+"html": "<p>\u221f</p>"
+}
+],
+[
+"<p>&angrtvb;</p>",
+{
+"html": "<p>\u22be</p>"
+}
+],
+[
+"<p>&angrtvbd;</p>",
+{
+"html": "<p>\u299d</p>"
+}
+],
+[
+"<p>&angsph;</p>",
+{
+"html": "<p>\u2222</p>"
+}
+],
+[
+"<p>&angst;</p>",
+{
+"html": "<p>\u00c5</p>"
+}
+],
+[
+"<p>&angzarr;</p>",
+{
+"html": "<p>\u237c</p>"
+}
+],
+[
+"<p>&Aogon;</p>",
+{
+"html": "<p>\u0104</p>"
+}
+],
+[
+"<p>&aogon;</p>",
+{
+"html": "<p>\u0105</p>"
+}
+],
+[
+"<p>&Aopf;</p>",
+{
+"html": "<p>\ud835\udd38</p>"
+}
+],
+[
+"<p>&aopf;</p>",
+{
+"html": "<p>\ud835\udd52</p>"
+}
+],
+[
+"<p>&ap;</p>",
+{
+"html": "<p>\u2248</p>"
+}
+],
+[
+"<p>&apacir;</p>",
+{
+"html": "<p>\u2a6f</p>"
+}
+],
+[
+"<p>&apE;</p>",
+{
+"html": "<p>\u2a70</p>"
+}
+],
+[
+"<p>&ape;</p>",
+{
+"html": "<p>\u224a</p>"
+}
+],
+[
+"<p>&apid;</p>",
+{
+"html": "<p>\u224b</p>"
+}
+],
+[
+"<p>&apos;</p>",
+{
+"html": "<p>&#x27;</p>"
+}
+],
+[
+"<p>&ApplyFunction;</p>",
+{
+"html": "<p>\u2061</p>"
+}
+],
+[
+"<p>&approx;</p>",
+{
+"html": "<p>\u2248</p>"
+}
+],
+[
+"<p>&approxeq;</p>",
+{
+"html": "<p>\u224a</p>"
+}
+],
+[
+"<p>&Aring</p>",
+{
+"html": "<p>\u00c5</p>"
+}
+],
+[
+"<p>&aring</p>",
+{
+"html": "<p>\u00e5</p>"
+}
+],
+[
+"<p>&Aring;</p>",
+{
+"html": "<p>\u00c5</p>"
+}
+],
+[
+"<p>&aring;</p>",
+{
+"html": "<p>\u00e5</p>"
+}
+],
+[
+"<p>&Ascr;</p>",
+{
+"html": "<p>\ud835\udc9c</p>"
+}
+],
+[
+"<p>&ascr;</p>",
+{
+"html": "<p>\ud835\udcb6</p>"
+}
+],
+[
+"<p>&Assign;</p>",
+{
+"html": "<p>\u2254</p>"
+}
+],
+[
+"<p>&ast;</p>",
+{
+"html": "<p>*</p>"
+}
+],
+[
+"<p>&asymp;</p>",
+{
+"html": "<p>\u2248</p>"
+}
+],
+[
+"<p>&asympeq;</p>",
+{
+"html": "<p>\u224d</p>"
+}
+],
+[
+"<p>&Atilde</p>",
+{
+"html": "<p>\u00c3</p>"
+}
+],
+[
+"<p>&atilde</p>",
+{
+"html": "<p>\u00e3</p>"
+}
+],
+[
+"<p>&Atilde;</p>",
+{
+"html": "<p>\u00c3</p>"
+}
+],
+[
+"<p>&atilde;</p>",
+{
+"html": "<p>\u00e3</p>"
+}
+],
+[
+"<p>&Auml</p>",
+{
+"html": "<p>\u00c4</p>"
+}
+],
+[
+"<p>&auml</p>",
+{
+"html": "<p>\u00e4</p>"
+}
+],
+[
+"<p>&Auml;</p>",
+{
+"html": "<p>\u00c4</p>"
+}
+],
+[
+"<p>&auml;</p>",
+{
+"html": "<p>\u00e4</p>"
+}
+],
+[
+"<p>&awconint;</p>",
+{
+"html": "<p>\u2233</p>"
+}
+],
+[
+"<p>&awint;</p>",
+{
+"html": "<p>\u2a11</p>"
+}
+],
+[
+"<p>&backcong;</p>",
+{
+"html": "<p>\u224c</p>"
+}
+],
+[
+"<p>&backepsilon;</p>",
+{
+"html": "<p>\u03f6</p>"
+}
+],
+[
+"<p>&backprime;</p>",
+{
+"html": "<p>\u2035</p>"
+}
+],
+[
+"<p>&backsim;</p>",
+{
+"html": "<p>\u223d</p>"
+}
+],
+[
+"<p>&backsimeq;</p>",
+{
+"html": "<p>\u22cd</p>"
+}
+],
+[
+"<p>&Backslash;</p>",
+{
+"html": "<p>\u2216</p>"
+}
+],
+[
+"<p>&Barv;</p>",
+{
+"html": "<p>\u2ae7</p>"
+}
+],
+[
+"<p>&barvee;</p>",
+{
+"html": "<p>\u22bd</p>"
+}
+],
+[
+"<p>&Barwed;</p>",
+{
+"html": "<p>\u2306</p>"
+}
+],
+[
+"<p>&barwed;</p>",
+{
+"html": "<p>\u2305</p>"
+}
+],
+[
+"<p>&barwedge;</p>",
+{
+"html": "<p>\u2305</p>"
+}
+],
+[
+"<p>&bbrk;</p>",
+{
+"html": "<p>\u23b5</p>"
+}
+],
+[
+"<p>&bbrktbrk;</p>",
+{
+"html": "<p>\u23b6</p>"
+}
+],
+[
+"<p>&bcong;</p>",
+{
+"html": "<p>\u224c</p>"
+}
+],
+[
+"<p>&Bcy;</p>",
+{
+"html": "<p>\u0411</p>"
+}
+],
+[
+"<p>&bcy;</p>",
+{
+"html": "<p>\u0431</p>"
+}
+],
+[
+"<p>&bdquo;</p>",
+{
+"html": "<p>\u201e</p>"
+}
+],
+[
+"<p>&becaus;</p>",
+{
+"html": "<p>\u2235</p>"
+}
+],
+[
+"<p>&Because;</p>",
+{
+"html": "<p>\u2235</p>"
+}
+],
+[
+"<p>&because;</p>",
+{
+"html": "<p>\u2235</p>"
+}
+],
+[
+"<p>&bemptyv;</p>",
+{
+"html": "<p>\u29b0</p>"
+}
+],
+[
+"<p>&bepsi;</p>",
+{
+"html": "<p>\u03f6</p>"
+}
+],
+[
+"<p>&bernou;</p>",
+{
+"html": "<p>\u212c</p>"
+}
+],
+[
+"<p>&Bernoullis;</p>",
+{
+"html": "<p>\u212c</p>"
+}
+],
+[
+"<p>&Beta;</p>",
+{
+"html": "<p>\u0392</p>"
+}
+],
+[
+"<p>&beta;</p>",
+{
+"html": "<p>\u03b2</p>"
+}
+],
+[
+"<p>&beth;</p>",
+{
+"html": "<p>\u2136</p>"
+}
+],
+[
+"<p>&between;</p>",
+{
+"html": "<p>\u226c</p>"
+}
+],
+[
+"<p>&Bfr;</p>",
+{
+"html": "<p>\ud835\udd05</p>"
+}
+],
+[
+"<p>&bfr;</p>",
+{
+"html": "<p>\ud835\udd1f</p>"
+}
+],
+[
+"<p>&bigcap;</p>",
+{
+"html": "<p>\u22c2</p>"
+}
+],
+[
+"<p>&bigcirc;</p>",
+{
+"html": "<p>\u25ef</p>"
+}
+],
+[
+"<p>&bigcup;</p>",
+{
+"html": "<p>\u22c3</p>"
+}
+],
+[
+"<p>&bigodot;</p>",
+{
+"html": "<p>\u2a00</p>"
+}
+],
+[
+"<p>&bigoplus;</p>",
+{
+"html": "<p>\u2a01</p>"
+}
+],
+[
+"<p>&bigotimes;</p>",
+{
+"html": "<p>\u2a02</p>"
+}
+],
+[
+"<p>&bigsqcup;</p>",
+{
+"html": "<p>\u2a06</p>"
+}
+],
+[
+"<p>&bigstar;</p>",
+{
+"html": "<p>\u2605</p>"
+}
+],
+[
+"<p>&bigtriangledown;</p>",
+{
+"html": "<p>\u25bd</p>"
+}
+],
+[
+"<p>&bigtriangleup;</p>",
+{
+"html": "<p>\u25b3</p>"
+}
+],
+[
+"<p>&biguplus;</p>",
+{
+"html": "<p>\u2a04</p>"
+}
+],
+[
+"<p>&bigvee;</p>",
+{
+"html": "<p>\u22c1</p>"
+}
+],
+[
+"<p>&bigwedge;</p>",
+{
+"html": "<p>\u22c0</p>"
+}
+],
+[
+"<p>&bkarow;</p>",
+{
+"html": "<p>\u290d</p>"
+}
+],
+[
+"<p>&blacklozenge;</p>",
+{
+"html": "<p>\u29eb</p>"
+}
+],
+[
+"<p>&blacksquare;</p>",
+{
+"html": "<p>\u25aa</p>"
+}
+],
+[
+"<p>&blacktriangle;</p>",
+{
+"html": "<p>\u25b4</p>"
+}
+],
+[
+"<p>&blacktriangledown;</p>",
+{
+"html": "<p>\u25be</p>"
+}
+],
+[
+"<p>&blacktriangleleft;</p>",
+{
+"html": "<p>\u25c2</p>"
+}
+],
+[
+"<p>&blacktriangleright;</p>",
+{
+"html": "<p>\u25b8</p>"
+}
+],
+[
+"<p>&blank;</p>",
+{
+"html": "<p>\u2423</p>"
+}
+],
+[
+"<p>&blk12;</p>",
+{
+"html": "<p>\u2592</p>"
+}
+],
+[
+"<p>&blk14;</p>",
+{
+"html": "<p>\u2591</p>"
+}
+],
+[
+"<p>&blk34;</p>",
+{
+"html": "<p>\u2593</p>"
+}
+],
+[
+"<p>&block;</p>",
+{
+"html": "<p>\u2588</p>"
+}
+],
+[
+"<p>&bne;</p>",
+{
+"html": "<p>=\u20e5</p>"
+}
+],
+[
+"<p>&bnequiv;</p>",
+{
+"html": "<p>\u2261\u20e5</p>"
+}
+],
+[
+"<p>&bNot;</p>",
+{
+"html": "<p>\u2aed</p>"
+}
+],
+[
+"<p>&bnot;</p>",
+{
+"html": "<p>\u2310</p>"
+}
+],
+[
+"<p>&Bopf;</p>",
+{
+"html": "<p>\ud835\udd39</p>"
+}
+],
+[
+"<p>&bopf;</p>",
+{
+"html": "<p>\ud835\udd53</p>"
+}
+],
+[
+"<p>&bot;</p>",
+{
+"html": "<p>\u22a5</p>"
+}
+],
+[
+"<p>&bottom;</p>",
+{
+"html": "<p>\u22a5</p>"
+}
+],
+[
+"<p>&bowtie;</p>",
+{
+"html": "<p>\u22c8</p>"
+}
+],
+[
+"<p>&boxbox;</p>",
+{
+"html": "<p>\u29c9</p>"
+}
+],
+[
+"<p>&boxDL;</p>",
+{
+"html": "<p>\u2557</p>"
+}
+],
+[
+"<p>&boxDl;</p>",
+{
+"html": "<p>\u2556</p>"
+}
+],
+[
+"<p>&boxdL;</p>",
+{
+"html": "<p>\u2555</p>"
+}
+],
+[
+"<p>&boxdl;</p>",
+{
+"html": "<p>\u2510</p>"
+}
+],
+[
+"<p>&boxDR;</p>",
+{
+"html": "<p>\u2554</p>"
+}
+],
+[
+"<p>&boxDr;</p>",
+{
+"html": "<p>\u2553</p>"
+}
+],
+[
+"<p>&boxdR;</p>",
+{
+"html": "<p>\u2552</p>"
+}
+],
+[
+"<p>&boxdr;</p>",
+{
+"html": "<p>\u250c</p>"
+}
+],
+[
+"<p>&boxH;</p>",
+{
+"html": "<p>\u2550</p>"
+}
+],
+[
+"<p>&boxh;</p>",
+{
+"html": "<p>\u2500</p>"
+}
+],
+[
+"<p>&boxHD;</p>",
+{
+"html": "<p>\u2566</p>"
+}
+],
+[
+"<p>&boxHd;</p>",
+{
+"html": "<p>\u2564</p>"
+}
+],
+[
+"<p>&boxhD;</p>",
+{
+"html": "<p>\u2565</p>"
+}
+],
+[
+"<p>&boxhd;</p>",
+{
+"html": "<p>\u252c</p>"
+}
+],
+[
+"<p>&boxHU;</p>",
+{
+"html": "<p>\u2569</p>"
+}
+],
+[
+"<p>&boxHu;</p>",
+{
+"html": "<p>\u2567</p>"
+}
+],
+[
+"<p>&boxhU;</p>",
+{
+"html": "<p>\u2568</p>"
+}
+],
+[
+"<p>&boxhu;</p>",
+{
+"html": "<p>\u2534</p>"
+}
+],
+[
+"<p>&boxminus;</p>",
+{
+"html": "<p>\u229f</p>"
+}
+],
+[
+"<p>&boxplus;</p>",
+{
+"html": "<p>\u229e</p>"
+}
+],
+[
+"<p>&boxtimes;</p>",
+{
+"html": "<p>\u22a0</p>"
+}
+],
+[
+"<p>&boxUL;</p>",
+{
+"html": "<p>\u255d</p>"
+}
+],
+[
+"<p>&boxUl;</p>",
+{
+"html": "<p>\u255c</p>"
+}
+],
+[
+"<p>&boxuL;</p>",
+{
+"html": "<p>\u255b</p>"
+}
+],
+[
+"<p>&boxul;</p>",
+{
+"html": "<p>\u2518</p>"
+}
+],
+[
+"<p>&boxUR;</p>",
+{
+"html": "<p>\u255a</p>"
+}
+],
+[
+"<p>&boxUr;</p>",
+{
+"html": "<p>\u2559</p>"
+}
+],
+[
+"<p>&boxuR;</p>",
+{
+"html": "<p>\u2558</p>"
+}
+],
+[
+"<p>&boxur;</p>",
+{
+"html": "<p>\u2514</p>"
+}
+],
+[
+"<p>&boxV;</p>",
+{
+"html": "<p>\u2551</p>"
+}
+],
+[
+"<p>&boxv;</p>",
+{
+"html": "<p>\u2502</p>"
+}
+],
+[
+"<p>&boxVH;</p>",
+{
+"html": "<p>\u256c</p>"
+}
+],
+[
+"<p>&boxVh;</p>",
+{
+"html": "<p>\u256b</p>"
+}
+],
+[
+"<p>&boxvH;</p>",
+{
+"html": "<p>\u256a</p>"
+}
+],
+[
+"<p>&boxvh;</p>",
+{
+"html": "<p>\u253c</p>"
+}
+],
+[
+"<p>&boxVL;</p>",
+{
+"html": "<p>\u2563</p>"
+}
+],
+[
+"<p>&boxVl;</p>",
+{
+"html": "<p>\u2562</p>"
+}
+],
+[
+"<p>&boxvL;</p>",
+{
+"html": "<p>\u2561</p>"
+}
+],
+[
+"<p>&boxvl;</p>",
+{
+"html": "<p>\u2524</p>"
+}
+],
+[
+"<p>&boxVR;</p>",
+{
+"html": "<p>\u2560</p>"
+}
+],
+[
+"<p>&boxVr;</p>",
+{
+"html": "<p>\u255f</p>"
+}
+],
+[
+"<p>&boxvR;</p>",
+{
+"html": "<p>\u255e</p>"
+}
+],
+[
+"<p>&boxvr;</p>",
+{
+"html": "<p>\u251c</p>"
+}
+],
+[
+"<p>&bprime;</p>",
+{
+"html": "<p>\u2035</p>"
+}
+],
+[
+"<p>&Breve;</p>",
+{
+"html": "<p>\u02d8</p>"
+}
+],
+[
+"<p>&breve;</p>",
+{
+"html": "<p>\u02d8</p>"
+}
+],
+[
+"<p>&brvbar</p>",
+{
+"html": "<p>\u00a6</p>"
+}
+],
+[
+"<p>&brvbar;</p>",
+{
+"html": "<p>\u00a6</p>"
+}
+],
+[
+"<p>&Bscr;</p>",
+{
+"html": "<p>\u212c</p>"
+}
+],
+[
+"<p>&bscr;</p>",
+{
+"html": "<p>\ud835\udcb7</p>"
+}
+],
+[
+"<p>&bsemi;</p>",
+{
+"html": "<p>\u204f</p>"
+}
+],
+[
+"<p>&bsim;</p>",
+{
+"html": "<p>\u223d</p>"
+}
+],
+[
+"<p>&bsime;</p>",
+{
+"html": "<p>\u22cd</p>"
+}
+],
+[
+"<p>&bsol;</p>",
+{
+"html": "<p>\\</p>"
+}
+],
+[
+"<p>&bsolb;</p>",
+{
+"html": "<p>\u29c5</p>"
+}
+],
+[
+"<p>&bsolhsub;</p>",
+{
+"html": "<p>\u27c8</p>"
+}
+],
+[
+"<p>&bull;</p>",
+{
+"html": "<p>\u2022</p>"
+}
+],
+[
+"<p>&bullet;</p>",
+{
+"html": "<p>\u2022</p>"
+}
+],
+[
+"<p>&bump;</p>",
+{
+"html": "<p>\u224e</p>"
+}
+],
+[
+"<p>&bumpE;</p>",
+{
+"html": "<p>\u2aae</p>"
+}
+],
+[
+"<p>&bumpe;</p>",
+{
+"html": "<p>\u224f</p>"
+}
+],
+[
+"<p>&Bumpeq;</p>",
+{
+"html": "<p>\u224e</p>"
+}
+],
+[
+"<p>&bumpeq;</p>",
+{
+"html": "<p>\u224f</p>"
+}
+],
+[
+"<p>&Cacute;</p>",
+{
+"html": "<p>\u0106</p>"
+}
+],
+[
+"<p>&cacute;</p>",
+{
+"html": "<p>\u0107</p>"
+}
+],
+[
+"<p>&Cap;</p>",
+{
+"html": "<p>\u22d2</p>"
+}
+],
+[
+"<p>&cap;</p>",
+{
+"html": "<p>\u2229</p>"
+}
+],
+[
+"<p>&capand;</p>",
+{
+"html": "<p>\u2a44</p>"
+}
+],
+[
+"<p>&capbrcup;</p>",
+{
+"html": "<p>\u2a49</p>"
+}
+],
+[
+"<p>&capcap;</p>",
+{
+"html": "<p>\u2a4b</p>"
+}
+],
+[
+"<p>&capcup;</p>",
+{
+"html": "<p>\u2a47</p>"
+}
+],
+[
+"<p>&capdot;</p>",
+{
+"html": "<p>\u2a40</p>"
+}
+],
+[
+"<p>&CapitalDifferentialD;</p>",
+{
+"html": "<p>\u2145</p>"
+}
+],
+[
+"<p>&caps;</p>",
+{
+"html": "<p>\u2229\ufe00</p>"
+}
+],
+[
+"<p>&caret;</p>",
+{
+"html": "<p>\u2041</p>"
+}
+],
+[
+"<p>&caron;</p>",
+{
+"html": "<p>\u02c7</p>"
+}
+],
+[
+"<p>&Cayleys;</p>",
+{
+"html": "<p>\u212d</p>"
+}
+],
+[
+"<p>&ccaps;</p>",
+{
+"html": "<p>\u2a4d</p>"
+}
+],
+[
+"<p>&Ccaron;</p>",
+{
+"html": "<p>\u010c</p>"
+}
+],
+[
+"<p>&ccaron;</p>",
+{
+"html": "<p>\u010d</p>"
+}
+],
+[
+"<p>&Ccedil</p>",
+{
+"html": "<p>\u00c7</p>"
+}
+],
+[
+"<p>&ccedil</p>",
+{
+"html": "<p>\u00e7</p>"
+}
+],
+[
+"<p>&Ccedil;</p>",
+{
+"html": "<p>\u00c7</p>"
+}
+],
+[
+"<p>&ccedil;</p>",
+{
+"html": "<p>\u00e7</p>"
+}
+],
+[
+"<p>&Ccirc;</p>",
+{
+"html": "<p>\u0108</p>"
+}
+],
+[
+"<p>&ccirc;</p>",
+{
+"html": "<p>\u0109</p>"
+}
+],
+[
+"<p>&Cconint;</p>",
+{
+"html": "<p>\u2230</p>"
+}
+],
+[
+"<p>&ccups;</p>",
+{
+"html": "<p>\u2a4c</p>"
+}
+],
+[
+"<p>&ccupssm;</p>",
+{
+"html": "<p>\u2a50</p>"
+}
+],
+[
+"<p>&Cdot;</p>",
+{
+"html": "<p>\u010a</p>"
+}
+],
+[
+"<p>&cdot;</p>",
+{
+"html": "<p>\u010b</p>"
+}
+],
+[
+"<p>&cedil</p>",
+{
+"html": "<p>\u00b8</p>"
+}
+],
+[
+"<p>&cedil;</p>",
+{
+"html": "<p>\u00b8</p>"
+}
+],
+[
+"<p>&Cedilla;</p>",
+{
+"html": "<p>\u00b8</p>"
+}
+],
+[
+"<p>&cemptyv;</p>",
+{
+"html": "<p>\u29b2</p>"
+}
+],
+[
+"<p>&cent</p>",
+{
+"html": "<p>\u00a2</p>"
+}
+],
+[
+"<p>&cent;</p>",
+{
+"html": "<p>\u00a2</p>"
+}
+],
+[
+"<p>&CenterDot;</p>",
+{
+"html": "<p>\u00b7</p>"
+}
+],
+[
+"<p>&centerdot;</p>",
+{
+"html": "<p>\u00b7</p>"
+}
+],
+[
+"<p>&Cfr;</p>",
+{
+"html": "<p>\u212d</p>"
+}
+],
+[
+"<p>&cfr;</p>",
+{
+"html": "<p>\ud835\udd20</p>"
+}
+],
+[
+"<p>&CHcy;</p>",
+{
+"html": "<p>\u0427</p>"
+}
+],
+[
+"<p>&chcy;</p>",
+{
+"html": "<p>\u0447</p>"
+}
+],
+[
+"<p>&check;</p>",
+{
+"html": "<p>\u2713</p>"
+}
+],
+[
+"<p>&checkmark;</p>",
+{
+"html": "<p>\u2713</p>"
+}
+],
+[
+"<p>&Chi;</p>",
+{
+"html": "<p>\u03a7</p>"
+}
+],
+[
+"<p>&chi;</p>",
+{
+"html": "<p>\u03c7</p>"
+}
+],
+[
+"<p>&cir;</p>",
+{
+"html": "<p>\u25cb</p>"
+}
+],
+[
+"<p>&circ;</p>",
+{
+"html": "<p>\u02c6</p>"
+}
+],
+[
+"<p>&circeq;</p>",
+{
+"html": "<p>\u2257</p>"
+}
+],
+[
+"<p>&circlearrowleft;</p>",
+{
+"html": "<p>\u21ba</p>"
+}
+],
+[
+"<p>&circlearrowright;</p>",
+{
+"html": "<p>\u21bb</p>"
+}
+],
+[
+"<p>&circledast;</p>",
+{
+"html": "<p>\u229b</p>"
+}
+],
+[
+"<p>&circledcirc;</p>",
+{
+"html": "<p>\u229a</p>"
+}
+],
+[
+"<p>&circleddash;</p>",
+{
+"html": "<p>\u229d</p>"
+}
+],
+[
+"<p>&CircleDot;</p>",
+{
+"html": "<p>\u2299</p>"
+}
+],
+[
+"<p>&circledR;</p>",
+{
+"html": "<p>\u00ae</p>"
+}
+],
+[
+"<p>&circledS;</p>",
+{
+"html": "<p>\u24c8</p>"
+}
+],
+[
+"<p>&CircleMinus;</p>",
+{
+"html": "<p>\u2296</p>"
+}
+],
+[
+"<p>&CirclePlus;</p>",
+{
+"html": "<p>\u2295</p>"
+}
+],
+[
+"<p>&CircleTimes;</p>",
+{
+"html": "<p>\u2297</p>"
+}
+],
+[
+"<p>&cirE;</p>",
+{
+"html": "<p>\u29c3</p>"
+}
+],
+[
+"<p>&cire;</p>",
+{
+"html": "<p>\u2257</p>"
+}
+],
+[
+"<p>&cirfnint;</p>",
+{
+"html": "<p>\u2a10</p>"
+}
+],
+[
+"<p>&cirmid;</p>",
+{
+"html": "<p>\u2aef</p>"
+}
+],
+[
+"<p>&cirscir;</p>",
+{
+"html": "<p>\u29c2</p>"
+}
+],
+[
+"<p>&ClockwiseContourIntegral;</p>",
+{
+"html": "<p>\u2232</p>"
+}
+],
+[
+"<p>&CloseCurlyDoubleQuote;</p>",
+{
+"html": "<p>\u201d</p>"
+}
+],
+[
+"<p>&CloseCurlyQuote;</p>",
+{
+"html": "<p>\u2019</p>"
+}
+],
+[
+"<p>&clubs;</p>",
+{
+"html": "<p>\u2663</p>"
+}
+],
+[
+"<p>&clubsuit;</p>",
+{
+"html": "<p>\u2663</p>"
+}
+],
+[
+"<p>&Colon;</p>",
+{
+"html": "<p>\u2237</p>"
+}
+],
+[
+"<p>&colon;</p>",
+{
+"html": "<p>:</p>"
+}
+],
+[
+"<p>&Colone;</p>",
+{
+"html": "<p>\u2a74</p>"
+}
+],
+[
+"<p>&colone;</p>",
+{
+"html": "<p>\u2254</p>"
+}
+],
+[
+"<p>&coloneq;</p>",
+{
+"html": "<p>\u2254</p>"
+}
+],
+[
+"<p>&comma;</p>",
+{
+"html": "<p>,</p>"
+}
+],
+[
+"<p>&commat;</p>",
+{
+"html": "<p>@</p>"
+}
+],
+[
+"<p>&comp;</p>",
+{
+"html": "<p>\u2201</p>"
+}
+],
+[
+"<p>&compfn;</p>",
+{
+"html": "<p>\u2218</p>"
+}
+],
+[
+"<p>&complement;</p>",
+{
+"html": "<p>\u2201</p>"
+}
+],
+[
+"<p>&complexes;</p>",
+{
+"html": "<p>\u2102</p>"
+}
+],
+[
+"<p>&cong;</p>",
+{
+"html": "<p>\u2245</p>"
+}
+],
+[
+"<p>&congdot;</p>",
+{
+"html": "<p>\u2a6d</p>"
+}
+],
+[
+"<p>&Congruent;</p>",
+{
+"html": "<p>\u2261</p>"
+}
+],
+[
+"<p>&Conint;</p>",
+{
+"html": "<p>\u222f</p>"
+}
+],
+[
+"<p>&conint;</p>",
+{
+"html": "<p>\u222e</p>"
+}
+],
+[
+"<p>&ContourIntegral;</p>",
+{
+"html": "<p>\u222e</p>"
+}
+],
+[
+"<p>&Copf;</p>",
+{
+"html": "<p>\u2102</p>"
+}
+],
+[
+"<p>&copf;</p>",
+{
+"html": "<p>\ud835\udd54</p>"
+}
+],
+[
+"<p>&coprod;</p>",
+{
+"html": "<p>\u2210</p>"
+}
+],
+[
+"<p>&Coproduct;</p>",
+{
+"html": "<p>\u2210</p>"
+}
+],
+[
+"<p>&COPY</p>",
+{
+"html": "<p>\u00a9</p>"
+}
+],
+[
+"<p>&copy</p>",
+{
+"html": "<p>\u00a9</p>"
+}
+],
+[
+"<p>&COPY;</p>",
+{
+"html": "<p>\u00a9</p>"
+}
+],
+[
+"<p>&copy;</p>",
+{
+"html": "<p>\u00a9</p>"
+}
+],
+[
+"<p>&copysr;</p>",
+{
+"html": "<p>\u2117</p>"
+}
+],
+[
+"<p>&CounterClockwiseContourIntegral;</p>",
+{
+"html": "<p>\u2233</p>"
+}
+],
+[
+"<p>&crarr;</p>",
+{
+"html": "<p>\u21b5</p>"
+}
+],
+[
+"<p>&Cross;</p>",
+{
+"html": "<p>\u2a2f</p>"
+}
+],
+[
+"<p>&cross;</p>",
+{
+"html": "<p>\u2717</p>"
+}
+],
+[
+"<p>&Cscr;</p>",
+{
+"html": "<p>\ud835\udc9e</p>"
+}
+],
+[
+"<p>&cscr;</p>",
+{
+"html": "<p>\ud835\udcb8</p>"
+}
+],
+[
+"<p>&csub;</p>",
+{
+"html": "<p>\u2acf</p>"
+}
+],
+[
+"<p>&csube;</p>",
+{
+"html": "<p>\u2ad1</p>"
+}
+],
+[
+"<p>&csup;</p>",
+{
+"html": "<p>\u2ad0</p>"
+}
+],
+[
+"<p>&csupe;</p>",
+{
+"html": "<p>\u2ad2</p>"
+}
+],
+[
+"<p>&ctdot;</p>",
+{
+"html": "<p>\u22ef</p>"
+}
+],
+[
+"<p>&cudarrl;</p>",
+{
+"html": "<p>\u2938</p>"
+}
+],
+[
+"<p>&cudarrr;</p>",
+{
+"html": "<p>\u2935</p>"
+}
+],
+[
+"<p>&cuepr;</p>",
+{
+"html": "<p>\u22de</p>"
+}
+],
+[
+"<p>&cuesc;</p>",
+{
+"html": "<p>\u22df</p>"
+}
+],
+[
+"<p>&cularr;</p>",
+{
+"html": "<p>\u21b6</p>"
+}
+],
+[
+"<p>&cularrp;</p>",
+{
+"html": "<p>\u293d</p>"
+}
+],
+[
+"<p>&Cup;</p>",
+{
+"html": "<p>\u22d3</p>"
+}
+],
+[
+"<p>&cup;</p>",
+{
+"html": "<p>\u222a</p>"
+}
+],
+[
+"<p>&cupbrcap;</p>",
+{
+"html": "<p>\u2a48</p>"
+}
+],
+[
+"<p>&CupCap;</p>",
+{
+"html": "<p>\u224d</p>"
+}
+],
+[
+"<p>&cupcap;</p>",
+{
+"html": "<p>\u2a46</p>"
+}
+],
+[
+"<p>&cupcup;</p>",
+{
+"html": "<p>\u2a4a</p>"
+}
+],
+[
+"<p>&cupdot;</p>",
+{
+"html": "<p>\u228d</p>"
+}
+],
+[
+"<p>&cupor;</p>",
+{
+"html": "<p>\u2a45</p>"
+}
+],
+[
+"<p>&cups;</p>",
+{
+"html": "<p>\u222a\ufe00</p>"
+}
+],
+[
+"<p>&curarr;</p>",
+{
+"html": "<p>\u21b7</p>"
+}
+],
+[
+"<p>&curarrm;</p>",
+{
+"html": "<p>\u293c</p>"
+}
+],
+[
+"<p>&curlyeqprec;</p>",
+{
+"html": "<p>\u22de</p>"
+}
+],
+[
+"<p>&curlyeqsucc;</p>",
+{
+"html": "<p>\u22df</p>"
+}
+],
+[
+"<p>&curlyvee;</p>",
+{
+"html": "<p>\u22ce</p>"
+}
+],
+[
+"<p>&curlywedge;</p>",
+{
+"html": "<p>\u22cf</p>"
+}
+],
+[
+"<p>&curren</p>",
+{
+"html": "<p>\u00a4</p>"
+}
+],
+[
+"<p>&curren;</p>",
+{
+"html": "<p>\u00a4</p>"
+}
+],
+[
+"<p>&curvearrowleft;</p>",
+{
+"html": "<p>\u21b6</p>"
+}
+],
+[
+"<p>&curvearrowright;</p>",
+{
+"html": "<p>\u21b7</p>"
+}
+],
+[
+"<p>&cuvee;</p>",
+{
+"html": "<p>\u22ce</p>"
+}
+],
+[
+"<p>&cuwed;</p>",
+{
+"html": "<p>\u22cf</p>"
+}
+],
+[
+"<p>&cwconint;</p>",
+{
+"html": "<p>\u2232</p>"
+}
+],
+[
+"<p>&cwint;</p>",
+{
+"html": "<p>\u2231</p>"
+}
+],
+[
+"<p>&cylcty;</p>",
+{
+"html": "<p>\u232d</p>"
+}
+],
+[
+"<p>&Dagger;</p>",
+{
+"html": "<p>\u2021</p>"
+}
+],
+[
+"<p>&dagger;</p>",
+{
+"html": "<p>\u2020</p>"
+}
+],
+[
+"<p>&daleth;</p>",
+{
+"html": "<p>\u2138</p>"
+}
+],
+[
+"<p>&Darr;</p>",
+{
+"html": "<p>\u21a1</p>"
+}
+],
+[
+"<p>&dArr;</p>",
+{
+"html": "<p>\u21d3</p>"
+}
+],
+[
+"<p>&darr;</p>",
+{
+"html": "<p>\u2193</p>"
+}
+],
+[
+"<p>&dash;</p>",
+{
+"html": "<p>\u2010</p>"
+}
+],
+[
+"<p>&Dashv;</p>",
+{
+"html": "<p>\u2ae4</p>"
+}
+],
+[
+"<p>&dashv;</p>",
+{
+"html": "<p>\u22a3</p>"
+}
+],
+[
+"<p>&dbkarow;</p>",
+{
+"html": "<p>\u290f</p>"
+}
+],
+[
+"<p>&dblac;</p>",
+{
+"html": "<p>\u02dd</p>"
+}
+],
+[
+"<p>&Dcaron;</p>",
+{
+"html": "<p>\u010e</p>"
+}
+],
+[
+"<p>&dcaron;</p>",
+{
+"html": "<p>\u010f</p>"
+}
+],
+[
+"<p>&Dcy;</p>",
+{
+"html": "<p>\u0414</p>"
+}
+],
+[
+"<p>&dcy;</p>",
+{
+"html": "<p>\u0434</p>"
+}
+],
+[
+"<p>&DD;</p>",
+{
+"html": "<p>\u2145</p>"
+}
+],
+[
+"<p>&dd;</p>",
+{
+"html": "<p>\u2146</p>"
+}
+],
+[
+"<p>&ddagger;</p>",
+{
+"html": "<p>\u2021</p>"
+}
+],
+[
+"<p>&ddarr;</p>",
+{
+"html": "<p>\u21ca</p>"
+}
+],
+[
+"<p>&DDotrahd;</p>",
+{
+"html": "<p>\u2911</p>"
+}
+],
+[
+"<p>&ddotseq;</p>",
+{
+"html": "<p>\u2a77</p>"
+}
+],
+[
+"<p>&deg</p>",
+{
+"html": "<p>\u00b0</p>"
+}
+],
+[
+"<p>&deg;</p>",
+{
+"html": "<p>\u00b0</p>"
+}
+],
+[
+"<p>&Del;</p>",
+{
+"html": "<p>\u2207</p>"
+}
+],
+[
+"<p>&Delta;</p>",
+{
+"html": "<p>\u0394</p>"
+}
+],
+[
+"<p>&delta;</p>",
+{
+"html": "<p>\u03b4</p>"
+}
+],
+[
+"<p>&demptyv;</p>",
+{
+"html": "<p>\u29b1</p>"
+}
+],
+[
+"<p>&dfisht;</p>",
+{
+"html": "<p>\u297f</p>"
+}
+],
+[
+"<p>&Dfr;</p>",
+{
+"html": "<p>\ud835\udd07</p>"
+}
+],
+[
+"<p>&dfr;</p>",
+{
+"html": "<p>\ud835\udd21</p>"
+}
+],
+[
+"<p>&dHar;</p>",
+{
+"html": "<p>\u2965</p>"
+}
+],
+[
+"<p>&dharl;</p>",
+{
+"html": "<p>\u21c3</p>"
+}
+],
+[
+"<p>&dharr;</p>",
+{
+"html": "<p>\u21c2</p>"
+}
+],
+[
+"<p>&DiacriticalAcute;</p>",
+{
+"html": "<p>\u00b4</p>"
+}
+],
+[
+"<p>&DiacriticalDot;</p>",
+{
+"html": "<p>\u02d9</p>"
+}
+],
+[
+"<p>&DiacriticalDoubleAcute;</p>",
+{
+"html": "<p>\u02dd</p>"
+}
+],
+[
+"<p>&DiacriticalGrave;</p>",
+{
+"html": "<p>`</p>"
+}
+],
+[
+"<p>&DiacriticalTilde;</p>",
+{
+"html": "<p>\u02dc</p>"
+}
+],
+[
+"<p>&diam;</p>",
+{
+"html": "<p>\u22c4</p>"
+}
+],
+[
+"<p>&Diamond;</p>",
+{
+"html": "<p>\u22c4</p>"
+}
+],
+[
+"<p>&diamond;</p>",
+{
+"html": "<p>\u22c4</p>"
+}
+],
+[
+"<p>&diamondsuit;</p>",
+{
+"html": "<p>\u2666</p>"
+}
+],
+[
+"<p>&diams;</p>",
+{
+"html": "<p>\u2666</p>"
+}
+],
+[
+"<p>&die;</p>",
+{
+"html": "<p>\u00a8</p>"
+}
+],
+[
+"<p>&DifferentialD;</p>",
+{
+"html": "<p>\u2146</p>"
+}
+],
+[
+"<p>&digamma;</p>",
+{
+"html": "<p>\u03dd</p>"
+}
+],
+[
+"<p>&disin;</p>",
+{
+"html": "<p>\u22f2</p>"
+}
+],
+[
+"<p>&div;</p>",
+{
+"html": "<p>\u00f7</p>"
+}
+],
+[
+"<p>&divide</p>",
+{
+"html": "<p>\u00f7</p>"
+}
+],
+[
+"<p>&divide;</p>",
+{
+"html": "<p>\u00f7</p>"
+}
+],
+[
+"<p>&divideontimes;</p>",
+{
+"html": "<p>\u22c7</p>"
+}
+],
+[
+"<p>&divonx;</p>",
+{
+"html": "<p>\u22c7</p>"
+}
+],
+[
+"<p>&DJcy;</p>",
+{
+"html": "<p>\u0402</p>"
+}
+],
+[
+"<p>&djcy;</p>",
+{
+"html": "<p>\u0452</p>"
+}
+],
+[
+"<p>&dlcorn;</p>",
+{
+"html": "<p>\u231e</p>"
+}
+],
+[
+"<p>&dlcrop;</p>",
+{
+"html": "<p>\u230d</p>"
+}
+],
+[
+"<p>&dollar;</p>",
+{
+"html": "<p>$</p>"
+}
+],
+[
+"<p>&Dopf;</p>",
+{
+"html": "<p>\ud835\udd3b</p>"
+}
+],
+[
+"<p>&dopf;</p>",
+{
+"html": "<p>\ud835\udd55</p>"
+}
+],
+[
+"<p>&Dot;</p>",
+{
+"html": "<p>\u00a8</p>"
+}
+],
+[
+"<p>&dot;</p>",
+{
+"html": "<p>\u02d9</p>"
+}
+],
+[
+"<p>&DotDot;</p>",
+{
+"html": "<p>\u20dc</p>"
+}
+],
+[
+"<p>&doteq;</p>",
+{
+"html": "<p>\u2250</p>"
+}
+],
+[
+"<p>&doteqdot;</p>",
+{
+"html": "<p>\u2251</p>"
+}
+],
+[
+"<p>&DotEqual;</p>",
+{
+"html": "<p>\u2250</p>"
+}
+],
+[
+"<p>&dotminus;</p>",
+{
+"html": "<p>\u2238</p>"
+}
+],
+[
+"<p>&dotplus;</p>",
+{
+"html": "<p>\u2214</p>"
+}
+],
+[
+"<p>&dotsquare;</p>",
+{
+"html": "<p>\u22a1</p>"
+}
+],
+[
+"<p>&doublebarwedge;</p>",
+{
+"html": "<p>\u2306</p>"
+}
+],
+[
+"<p>&DoubleContourIntegral;</p>",
+{
+"html": "<p>\u222f</p>"
+}
+],
+[
+"<p>&DoubleDot;</p>",
+{
+"html": "<p>\u00a8</p>"
+}
+],
+[
+"<p>&DoubleDownArrow;</p>",
+{
+"html": "<p>\u21d3</p>"
+}
+],
+[
+"<p>&DoubleLeftArrow;</p>",
+{
+"html": "<p>\u21d0</p>"
+}
+],
+[
+"<p>&DoubleLeftRightArrow;</p>",
+{
+"html": "<p>\u21d4</p>"
+}
+],
+[
+"<p>&DoubleLeftTee;</p>",
+{
+"html": "<p>\u2ae4</p>"
+}
+],
+[
+"<p>&DoubleLongLeftArrow;</p>",
+{
+"html": "<p>\u27f8</p>"
+}
+],
+[
+"<p>&DoubleLongLeftRightArrow;</p>",
+{
+"html": "<p>\u27fa</p>"
+}
+],
+[
+"<p>&DoubleLongRightArrow;</p>",
+{
+"html": "<p>\u27f9</p>"
+}
+],
+[
+"<p>&DoubleRightArrow;</p>",
+{
+"html": "<p>\u21d2</p>"
+}
+],
+[
+"<p>&DoubleRightTee;</p>",
+{
+"html": "<p>\u22a8</p>"
+}
+],
+[
+"<p>&DoubleUpArrow;</p>",
+{
+"html": "<p>\u21d1</p>"
+}
+],
+[
+"<p>&DoubleUpDownArrow;</p>",
+{
+"html": "<p>\u21d5</p>"
+}
+],
+[
+"<p>&DoubleVerticalBar;</p>",
+{
+"html": "<p>\u2225</p>"
+}
+],
+[
+"<p>&DownArrow;</p>",
+{
+"html": "<p>\u2193</p>"
+}
+],
+[
+"<p>&Downarrow;</p>",
+{
+"html": "<p>\u21d3</p>"
+}
+],
+[
+"<p>&downarrow;</p>",
+{
+"html": "<p>\u2193</p>"
+}
+],
+[
+"<p>&DownArrowBar;</p>",
+{
+"html": "<p>\u2913</p>"
+}
+],
+[
+"<p>&DownArrowUpArrow;</p>",
+{
+"html": "<p>\u21f5</p>"
+}
+],
+[
+"<p>&DownBreve;</p>",
+{
+"html": "<p>\u0311</p>"
+}
+],
+[
+"<p>&downdownarrows;</p>",
+{
+"html": "<p>\u21ca</p>"
+}
+],
+[
+"<p>&downharpoonleft;</p>",
+{
+"html": "<p>\u21c3</p>"
+}
+],
+[
+"<p>&downharpoonright;</p>",
+{
+"html": "<p>\u21c2</p>"
+}
+],
+[
+"<p>&DownLeftRightVector;</p>",
+{
+"html": "<p>\u2950</p>"
+}
+],
+[
+"<p>&DownLeftTeeVector;</p>",
+{
+"html": "<p>\u295e</p>"
+}
+],
+[
+"<p>&DownLeftVector;</p>",
+{
+"html": "<p>\u21bd</p>"
+}
+],
+[
+"<p>&DownLeftVectorBar;</p>",
+{
+"html": "<p>\u2956</p>"
+}
+],
+[
+"<p>&DownRightTeeVector;</p>",
+{
+"html": "<p>\u295f</p>"
+}
+],
+[
+"<p>&DownRightVector;</p>",
+{
+"html": "<p>\u21c1</p>"
+}
+],
+[
+"<p>&DownRightVectorBar;</p>",
+{
+"html": "<p>\u2957</p>"
+}
+],
+[
+"<p>&DownTee;</p>",
+{
+"html": "<p>\u22a4</p>"
+}
+],
+[
+"<p>&DownTeeArrow;</p>",
+{
+"html": "<p>\u21a7</p>"
+}
+],
+[
+"<p>&drbkarow;</p>",
+{
+"html": "<p>\u2910</p>"
+}
+],
+[
+"<p>&drcorn;</p>",
+{
+"html": "<p>\u231f</p>"
+}
+],
+[
+"<p>&drcrop;</p>",
+{
+"html": "<p>\u230c</p>"
+}
+],
+[
+"<p>&Dscr;</p>",
+{
+"html": "<p>\ud835\udc9f</p>"
+}
+],
+[
+"<p>&dscr;</p>",
+{
+"html": "<p>\ud835\udcb9</p>"
+}
+],
+[
+"<p>&DScy;</p>",
+{
+"html": "<p>\u0405</p>"
+}
+],
+[
+"<p>&dscy;</p>",
+{
+"html": "<p>\u0455</p>"
+}
+],
+[
+"<p>&dsol;</p>",
+{
+"html": "<p>\u29f6</p>"
+}
+],
+[
+"<p>&Dstrok;</p>",
+{
+"html": "<p>\u0110</p>"
+}
+],
+[
+"<p>&dstrok;</p>",
+{
+"html": "<p>\u0111</p>"
+}
+],
+[
+"<p>&dtdot;</p>",
+{
+"html": "<p>\u22f1</p>"
+}
+],
+[
+"<p>&dtri;</p>",
+{
+"html": "<p>\u25bf</p>"
+}
+],
+[
+"<p>&dtrif;</p>",
+{
+"html": "<p>\u25be</p>"
+}
+],
+[
+"<p>&duarr;</p>",
+{
+"html": "<p>\u21f5</p>"
+}
+],
+[
+"<p>&duhar;</p>",
+{
+"html": "<p>\u296f</p>"
+}
+],
+[
+"<p>&dwangle;</p>",
+{
+"html": "<p>\u29a6</p>"
+}
+],
+[
+"<p>&DZcy;</p>",
+{
+"html": "<p>\u040f</p>"
+}
+],
+[
+"<p>&dzcy;</p>",
+{
+"html": "<p>\u045f</p>"
+}
+],
+[
+"<p>&dzigrarr;</p>",
+{
+"html": "<p>\u27ff</p>"
+}
+],
+[
+"<p>&Eacute</p>",
+{
+"html": "<p>\u00c9</p>"
+}
+],
+[
+"<p>&eacute</p>",
+{
+"html": "<p>\u00e9</p>"
+}
+],
+[
+"<p>&Eacute;</p>",
+{
+"html": "<p>\u00c9</p>"
+}
+],
+[
+"<p>&eacute;</p>",
+{
+"html": "<p>\u00e9</p>"
+}
+],
+[
+"<p>&easter;</p>",
+{
+"html": "<p>\u2a6e</p>"
+}
+],
+[
+"<p>&Ecaron;</p>",
+{
+"html": "<p>\u011a</p>"
+}
+],
+[
+"<p>&ecaron;</p>",
+{
+"html": "<p>\u011b</p>"
+}
+],
+[
+"<p>&ecir;</p>",
+{
+"html": "<p>\u2256</p>"
+}
+],
+[
+"<p>&Ecirc</p>",
+{
+"html": "<p>\u00ca</p>"
+}
+],
+[
+"<p>&ecirc</p>",
+{
+"html": "<p>\u00ea</p>"
+}
+],
+[
+"<p>&Ecirc;</p>",
+{
+"html": "<p>\u00ca</p>"
+}
+],
+[
+"<p>&ecirc;</p>",
+{
+"html": "<p>\u00ea</p>"
+}
+],
+[
+"<p>&ecolon;</p>",
+{
+"html": "<p>\u2255</p>"
+}
+],
+[
+"<p>&Ecy;</p>",
+{
+"html": "<p>\u042d</p>"
+}
+],
+[
+"<p>&ecy;</p>",
+{
+"html": "<p>\u044d</p>"
+}
+],
+[
+"<p>&eDDot;</p>",
+{
+"html": "<p>\u2a77</p>"
+}
+],
+[
+"<p>&Edot;</p>",
+{
+"html": "<p>\u0116</p>"
+}
+],
+[
+"<p>&eDot;</p>",
+{
+"html": "<p>\u2251</p>"
+}
+],
+[
+"<p>&edot;</p>",
+{
+"html": "<p>\u0117</p>"
+}
+],
+[
+"<p>&ee;</p>",
+{
+"html": "<p>\u2147</p>"
+}
+],
+[
+"<p>&efDot;</p>",
+{
+"html": "<p>\u2252</p>"
+}
+],
+[
+"<p>&Efr;</p>",
+{
+"html": "<p>\ud835\udd08</p>"
+}
+],
+[
+"<p>&efr;</p>",
+{
+"html": "<p>\ud835\udd22</p>"
+}
+],
+[
+"<p>&eg;</p>",
+{
+"html": "<p>\u2a9a</p>"
+}
+],
+[
+"<p>&Egrave</p>",
+{
+"html": "<p>\u00c8</p>"
+}
+],
+[
+"<p>&egrave</p>",
+{
+"html": "<p>\u00e8</p>"
+}
+],
+[
+"<p>&Egrave;</p>",
+{
+"html": "<p>\u00c8</p>"
+}
+],
+[
+"<p>&egrave;</p>",
+{
+"html": "<p>\u00e8</p>"
+}
+],
+[
+"<p>&egs;</p>",
+{
+"html": "<p>\u2a96</p>"
+}
+],
+[
+"<p>&egsdot;</p>",
+{
+"html": "<p>\u2a98</p>"
+}
+],
+[
+"<p>&el;</p>",
+{
+"html": "<p>\u2a99</p>"
+}
+],
+[
+"<p>&Element;</p>",
+{
+"html": "<p>\u2208</p>"
+}
+],
+[
+"<p>&elinters;</p>",
+{
+"html": "<p>\u23e7</p>"
+}
+],
+[
+"<p>&ell;</p>",
+{
+"html": "<p>\u2113</p>"
+}
+],
+[
+"<p>&els;</p>",
+{
+"html": "<p>\u2a95</p>"
+}
+],
+[
+"<p>&elsdot;</p>",
+{
+"html": "<p>\u2a97</p>"
+}
+],
+[
+"<p>&Emacr;</p>",
+{
+"html": "<p>\u0112</p>"
+}
+],
+[
+"<p>&emacr;</p>",
+{
+"html": "<p>\u0113</p>"
+}
+],
+[
+"<p>&empty;</p>",
+{
+"html": "<p>\u2205</p>"
+}
+],
+[
+"<p>&emptyset;</p>",
+{
+"html": "<p>\u2205</p>"
+}
+],
+[
+"<p>&EmptySmallSquare;</p>",
+{
+"html": "<p>\u25fb</p>"
+}
+],
+[
+"<p>&emptyv;</p>",
+{
+"html": "<p>\u2205</p>"
+}
+],
+[
+"<p>&EmptyVerySmallSquare;</p>",
+{
+"html": "<p>\u25ab</p>"
+}
+],
+[
+"<p>&emsp13;</p>",
+{
+"html": "<p>\u2004</p>"
+}
+],
+[
+"<p>&emsp14;</p>",
+{
+"html": "<p>\u2005</p>"
+}
+],
+[
+"<p>&emsp;</p>",
+{
+"html": "<p>\u2003</p>"
+}
+],
+[
+"<p>&ENG;</p>",
+{
+"html": "<p>\u014a</p>"
+}
+],
+[
+"<p>&eng;</p>",
+{
+"html": "<p>\u014b</p>"
+}
+],
+[
+"<p>&ensp;</p>",
+{
+"html": "<p>\u2002</p>"
+}
+],
+[
+"<p>&Eogon;</p>",
+{
+"html": "<p>\u0118</p>"
+}
+],
+[
+"<p>&eogon;</p>",
+{
+"html": "<p>\u0119</p>"
+}
+],
+[
+"<p>&Eopf;</p>",
+{
+"html": "<p>\ud835\udd3c</p>"
+}
+],
+[
+"<p>&eopf;</p>",
+{
+"html": "<p>\ud835\udd56</p>"
+}
+],
+[
+"<p>&epar;</p>",
+{
+"html": "<p>\u22d5</p>"
+}
+],
+[
+"<p>&eparsl;</p>",
+{
+"html": "<p>\u29e3</p>"
+}
+],
+[
+"<p>&eplus;</p>",
+{
+"html": "<p>\u2a71</p>"
+}
+],
+[
+"<p>&epsi;</p>",
+{
+"html": "<p>\u03b5</p>"
+}
+],
+[
+"<p>&Epsilon;</p>",
+{
+"html": "<p>\u0395</p>"
+}
+],
+[
+"<p>&epsilon;</p>",
+{
+"html": "<p>\u03b5</p>"
+}
+],
+[
+"<p>&epsiv;</p>",
+{
+"html": "<p>\u03f5</p>"
+}
+],
+[
+"<p>&eqcirc;</p>",
+{
+"html": "<p>\u2256</p>"
+}
+],
+[
+"<p>&eqcolon;</p>",
+{
+"html": "<p>\u2255</p>"
+}
+],
+[
+"<p>&eqsim;</p>",
+{
+"html": "<p>\u2242</p>"
+}
+],
+[
+"<p>&eqslantgtr;</p>",
+{
+"html": "<p>\u2a96</p>"
+}
+],
+[
+"<p>&eqslantless;</p>",
+{
+"html": "<p>\u2a95</p>"
+}
+],
+[
+"<p>&Equal;</p>",
+{
+"html": "<p>\u2a75</p>"
+}
+],
+[
+"<p>&equals;</p>",
+{
+"html": "<p>=</p>"
+}
+],
+[
+"<p>&EqualTilde;</p>",
+{
+"html": "<p>\u2242</p>"
+}
+],
+[
+"<p>&equest;</p>",
+{
+"html": "<p>\u225f</p>"
+}
+],
+[
+"<p>&Equilibrium;</p>",
+{
+"html": "<p>\u21cc</p>"
+}
+],
+[
+"<p>&equiv;</p>",
+{
+"html": "<p>\u2261</p>"
+}
+],
+[
+"<p>&equivDD;</p>",
+{
+"html": "<p>\u2a78</p>"
+}
+],
+[
+"<p>&eqvparsl;</p>",
+{
+"html": "<p>\u29e5</p>"
+}
+],
+[
+"<p>&erarr;</p>",
+{
+"html": "<p>\u2971</p>"
+}
+],
+[
+"<p>&erDot;</p>",
+{
+"html": "<p>\u2253</p>"
+}
+],
+[
+"<p>&Escr;</p>",
+{
+"html": "<p>\u2130</p>"
+}
+],
+[
+"<p>&escr;</p>",
+{
+"html": "<p>\u212f</p>"
+}
+],
+[
+"<p>&esdot;</p>",
+{
+"html": "<p>\u2250</p>"
+}
+],
+[
+"<p>&Esim;</p>",
+{
+"html": "<p>\u2a73</p>"
+}
+],
+[
+"<p>&esim;</p>",
+{
+"html": "<p>\u2242</p>"
+}
+],
+[
+"<p>&Eta;</p>",
+{
+"html": "<p>\u0397</p>"
+}
+],
+[
+"<p>&eta;</p>",
+{
+"html": "<p>\u03b7</p>"
+}
+],
+[
+"<p>&ETH</p>",
+{
+"html": "<p>\u00d0</p>"
+}
+],
+[
+"<p>&eth</p>",
+{
+"html": "<p>\u00f0</p>"
+}
+],
+[
+"<p>&ETH;</p>",
+{
+"html": "<p>\u00d0</p>"
+}
+],
+[
+"<p>&eth;</p>",
+{
+"html": "<p>\u00f0</p>"
+}
+],
+[
+"<p>&Euml</p>",
+{
+"html": "<p>\u00cb</p>"
+}
+],
+[
+"<p>&euml</p>",
+{
+"html": "<p>\u00eb</p>"
+}
+],
+[
+"<p>&Euml;</p>",
+{
+"html": "<p>\u00cb</p>"
+}
+],
+[
+"<p>&euml;</p>",
+{
+"html": "<p>\u00eb</p>"
+}
+],
+[
+"<p>&euro;</p>",
+{
+"html": "<p>\u20ac</p>"
+}
+],
+[
+"<p>&excl;</p>",
+{
+"html": "<p>!</p>"
+}
+],
+[
+"<p>&exist;</p>",
+{
+"html": "<p>\u2203</p>"
+}
+],
+[
+"<p>&Exists;</p>",
+{
+"html": "<p>\u2203</p>"
+}
+],
+[
+"<p>&expectation;</p>",
+{
+"html": "<p>\u2130</p>"
+}
+],
+[
+"<p>&ExponentialE;</p>",
+{
+"html": "<p>\u2147</p>"
+}
+],
+[
+"<p>&exponentiale;</p>",
+{
+"html": "<p>\u2147</p>"
+}
+],
+[
+"<p>&fallingdotseq;</p>",
+{
+"html": "<p>\u2252</p>"
+}
+],
+[
+"<p>&Fcy;</p>",
+{
+"html": "<p>\u0424</p>"
+}
+],
+[
+"<p>&fcy;</p>",
+{
+"html": "<p>\u0444</p>"
+}
+],
+[
+"<p>&female;</p>",
+{
+"html": "<p>\u2640</p>"
+}
+],
+[
+"<p>&ffilig;</p>",
+{
+"html": "<p>\ufb03</p>"
+}
+],
+[
+"<p>&fflig;</p>",
+{
+"html": "<p>\ufb00</p>"
+}
+],
+[
+"<p>&ffllig;</p>",
+{
+"html": "<p>\ufb04</p>"
+}
+],
+[
+"<p>&Ffr;</p>",
+{
+"html": "<p>\ud835\udd09</p>"
+}
+],
+[
+"<p>&ffr;</p>",
+{
+"html": "<p>\ud835\udd23</p>"
+}
+],
+[
+"<p>&filig;</p>",
+{
+"html": "<p>\ufb01</p>"
+}
+],
+[
+"<p>&FilledSmallSquare;</p>",
+{
+"html": "<p>\u25fc</p>"
+}
+],
+[
+"<p>&FilledVerySmallSquare;</p>",
+{
+"html": "<p>\u25aa</p>"
+}
+],
+[
+"<p>&fjlig;</p>",
+{
+"html": "<p>fj</p>"
+}
+],
+[
+"<p>&flat;</p>",
+{
+"html": "<p>\u266d</p>"
+}
+],
+[
+"<p>&fllig;</p>",
+{
+"html": "<p>\ufb02</p>"
+}
+],
+[
+"<p>&fltns;</p>",
+{
+"html": "<p>\u25b1</p>"
+}
+],
+[
+"<p>&fnof;</p>",
+{
+"html": "<p>\u0192</p>"
+}
+],
+[
+"<p>&Fopf;</p>",
+{
+"html": "<p>\ud835\udd3d</p>"
+}
+],
+[
+"<p>&fopf;</p>",
+{
+"html": "<p>\ud835\udd57</p>"
+}
+],
+[
+"<p>&ForAll;</p>",
+{
+"html": "<p>\u2200</p>"
+}
+],
+[
+"<p>&forall;</p>",
+{
+"html": "<p>\u2200</p>"
+}
+],
+[
+"<p>&fork;</p>",
+{
+"html": "<p>\u22d4</p>"
+}
+],
+[
+"<p>&forkv;</p>",
+{
+"html": "<p>\u2ad9</p>"
+}
+],
+[
+"<p>&Fouriertrf;</p>",
+{
+"html": "<p>\u2131</p>"
+}
+],
+[
+"<p>&fpartint;</p>",
+{
+"html": "<p>\u2a0d</p>"
+}
+],
+[
+"<p>&frac12</p>",
+{
+"html": "<p>\u00bd</p>"
+}
+],
+[
+"<p>&frac12;</p>",
+{
+"html": "<p>\u00bd</p>"
+}
+],
+[
+"<p>&frac13;</p>",
+{
+"html": "<p>\u2153</p>"
+}
+],
+[
+"<p>&frac14</p>",
+{
+"html": "<p>\u00bc</p>"
+}
+],
+[
+"<p>&frac14;</p>",
+{
+"html": "<p>\u00bc</p>"
+}
+],
+[
+"<p>&frac15;</p>",
+{
+"html": "<p>\u2155</p>"
+}
+],
+[
+"<p>&frac16;</p>",
+{
+"html": "<p>\u2159</p>"
+}
+],
+[
+"<p>&frac18;</p>",
+{
+"html": "<p>\u215b</p>"
+}
+],
+[
+"<p>&frac23;</p>",
+{
+"html": "<p>\u2154</p>"
+}
+],
+[
+"<p>&frac25;</p>",
+{
+"html": "<p>\u2156</p>"
+}
+],
+[
+"<p>&frac34</p>",
+{
+"html": "<p>\u00be</p>"
+}
+],
+[
+"<p>&frac34;</p>",
+{
+"html": "<p>\u00be</p>"
+}
+],
+[
+"<p>&frac35;</p>",
+{
+"html": "<p>\u2157</p>"
+}
+],
+[
+"<p>&frac38;</p>",
+{
+"html": "<p>\u215c</p>"
+}
+],
+[
+"<p>&frac45;</p>",
+{
+"html": "<p>\u2158</p>"
+}
+],
+[
+"<p>&frac56;</p>",
+{
+"html": "<p>\u215a</p>"
+}
+],
+[
+"<p>&frac58;</p>",
+{
+"html": "<p>\u215d</p>"
+}
+],
+[
+"<p>&frac78;</p>",
+{
+"html": "<p>\u215e</p>"
+}
+],
+[
+"<p>&frasl;</p>",
+{
+"html": "<p>\u2044</p>"
+}
+],
+[
+"<p>&frown;</p>",
+{
+"html": "<p>\u2322</p>"
+}
+],
+[
+"<p>&Fscr;</p>",
+{
+"html": "<p>\u2131</p>"
+}
+],
+[
+"<p>&fscr;</p>",
+{
+"html": "<p>\ud835\udcbb</p>"
+}
+],
+[
+"<p>&gacute;</p>",
+{
+"html": "<p>\u01f5</p>"
+}
+],
+[
+"<p>&Gamma;</p>",
+{
+"html": "<p>\u0393</p>"
+}
+],
+[
+"<p>&gamma;</p>",
+{
+"html": "<p>\u03b3</p>"
+}
+],
+[
+"<p>&Gammad;</p>",
+{
+"html": "<p>\u03dc</p>"
+}
+],
+[
+"<p>&gammad;</p>",
+{
+"html": "<p>\u03dd</p>"
+}
+],
+[
+"<p>&gap;</p>",
+{
+"html": "<p>\u2a86</p>"
+}
+],
+[
+"<p>&Gbreve;</p>",
+{
+"html": "<p>\u011e</p>"
+}
+],
+[
+"<p>&gbreve;</p>",
+{
+"html": "<p>\u011f</p>"
+}
+],
+[
+"<p>&Gcedil;</p>",
+{
+"html": "<p>\u0122</p>"
+}
+],
+[
+"<p>&Gcirc;</p>",
+{
+"html": "<p>\u011c</p>"
+}
+],
+[
+"<p>&gcirc;</p>",
+{
+"html": "<p>\u011d</p>"
+}
+],
+[
+"<p>&Gcy;</p>",
+{
+"html": "<p>\u0413</p>"
+}
+],
+[
+"<p>&gcy;</p>",
+{
+"html": "<p>\u0433</p>"
+}
+],
+[
+"<p>&Gdot;</p>",
+{
+"html": "<p>\u0120</p>"
+}
+],
+[
+"<p>&gdot;</p>",
+{
+"html": "<p>\u0121</p>"
+}
+],
+[
+"<p>&gE;</p>",
+{
+"html": "<p>\u2267</p>"
+}
+],
+[
+"<p>&ge;</p>",
+{
+"html": "<p>\u2265</p>"
+}
+],
+[
+"<p>&gEl;</p>",
+{
+"html": "<p>\u2a8c</p>"
+}
+],
+[
+"<p>&gel;</p>",
+{
+"html": "<p>\u22db</p>"
+}
+],
+[
+"<p>&geq;</p>",
+{
+"html": "<p>\u2265</p>"
+}
+],
+[
+"<p>&geqq;</p>",
+{
+"html": "<p>\u2267</p>"
+}
+],
+[
+"<p>&geqslant;</p>",
+{
+"html": "<p>\u2a7e</p>"
+}
+],
+[
+"<p>&ges;</p>",
+{
+"html": "<p>\u2a7e</p>"
+}
+],
+[
+"<p>&gescc;</p>",
+{
+"html": "<p>\u2aa9</p>"
+}
+],
+[
+"<p>&gesdot;</p>",
+{
+"html": "<p>\u2a80</p>"
+}
+],
+[
+"<p>&gesdoto;</p>",
+{
+"html": "<p>\u2a82</p>"
+}
+],
+[
+"<p>&gesdotol;</p>",
+{
+"html": "<p>\u2a84</p>"
+}
+],
+[
+"<p>&gesl;</p>",
+{
+"html": "<p>\u22db\ufe00</p>"
+}
+],
+[
+"<p>&gesles;</p>",
+{
+"html": "<p>\u2a94</p>"
+}
+],
+[
+"<p>&Gfr;</p>",
+{
+"html": "<p>\ud835\udd0a</p>"
+}
+],
+[
+"<p>&gfr;</p>",
+{
+"html": "<p>\ud835\udd24</p>"
+}
+],
+[
+"<p>&Gg;</p>",
+{
+"html": "<p>\u22d9</p>"
+}
+],
+[
+"<p>&gg;</p>",
+{
+"html": "<p>\u226b</p>"
+}
+],
+[
+"<p>&ggg;</p>",
+{
+"html": "<p>\u22d9</p>"
+}
+],
+[
+"<p>&gimel;</p>",
+{
+"html": "<p>\u2137</p>"
+}
+],
+[
+"<p>&GJcy;</p>",
+{
+"html": "<p>\u0403</p>"
+}
+],
+[
+"<p>&gjcy;</p>",
+{
+"html": "<p>\u0453</p>"
+}
+],
+[
+"<p>&gl;</p>",
+{
+"html": "<p>\u2277</p>"
+}
+],
+[
+"<p>&gla;</p>",
+{
+"html": "<p>\u2aa5</p>"
+}
+],
+[
+"<p>&glE;</p>",
+{
+"html": "<p>\u2a92</p>"
+}
+],
+[
+"<p>&glj;</p>",
+{
+"html": "<p>\u2aa4</p>"
+}
+],
+[
+"<p>&gnap;</p>",
+{
+"html": "<p>\u2a8a</p>"
+}
+],
+[
+"<p>&gnapprox;</p>",
+{
+"html": "<p>\u2a8a</p>"
+}
+],
+[
+"<p>&gnE;</p>",
+{
+"html": "<p>\u2269</p>"
+}
+],
+[
+"<p>&gne;</p>",
+{
+"html": "<p>\u2a88</p>"
+}
+],
+[
+"<p>&gneq;</p>",
+{
+"html": "<p>\u2a88</p>"
+}
+],
+[
+"<p>&gneqq;</p>",
+{
+"html": "<p>\u2269</p>"
+}
+],
+[
+"<p>&gnsim;</p>",
+{
+"html": "<p>\u22e7</p>"
+}
+],
+[
+"<p>&Gopf;</p>",
+{
+"html": "<p>\ud835\udd3e</p>"
+}
+],
+[
+"<p>&gopf;</p>",
+{
+"html": "<p>\ud835\udd58</p>"
+}
+],
+[
+"<p>&grave;</p>",
+{
+"html": "<p>`</p>"
+}
+],
+[
+"<p>&GreaterEqual;</p>",
+{
+"html": "<p>\u2265</p>"
+}
+],
+[
+"<p>&GreaterEqualLess;</p>",
+{
+"html": "<p>\u22db</p>"
+}
+],
+[
+"<p>&GreaterFullEqual;</p>",
+{
+"html": "<p>\u2267</p>"
+}
+],
+[
+"<p>&GreaterGreater;</p>",
+{
+"html": "<p>\u2aa2</p>"
+}
+],
+[
+"<p>&GreaterLess;</p>",
+{
+"html": "<p>\u2277</p>"
+}
+],
+[
+"<p>&GreaterSlantEqual;</p>",
+{
+"html": "<p>\u2a7e</p>"
+}
+],
+[
+"<p>&GreaterTilde;</p>",
+{
+"html": "<p>\u2273</p>"
+}
+],
+[
+"<p>&Gscr;</p>",
+{
+"html": "<p>\ud835\udca2</p>"
+}
+],
+[
+"<p>&gscr;</p>",
+{
+"html": "<p>\u210a</p>"
+}
+],
+[
+"<p>&gsim;</p>",
+{
+"html": "<p>\u2273</p>"
+}
+],
+[
+"<p>&gsime;</p>",
+{
+"html": "<p>\u2a8e</p>"
+}
+],
+[
+"<p>&gsiml;</p>",
+{
+"html": "<p>\u2a90</p>"
+}
+],
+[
+"<p>&GT</p>",
+{
+"html": "<p>&gt;</p>"
+}
+],
+[
+"<p>&gt</p>",
+{
+"html": "<p>&gt;</p>"
+}
+],
+[
+"<p>&GT;</p>",
+{
+"html": "<p>&gt;</p>"
+}
+],
+[
+"<p>&Gt;</p>",
+{
+"html": "<p>\u226b</p>"
+}
+],
+[
+"<p>&gt;</p>",
+{
+"html": "<p>&gt;</p>"
+}
+],
+[
+"<p>&gtcc;</p>",
+{
+"html": "<p>\u2aa7</p>"
+}
+],
+[
+"<p>&gtcir;</p>",
+{
+"html": "<p>\u2a7a</p>"
+}
+],
+[
+"<p>&gtdot;</p>",
+{
+"html": "<p>\u22d7</p>"
+}
+],
+[
+"<p>&gtlPar;</p>",
+{
+"html": "<p>\u2995</p>"
+}
+],
+[
+"<p>&gtquest;</p>",
+{
+"html": "<p>\u2a7c</p>"
+}
+],
+[
+"<p>&gtrapprox;</p>",
+{
+"html": "<p>\u2a86</p>"
+}
+],
+[
+"<p>&gtrarr;</p>",
+{
+"html": "<p>\u2978</p>"
+}
+],
+[
+"<p>&gtrdot;</p>",
+{
+"html": "<p>\u22d7</p>"
+}
+],
+[
+"<p>&gtreqless;</p>",
+{
+"html": "<p>\u22db</p>"
+}
+],
+[
+"<p>&gtreqqless;</p>",
+{
+"html": "<p>\u2a8c</p>"
+}
+],
+[
+"<p>&gtrless;</p>",
+{
+"html": "<p>\u2277</p>"
+}
+],
+[
+"<p>&gtrsim;</p>",
+{
+"html": "<p>\u2273</p>"
+}
+],
+[
+"<p>&gvertneqq;</p>",
+{
+"html": "<p>\u2269\ufe00</p>"
+}
+],
+[
+"<p>&gvnE;</p>",
+{
+"html": "<p>\u2269\ufe00</p>"
+}
+],
+[
+"<p>&Hacek;</p>",
+{
+"html": "<p>\u02c7</p>"
+}
+],
+[
+"<p>&hairsp;</p>",
+{
+"html": "<p>\u200a</p>"
+}
+],
+[
+"<p>&half;</p>",
+{
+"html": "<p>\u00bd</p>"
+}
+],
+[
+"<p>&hamilt;</p>",
+{
+"html": "<p>\u210b</p>"
+}
+],
+[
+"<p>&HARDcy;</p>",
+{
+"html": "<p>\u042a</p>"
+}
+],
+[
+"<p>&hardcy;</p>",
+{
+"html": "<p>\u044a</p>"
+}
+],
+[
+"<p>&hArr;</p>",
+{
+"html": "<p>\u21d4</p>"
+}
+],
+[
+"<p>&harr;</p>",
+{
+"html": "<p>\u2194</p>"
+}
+],
+[
+"<p>&harrcir;</p>",
+{
+"html": "<p>\u2948</p>"
+}
+],
+[
+"<p>&harrw;</p>",
+{
+"html": "<p>\u21ad</p>"
+}
+],
+[
+"<p>&Hat;</p>",
+{
+"html": "<p>^</p>"
+}
+],
+[
+"<p>&hbar;</p>",
+{
+"html": "<p>\u210f</p>"
+}
+],
+[
+"<p>&Hcirc;</p>",
+{
+"html": "<p>\u0124</p>"
+}
+],
+[
+"<p>&hcirc;</p>",
+{
+"html": "<p>\u0125</p>"
+}
+],
+[
+"<p>&hearts;</p>",
+{
+"html": "<p>\u2665</p>"
+}
+],
+[
+"<p>&heartsuit;</p>",
+{
+"html": "<p>\u2665</p>"
+}
+],
+[
+"<p>&hellip;</p>",
+{
+"html": "<p>\u2026</p>"
+}
+],
+[
+"<p>&hercon;</p>",
+{
+"html": "<p>\u22b9</p>"
+}
+],
+[
+"<p>&Hfr;</p>",
+{
+"html": "<p>\u210c</p>"
+}
+],
+[
+"<p>&hfr;</p>",
+{
+"html": "<p>\ud835\udd25</p>"
+}
+],
+[
+"<p>&HilbertSpace;</p>",
+{
+"html": "<p>\u210b</p>"
+}
+],
+[
+"<p>&hksearow;</p>",
+{
+"html": "<p>\u2925</p>"
+}
+],
+[
+"<p>&hkswarow;</p>",
+{
+"html": "<p>\u2926</p>"
+}
+],
+[
+"<p>&hoarr;</p>",
+{
+"html": "<p>\u21ff</p>"
+}
+],
+[
+"<p>&homtht;</p>",
+{
+"html": "<p>\u223b</p>"
+}
+],
+[
+"<p>&hookleftarrow;</p>",
+{
+"html": "<p>\u21a9</p>"
+}
+],
+[
+"<p>&hookrightarrow;</p>",
+{
+"html": "<p>\u21aa</p>"
+}
+],
+[
+"<p>&Hopf;</p>",
+{
+"html": "<p>\u210d</p>"
+}
+],
+[
+"<p>&hopf;</p>",
+{
+"html": "<p>\ud835\udd59</p>"
+}
+],
+[
+"<p>&horbar;</p>",
+{
+"html": "<p>\u2015</p>"
+}
+],
+[
+"<p>&HorizontalLine;</p>",
+{
+"html": "<p>\u2500</p>"
+}
+],
+[
+"<p>&Hscr;</p>",
+{
+"html": "<p>\u210b</p>"
+}
+],
+[
+"<p>&hscr;</p>",
+{
+"html": "<p>\ud835\udcbd</p>"
+}
+],
+[
+"<p>&hslash;</p>",
+{
+"html": "<p>\u210f</p>"
+}
+],
+[
+"<p>&Hstrok;</p>",
+{
+"html": "<p>\u0126</p>"
+}
+],
+[
+"<p>&hstrok;</p>",
+{
+"html": "<p>\u0127</p>"
+}
+],
+[
+"<p>&HumpDownHump;</p>",
+{
+"html": "<p>\u224e</p>"
+}
+],
+[
+"<p>&HumpEqual;</p>",
+{
+"html": "<p>\u224f</p>"
+}
+],
+[
+"<p>&hybull;</p>",
+{
+"html": "<p>\u2043</p>"
+}
+],
+[
+"<p>&hyphen;</p>",
+{
+"html": "<p>\u2010</p>"
+}
+],
+[
+"<p>&Iacute</p>",
+{
+"html": "<p>\u00cd</p>"
+}
+],
+[
+"<p>&iacute</p>",
+{
+"html": "<p>\u00ed</p>"
+}
+],
+[
+"<p>&Iacute;</p>",
+{
+"html": "<p>\u00cd</p>"
+}
+],
+[
+"<p>&iacute;</p>",
+{
+"html": "<p>\u00ed</p>"
+}
+],
+[
+"<p>&ic;</p>",
+{
+"html": "<p>\u2063</p>"
+}
+],
+[
+"<p>&Icirc</p>",
+{
+"html": "<p>\u00ce</p>"
+}
+],
+[
+"<p>&icirc</p>",
+{
+"html": "<p>\u00ee</p>"
+}
+],
+[
+"<p>&Icirc;</p>",
+{
+"html": "<p>\u00ce</p>"
+}
+],
+[
+"<p>&icirc;</p>",
+{
+"html": "<p>\u00ee</p>"
+}
+],
+[
+"<p>&Icy;</p>",
+{
+"html": "<p>\u0418</p>"
+}
+],
+[
+"<p>&icy;</p>",
+{
+"html": "<p>\u0438</p>"
+}
+],
+[
+"<p>&Idot;</p>",
+{
+"html": "<p>\u0130</p>"
+}
+],
+[
+"<p>&IEcy;</p>",
+{
+"html": "<p>\u0415</p>"
+}
+],
+[
+"<p>&iecy;</p>",
+{
+"html": "<p>\u0435</p>"
+}
+],
+[
+"<p>&iexcl</p>",
+{
+"html": "<p>\u00a1</p>"
+}
+],
+[
+"<p>&iexcl;</p>",
+{
+"html": "<p>\u00a1</p>"
+}
+],
+[
+"<p>&iff;</p>",
+{
+"html": "<p>\u21d4</p>"
+}
+],
+[
+"<p>&Ifr;</p>",
+{
+"html": "<p>\u2111</p>"
+}
+],
+[
+"<p>&ifr;</p>",
+{
+"html": "<p>\ud835\udd26</p>"
+}
+],
+[
+"<p>&Igrave</p>",
+{
+"html": "<p>\u00cc</p>"
+}
+],
+[
+"<p>&igrave</p>",
+{
+"html": "<p>\u00ec</p>"
+}
+],
+[
+"<p>&Igrave;</p>",
+{
+"html": "<p>\u00cc</p>"
+}
+],
+[
+"<p>&igrave;</p>",
+{
+"html": "<p>\u00ec</p>"
+}
+],
+[
+"<p>&ii;</p>",
+{
+"html": "<p>\u2148</p>"
+}
+],
+[
+"<p>&iiiint;</p>",
+{
+"html": "<p>\u2a0c</p>"
+}
+],
+[
+"<p>&iiint;</p>",
+{
+"html": "<p>\u222d</p>"
+}
+],
+[
+"<p>&iinfin;</p>",
+{
+"html": "<p>\u29dc</p>"
+}
+],
+[
+"<p>&iiota;</p>",
+{
+"html": "<p>\u2129</p>"
+}
+],
+[
+"<p>&IJlig;</p>",
+{
+"html": "<p>\u0132</p>"
+}
+],
+[
+"<p>&ijlig;</p>",
+{
+"html": "<p>\u0133</p>"
+}
+],
+[
+"<p>&Im;</p>",
+{
+"html": "<p>\u2111</p>"
+}
+],
+[
+"<p>&Imacr;</p>",
+{
+"html": "<p>\u012a</p>"
+}
+],
+[
+"<p>&imacr;</p>",
+{
+"html": "<p>\u012b</p>"
+}
+],
+[
+"<p>&image;</p>",
+{
+"html": "<p>\u2111</p>"
+}
+],
+[
+"<p>&ImaginaryI;</p>",
+{
+"html": "<p>\u2148</p>"
+}
+],
+[
+"<p>&imagline;</p>",
+{
+"html": "<p>\u2110</p>"
+}
+],
+[
+"<p>&imagpart;</p>",
+{
+"html": "<p>\u2111</p>"
+}
+],
+[
+"<p>&imath;</p>",
+{
+"html": "<p>\u0131</p>"
+}
+],
+[
+"<p>&imof;</p>",
+{
+"html": "<p>\u22b7</p>"
+}
+],
+[
+"<p>&imped;</p>",
+{
+"html": "<p>\u01b5</p>"
+}
+],
+[
+"<p>&Implies;</p>",
+{
+"html": "<p>\u21d2</p>"
+}
+],
+[
+"<p>&in;</p>",
+{
+"html": "<p>\u2208</p>"
+}
+],
+[
+"<p>&incare;</p>",
+{
+"html": "<p>\u2105</p>"
+}
+],
+[
+"<p>&infin;</p>",
+{
+"html": "<p>\u221e</p>"
+}
+],
+[
+"<p>&infintie;</p>",
+{
+"html": "<p>\u29dd</p>"
+}
+],
+[
+"<p>&inodot;</p>",
+{
+"html": "<p>\u0131</p>"
+}
+],
+[
+"<p>&Int;</p>",
+{
+"html": "<p>\u222c</p>"
+}
+],
+[
+"<p>&int;</p>",
+{
+"html": "<p>\u222b</p>"
+}
+],
+[
+"<p>&intcal;</p>",
+{
+"html": "<p>\u22ba</p>"
+}
+],
+[
+"<p>&integers;</p>",
+{
+"html": "<p>\u2124</p>"
+}
+],
+[
+"<p>&Integral;</p>",
+{
+"html": "<p>\u222b</p>"
+}
+],
+[
+"<p>&intercal;</p>",
+{
+"html": "<p>\u22ba</p>"
+}
+],
+[
+"<p>&Intersection;</p>",
+{
+"html": "<p>\u22c2</p>"
+}
+],
+[
+"<p>&intlarhk;</p>",
+{
+"html": "<p>\u2a17</p>"
+}
+],
+[
+"<p>&intprod;</p>",
+{
+"html": "<p>\u2a3c</p>"
+}
+],
+[
+"<p>&InvisibleComma;</p>",
+{
+"html": "<p>\u2063</p>"
+}
+],
+[
+"<p>&InvisibleTimes;</p>",
+{
+"html": "<p>\u2062</p>"
+}
+],
+[
+"<p>&IOcy;</p>",
+{
+"html": "<p>\u0401</p>"
+}
+],
+[
+"<p>&iocy;</p>",
+{
+"html": "<p>\u0451</p>"
+}
+],
+[
+"<p>&Iogon;</p>",
+{
+"html": "<p>\u012e</p>"
+}
+],
+[
+"<p>&iogon;</p>",
+{
+"html": "<p>\u012f</p>"
+}
+],
+[
+"<p>&Iopf;</p>",
+{
+"html": "<p>\ud835\udd40</p>"
+}
+],
+[
+"<p>&iopf;</p>",
+{
+"html": "<p>\ud835\udd5a</p>"
+}
+],
+[
+"<p>&Iota;</p>",
+{
+"html": "<p>\u0399</p>"
+}
+],
+[
+"<p>&iota;</p>",
+{
+"html": "<p>\u03b9</p>"
+}
+],
+[
+"<p>&iprod;</p>",
+{
+"html": "<p>\u2a3c</p>"
+}
+],
+[
+"<p>&iquest</p>",
+{
+"html": "<p>\u00bf</p>"
+}
+],
+[
+"<p>&iquest;</p>",
+{
+"html": "<p>\u00bf</p>"
+}
+],
+[
+"<p>&Iscr;</p>",
+{
+"html": "<p>\u2110</p>"
+}
+],
+[
+"<p>&iscr;</p>",
+{
+"html": "<p>\ud835\udcbe</p>"
+}
+],
+[
+"<p>&isin;</p>",
+{
+"html": "<p>\u2208</p>"
+}
+],
+[
+"<p>&isindot;</p>",
+{
+"html": "<p>\u22f5</p>"
+}
+],
+[
+"<p>&isinE;</p>",
+{
+"html": "<p>\u22f9</p>"
+}
+],
+[
+"<p>&isins;</p>",
+{
+"html": "<p>\u22f4</p>"
+}
+],
+[
+"<p>&isinsv;</p>",
+{
+"html": "<p>\u22f3</p>"
+}
+],
+[
+"<p>&isinv;</p>",
+{
+"html": "<p>\u2208</p>"
+}
+],
+[
+"<p>&it;</p>",
+{
+"html": "<p>\u2062</p>"
+}
+],
+[
+"<p>&Itilde;</p>",
+{
+"html": "<p>\u0128</p>"
+}
+],
+[
+"<p>&itilde;</p>",
+{
+"html": "<p>\u0129</p>"
+}
+],
+[
+"<p>&Iukcy;</p>",
+{
+"html": "<p>\u0406</p>"
+}
+],
+[
+"<p>&iukcy;</p>",
+{
+"html": "<p>\u0456</p>"
+}
+],
+[
+"<p>&Iuml</p>",
+{
+"html": "<p>\u00cf</p>"
+}
+],
+[
+"<p>&iuml</p>",
+{
+"html": "<p>\u00ef</p>"
+}
+],
+[
+"<p>&Iuml;</p>",
+{
+"html": "<p>\u00cf</p>"
+}
+],
+[
+"<p>&iuml;</p>",
+{
+"html": "<p>\u00ef</p>"
+}
+],
+[
+"<p>&Jcirc;</p>",
+{
+"html": "<p>\u0134</p>"
+}
+],
+[
+"<p>&jcirc;</p>",
+{
+"html": "<p>\u0135</p>"
+}
+],
+[
+"<p>&Jcy;</p>",
+{
+"html": "<p>\u0419</p>"
+}
+],
+[
+"<p>&jcy;</p>",
+{
+"html": "<p>\u0439</p>"
+}
+],
+[
+"<p>&Jfr;</p>",
+{
+"html": "<p>\ud835\udd0d</p>"
+}
+],
+[
+"<p>&jfr;</p>",
+{
+"html": "<p>\ud835\udd27</p>"
+}
+],
+[
+"<p>&jmath;</p>",
+{
+"html": "<p>\u0237</p>"
+}
+],
+[
+"<p>&Jopf;</p>",
+{
+"html": "<p>\ud835\udd41</p>"
+}
+],
+[
+"<p>&jopf;</p>",
+{
+"html": "<p>\ud835\udd5b</p>"
+}
+],
+[
+"<p>&Jscr;</p>",
+{
+"html": "<p>\ud835\udca5</p>"
+}
+],
+[
+"<p>&jscr;</p>",
+{
+"html": "<p>\ud835\udcbf</p>"
+}
+],
+[
+"<p>&Jsercy;</p>",
+{
+"html": "<p>\u0408</p>"
+}
+],
+[
+"<p>&jsercy;</p>",
+{
+"html": "<p>\u0458</p>"
+}
+],
+[
+"<p>&Jukcy;</p>",
+{
+"html": "<p>\u0404</p>"
+}
+],
+[
+"<p>&jukcy;</p>",
+{
+"html": "<p>\u0454</p>"
+}
+],
+[
+"<p>&Kappa;</p>",
+{
+"html": "<p>\u039a</p>"
+}
+],
+[
+"<p>&kappa;</p>",
+{
+"html": "<p>\u03ba</p>"
+}
+],
+[
+"<p>&kappav;</p>",
+{
+"html": "<p>\u03f0</p>"
+}
+],
+[
+"<p>&Kcedil;</p>",
+{
+"html": "<p>\u0136</p>"
+}
+],
+[
+"<p>&kcedil;</p>",
+{
+"html": "<p>\u0137</p>"
+}
+],
+[
+"<p>&Kcy;</p>",
+{
+"html": "<p>\u041a</p>"
+}
+],
+[
+"<p>&kcy;</p>",
+{
+"html": "<p>\u043a</p>"
+}
+],
+[
+"<p>&Kfr;</p>",
+{
+"html": "<p>\ud835\udd0e</p>"
+}
+],
+[
+"<p>&kfr;</p>",
+{
+"html": "<p>\ud835\udd28</p>"
+}
+],
+[
+"<p>&kgreen;</p>",
+{
+"html": "<p>\u0138</p>"
+}
+],
+[
+"<p>&KHcy;</p>",
+{
+"html": "<p>\u0425</p>"
+}
+],
+[
+"<p>&khcy;</p>",
+{
+"html": "<p>\u0445</p>"
+}
+],
+[
+"<p>&KJcy;</p>",
+{
+"html": "<p>\u040c</p>"
+}
+],
+[
+"<p>&kjcy;</p>",
+{
+"html": "<p>\u045c</p>"
+}
+],
+[
+"<p>&Kopf;</p>",
+{
+"html": "<p>\ud835\udd42</p>"
+}
+],
+[
+"<p>&kopf;</p>",
+{
+"html": "<p>\ud835\udd5c</p>"
+}
+],
+[
+"<p>&Kscr;</p>",
+{
+"html": "<p>\ud835\udca6</p>"
+}
+],
+[
+"<p>&kscr;</p>",
+{
+"html": "<p>\ud835\udcc0</p>"
+}
+],
+[
+"<p>&lAarr;</p>",
+{
+"html": "<p>\u21da</p>"
+}
+],
+[
+"<p>&Lacute;</p>",
+{
+"html": "<p>\u0139</p>"
+}
+],
+[
+"<p>&lacute;</p>",
+{
+"html": "<p>\u013a</p>"
+}
+],
+[
+"<p>&laemptyv;</p>",
+{
+"html": "<p>\u29b4</p>"
+}
+],
+[
+"<p>&lagran;</p>",
+{
+"html": "<p>\u2112</p>"
+}
+],
+[
+"<p>&Lambda;</p>",
+{
+"html": "<p>\u039b</p>"
+}
+],
+[
+"<p>&lambda;</p>",
+{
+"html": "<p>\u03bb</p>"
+}
+],
+[
+"<p>&Lang;</p>",
+{
+"html": "<p>\u27ea</p>"
+}
+],
+[
+"<p>&lang;</p>",
+{
+"html": "<p>\u27e8</p>"
+}
+],
+[
+"<p>&langd;</p>",
+{
+"html": "<p>\u2991</p>"
+}
+],
+[
+"<p>&langle;</p>",
+{
+"html": "<p>\u27e8</p>"
+}
+],
+[
+"<p>&lap;</p>",
+{
+"html": "<p>\u2a85</p>"
+}
+],
+[
+"<p>&Laplacetrf;</p>",
+{
+"html": "<p>\u2112</p>"
+}
+],
+[
+"<p>&laquo</p>",
+{
+"html": "<p>\u00ab</p>"
+}
+],
+[
+"<p>&laquo;</p>",
+{
+"html": "<p>\u00ab</p>"
+}
+],
+[
+"<p>&Larr;</p>",
+{
+"html": "<p>\u219e</p>"
+}
+],
+[
+"<p>&lArr;</p>",
+{
+"html": "<p>\u21d0</p>"
+}
+],
+[
+"<p>&larr;</p>",
+{
+"html": "<p>\u2190</p>"
+}
+],
+[
+"<p>&larrb;</p>",
+{
+"html": "<p>\u21e4</p>"
+}
+],
+[
+"<p>&larrbfs;</p>",
+{
+"html": "<p>\u291f</p>"
+}
+],
+[
+"<p>&larrfs;</p>",
+{
+"html": "<p>\u291d</p>"
+}
+],
+[
+"<p>&larrhk;</p>",
+{
+"html": "<p>\u21a9</p>"
+}
+],
+[
+"<p>&larrlp;</p>",
+{
+"html": "<p>\u21ab</p>"
+}
+],
+[
+"<p>&larrpl;</p>",
+{
+"html": "<p>\u2939</p>"
+}
+],
+[
+"<p>&larrsim;</p>",
+{
+"html": "<p>\u2973</p>"
+}
+],
+[
+"<p>&larrtl;</p>",
+{
+"html": "<p>\u21a2</p>"
+}
+],
+[
+"<p>&lat;</p>",
+{
+"html": "<p>\u2aab</p>"
+}
+],
+[
+"<p>&lAtail;</p>",
+{
+"html": "<p>\u291b</p>"
+}
+],
+[
+"<p>&latail;</p>",
+{
+"html": "<p>\u2919</p>"
+}
+],
+[
+"<p>&late;</p>",
+{
+"html": "<p>\u2aad</p>"
+}
+],
+[
+"<p>&lates;</p>",
+{
+"html": "<p>\u2aad\ufe00</p>"
+}
+],
+[
+"<p>&lBarr;</p>",
+{
+"html": "<p>\u290e</p>"
+}
+],
+[
+"<p>&lbarr;</p>",
+{
+"html": "<p>\u290c</p>"
+}
+],
+[
+"<p>&lbbrk;</p>",
+{
+"html": "<p>\u2772</p>"
+}
+],
+[
+"<p>&lbrace;</p>",
+{
+"html": "<p>{</p>"
+}
+],
+[
+"<p>&lbrack;</p>",
+{
+"html": "<p>[</p>"
+}
+],
+[
+"<p>&lbrke;</p>",
+{
+"html": "<p>\u298b</p>"
+}
+],
+[
+"<p>&lbrksld;</p>",
+{
+"html": "<p>\u298f</p>"
+}
+],
+[
+"<p>&lbrkslu;</p>",
+{
+"html": "<p>\u298d</p>"
+}
+],
+[
+"<p>&Lcaron;</p>",
+{
+"html": "<p>\u013d</p>"
+}
+],
+[
+"<p>&lcaron;</p>",
+{
+"html": "<p>\u013e</p>"
+}
+],
+[
+"<p>&Lcedil;</p>",
+{
+"html": "<p>\u013b</p>"
+}
+],
+[
+"<p>&lcedil;</p>",
+{
+"html": "<p>\u013c</p>"
+}
+],
+[
+"<p>&lceil;</p>",
+{
+"html": "<p>\u2308</p>"
+}
+],
+[
+"<p>&lcub;</p>",
+{
+"html": "<p>{</p>"
+}
+],
+[
+"<p>&Lcy;</p>",
+{
+"html": "<p>\u041b</p>"
+}
+],
+[
+"<p>&lcy;</p>",
+{
+"html": "<p>\u043b</p>"
+}
+],
+[
+"<p>&ldca;</p>",
+{
+"html": "<p>\u2936</p>"
+}
+],
+[
+"<p>&ldquo;</p>",
+{
+"html": "<p>\u201c</p>"
+}
+],
+[
+"<p>&ldquor;</p>",
+{
+"html": "<p>\u201e</p>"
+}
+],
+[
+"<p>&ldrdhar;</p>",
+{
+"html": "<p>\u2967</p>"
+}
+],
+[
+"<p>&ldrushar;</p>",
+{
+"html": "<p>\u294b</p>"
+}
+],
+[
+"<p>&ldsh;</p>",
+{
+"html": "<p>\u21b2</p>"
+}
+],
+[
+"<p>&lE;</p>",
+{
+"html": "<p>\u2266</p>"
+}
+],
+[
+"<p>&le;</p>",
+{
+"html": "<p>\u2264</p>"
+}
+],
+[
+"<p>&LeftAngleBracket;</p>",
+{
+"html": "<p>\u27e8</p>"
+}
+],
+[
+"<p>&LeftArrow;</p>",
+{
+"html": "<p>\u2190</p>"
+}
+],
+[
+"<p>&Leftarrow;</p>",
+{
+"html": "<p>\u21d0</p>"
+}
+],
+[
+"<p>&leftarrow;</p>",
+{
+"html": "<p>\u2190</p>"
+}
+],
+[
+"<p>&LeftArrowBar;</p>",
+{
+"html": "<p>\u21e4</p>"
+}
+],
+[
+"<p>&LeftArrowRightArrow;</p>",
+{
+"html": "<p>\u21c6</p>"
+}
+],
+[
+"<p>&leftarrowtail;</p>",
+{
+"html": "<p>\u21a2</p>"
+}
+],
+[
+"<p>&LeftCeiling;</p>",
+{
+"html": "<p>\u2308</p>"
+}
+],
+[
+"<p>&LeftDoubleBracket;</p>",
+{
+"html": "<p>\u27e6</p>"
+}
+],
+[
+"<p>&LeftDownTeeVector;</p>",
+{
+"html": "<p>\u2961</p>"
+}
+],
+[
+"<p>&LeftDownVector;</p>",
+{
+"html": "<p>\u21c3</p>"
+}
+],
+[
+"<p>&LeftDownVectorBar;</p>",
+{
+"html": "<p>\u2959</p>"
+}
+],
+[
+"<p>&LeftFloor;</p>",
+{
+"html": "<p>\u230a</p>"
+}
+],
+[
+"<p>&leftharpoondown;</p>",
+{
+"html": "<p>\u21bd</p>"
+}
+],
+[
+"<p>&leftharpoonup;</p>",
+{
+"html": "<p>\u21bc</p>"
+}
+],
+[
+"<p>&leftleftarrows;</p>",
+{
+"html": "<p>\u21c7</p>"
+}
+],
+[
+"<p>&LeftRightArrow;</p>",
+{
+"html": "<p>\u2194</p>"
+}
+],
+[
+"<p>&Leftrightarrow;</p>",
+{
+"html": "<p>\u21d4</p>"
+}
+],
+[
+"<p>&leftrightarrow;</p>",
+{
+"html": "<p>\u2194</p>"
+}
+],
+[
+"<p>&leftrightarrows;</p>",
+{
+"html": "<p>\u21c6</p>"
+}
+],
+[
+"<p>&leftrightharpoons;</p>",
+{
+"html": "<p>\u21cb</p>"
+}
+],
+[
+"<p>&leftrightsquigarrow;</p>",
+{
+"html": "<p>\u21ad</p>"
+}
+],
+[
+"<p>&LeftRightVector;</p>",
+{
+"html": "<p>\u294e</p>"
+}
+],
+[
+"<p>&LeftTee;</p>",
+{
+"html": "<p>\u22a3</p>"
+}
+],
+[
+"<p>&LeftTeeArrow;</p>",
+{
+"html": "<p>\u21a4</p>"
+}
+],
+[
+"<p>&LeftTeeVector;</p>",
+{
+"html": "<p>\u295a</p>"
+}
+],
+[
+"<p>&leftthreetimes;</p>",
+{
+"html": "<p>\u22cb</p>"
+}
+],
+[
+"<p>&LeftTriangle;</p>",
+{
+"html": "<p>\u22b2</p>"
+}
+],
+[
+"<p>&LeftTriangleBar;</p>",
+{
+"html": "<p>\u29cf</p>"
+}
+],
+[
+"<p>&LeftTriangleEqual;</p>",
+{
+"html": "<p>\u22b4</p>"
+}
+],
+[
+"<p>&LeftUpDownVector;</p>",
+{
+"html": "<p>\u2951</p>"
+}
+],
+[
+"<p>&LeftUpTeeVector;</p>",
+{
+"html": "<p>\u2960</p>"
+}
+],
+[
+"<p>&LeftUpVector;</p>",
+{
+"html": "<p>\u21bf</p>"
+}
+],
+[
+"<p>&LeftUpVectorBar;</p>",
+{
+"html": "<p>\u2958</p>"
+}
+],
+[
+"<p>&LeftVector;</p>",
+{
+"html": "<p>\u21bc</p>"
+}
+],
+[
+"<p>&LeftVectorBar;</p>",
+{
+"html": "<p>\u2952</p>"
+}
+],
+[
+"<p>&lEg;</p>",
+{
+"html": "<p>\u2a8b</p>"
+}
+],
+[
+"<p>&leg;</p>",
+{
+"html": "<p>\u22da</p>"
+}
+],
+[
+"<p>&leq;</p>",
+{
+"html": "<p>\u2264</p>"
+}
+],
+[
+"<p>&leqq;</p>",
+{
+"html": "<p>\u2266</p>"
+}
+],
+[
+"<p>&leqslant;</p>",
+{
+"html": "<p>\u2a7d</p>"
+}
+],
+[
+"<p>&les;</p>",
+{
+"html": "<p>\u2a7d</p>"
+}
+],
+[
+"<p>&lescc;</p>",
+{
+"html": "<p>\u2aa8</p>"
+}
+],
+[
+"<p>&lesdot;</p>",
+{
+"html": "<p>\u2a7f</p>"
+}
+],
+[
+"<p>&lesdoto;</p>",
+{
+"html": "<p>\u2a81</p>"
+}
+],
+[
+"<p>&lesdotor;</p>",
+{
+"html": "<p>\u2a83</p>"
+}
+],
+[
+"<p>&lesg;</p>",
+{
+"html": "<p>\u22da\ufe00</p>"
+}
+],
+[
+"<p>&lesges;</p>",
+{
+"html": "<p>\u2a93</p>"
+}
+],
+[
+"<p>&lessapprox;</p>",
+{
+"html": "<p>\u2a85</p>"
+}
+],
+[
+"<p>&lessdot;</p>",
+{
+"html": "<p>\u22d6</p>"
+}
+],
+[
+"<p>&lesseqgtr;</p>",
+{
+"html": "<p>\u22da</p>"
+}
+],
+[
+"<p>&lesseqqgtr;</p>",
+{
+"html": "<p>\u2a8b</p>"
+}
+],
+[
+"<p>&LessEqualGreater;</p>",
+{
+"html": "<p>\u22da</p>"
+}
+],
+[
+"<p>&LessFullEqual;</p>",
+{
+"html": "<p>\u2266</p>"
+}
+],
+[
+"<p>&LessGreater;</p>",
+{
+"html": "<p>\u2276</p>"
+}
+],
+[
+"<p>&lessgtr;</p>",
+{
+"html": "<p>\u2276</p>"
+}
+],
+[
+"<p>&LessLess;</p>",
+{
+"html": "<p>\u2aa1</p>"
+}
+],
+[
+"<p>&lesssim;</p>",
+{
+"html": "<p>\u2272</p>"
+}
+],
+[
+"<p>&LessSlantEqual;</p>",
+{
+"html": "<p>\u2a7d</p>"
+}
+],
+[
+"<p>&LessTilde;</p>",
+{
+"html": "<p>\u2272</p>"
+}
+],
+[
+"<p>&lfisht;</p>",
+{
+"html": "<p>\u297c</p>"
+}
+],
+[
+"<p>&lfloor;</p>",
+{
+"html": "<p>\u230a</p>"
+}
+],
+[
+"<p>&Lfr;</p>",
+{
+"html": "<p>\ud835\udd0f</p>"
+}
+],
+[
+"<p>&lfr;</p>",
+{
+"html": "<p>\ud835\udd29</p>"
+}
+],
+[
+"<p>&lg;</p>",
+{
+"html": "<p>\u2276</p>"
+}
+],
+[
+"<p>&lgE;</p>",
+{
+"html": "<p>\u2a91</p>"
+}
+],
+[
+"<p>&lHar;</p>",
+{
+"html": "<p>\u2962</p>"
+}
+],
+[
+"<p>&lhard;</p>",
+{
+"html": "<p>\u21bd</p>"
+}
+],
+[
+"<p>&lharu;</p>",
+{
+"html": "<p>\u21bc</p>"
+}
+],
+[
+"<p>&lharul;</p>",
+{
+"html": "<p>\u296a</p>"
+}
+],
+[
+"<p>&lhblk;</p>",
+{
+"html": "<p>\u2584</p>"
+}
+],
+[
+"<p>&LJcy;</p>",
+{
+"html": "<p>\u0409</p>"
+}
+],
+[
+"<p>&ljcy;</p>",
+{
+"html": "<p>\u0459</p>"
+}
+],
+[
+"<p>&Ll;</p>",
+{
+"html": "<p>\u22d8</p>"
+}
+],
+[
+"<p>&ll;</p>",
+{
+"html": "<p>\u226a</p>"
+}
+],
+[
+"<p>&llarr;</p>",
+{
+"html": "<p>\u21c7</p>"
+}
+],
+[
+"<p>&llcorner;</p>",
+{
+"html": "<p>\u231e</p>"
+}
+],
+[
+"<p>&Lleftarrow;</p>",
+{
+"html": "<p>\u21da</p>"
+}
+],
+[
+"<p>&llhard;</p>",
+{
+"html": "<p>\u296b</p>"
+}
+],
+[
+"<p>&lltri;</p>",
+{
+"html": "<p>\u25fa</p>"
+}
+],
+[
+"<p>&Lmidot;</p>",
+{
+"html": "<p>\u013f</p>"
+}
+],
+[
+"<p>&lmidot;</p>",
+{
+"html": "<p>\u0140</p>"
+}
+],
+[
+"<p>&lmoust;</p>",
+{
+"html": "<p>\u23b0</p>"
+}
+],
+[
+"<p>&lmoustache;</p>",
+{
+"html": "<p>\u23b0</p>"
+}
+],
+[
+"<p>&lnap;</p>",
+{
+"html": "<p>\u2a89</p>"
+}
+],
+[
+"<p>&lnapprox;</p>",
+{
+"html": "<p>\u2a89</p>"
+}
+],
+[
+"<p>&lnE;</p>",
+{
+"html": "<p>\u2268</p>"
+}
+],
+[
+"<p>&lne;</p>",
+{
+"html": "<p>\u2a87</p>"
+}
+],
+[
+"<p>&lneq;</p>",
+{
+"html": "<p>\u2a87</p>"
+}
+],
+[
+"<p>&lneqq;</p>",
+{
+"html": "<p>\u2268</p>"
+}
+],
+[
+"<p>&lnsim;</p>",
+{
+"html": "<p>\u22e6</p>"
+}
+],
+[
+"<p>&loang;</p>",
+{
+"html": "<p>\u27ec</p>"
+}
+],
+[
+"<p>&loarr;</p>",
+{
+"html": "<p>\u21fd</p>"
+}
+],
+[
+"<p>&lobrk;</p>",
+{
+"html": "<p>\u27e6</p>"
+}
+],
+[
+"<p>&LongLeftArrow;</p>",
+{
+"html": "<p>\u27f5</p>"
+}
+],
+[
+"<p>&Longleftarrow;</p>",
+{
+"html": "<p>\u27f8</p>"
+}
+],
+[
+"<p>&longleftarrow;</p>",
+{
+"html": "<p>\u27f5</p>"
+}
+],
+[
+"<p>&LongLeftRightArrow;</p>",
+{
+"html": "<p>\u27f7</p>"
+}
+],
+[
+"<p>&Longleftrightarrow;</p>",
+{
+"html": "<p>\u27fa</p>"
+}
+],
+[
+"<p>&longleftrightarrow;</p>",
+{
+"html": "<p>\u27f7</p>"
+}
+],
+[
+"<p>&longmapsto;</p>",
+{
+"html": "<p>\u27fc</p>"
+}
+],
+[
+"<p>&LongRightArrow;</p>",
+{
+"html": "<p>\u27f6</p>"
+}
+],
+[
+"<p>&Longrightarrow;</p>",
+{
+"html": "<p>\u27f9</p>"
+}
+],
+[
+"<p>&longrightarrow;</p>",
+{
+"html": "<p>\u27f6</p>"
+}
+],
+[
+"<p>&looparrowleft;</p>",
+{
+"html": "<p>\u21ab</p>"
+}
+],
+[
+"<p>&looparrowright;</p>",
+{
+"html": "<p>\u21ac</p>"
+}
+],
+[
+"<p>&lopar;</p>",
+{
+"html": "<p>\u2985</p>"
+}
+],
+[
+"<p>&Lopf;</p>",
+{
+"html": "<p>\ud835\udd43</p>"
+}
+],
+[
+"<p>&lopf;</p>",
+{
+"html": "<p>\ud835\udd5d</p>"
+}
+],
+[
+"<p>&loplus;</p>",
+{
+"html": "<p>\u2a2d</p>"
+}
+],
+[
+"<p>&lotimes;</p>",
+{
+"html": "<p>\u2a34</p>"
+}
+],
+[
+"<p>&lowast;</p>",
+{
+"html": "<p>\u2217</p>"
+}
+],
+[
+"<p>&lowbar;</p>",
+{
+"html": "<p>_</p>"
+}
+],
+[
+"<p>&LowerLeftArrow;</p>",
+{
+"html": "<p>\u2199</p>"
+}
+],
+[
+"<p>&LowerRightArrow;</p>",
+{
+"html": "<p>\u2198</p>"
+}
+],
+[
+"<p>&loz;</p>",
+{
+"html": "<p>\u25ca</p>"
+}
+],
+[
+"<p>&lozenge;</p>",
+{
+"html": "<p>\u25ca</p>"
+}
+],
+[
+"<p>&lozf;</p>",
+{
+"html": "<p>\u29eb</p>"
+}
+],
+[
+"<p>&lpar;</p>",
+{
+"html": "<p>(</p>"
+}
+],
+[
+"<p>&lparlt;</p>",
+{
+"html": "<p>\u2993</p>"
+}
+],
+[
+"<p>&lrarr;</p>",
+{
+"html": "<p>\u21c6</p>"
+}
+],
+[
+"<p>&lrcorner;</p>",
+{
+"html": "<p>\u231f</p>"
+}
+],
+[
+"<p>&lrhar;</p>",
+{
+"html": "<p>\u21cb</p>"
+}
+],
+[
+"<p>&lrhard;</p>",
+{
+"html": "<p>\u296d</p>"
+}
+],
+[
+"<p>&lrm;</p>",
+{
+"html": "<p>\u200e</p>"
+}
+],
+[
+"<p>&lrtri;</p>",
+{
+"html": "<p>\u22bf</p>"
+}
+],
+[
+"<p>&lsaquo;</p>",
+{
+"html": "<p>\u2039</p>"
+}
+],
+[
+"<p>&Lscr;</p>",
+{
+"html": "<p>\u2112</p>"
+}
+],
+[
+"<p>&lscr;</p>",
+{
+"html": "<p>\ud835\udcc1</p>"
+}
+],
+[
+"<p>&Lsh;</p>",
+{
+"html": "<p>\u21b0</p>"
+}
+],
+[
+"<p>&lsh;</p>",
+{
+"html": "<p>\u21b0</p>"
+}
+],
+[
+"<p>&lsim;</p>",
+{
+"html": "<p>\u2272</p>"
+}
+],
+[
+"<p>&lsime;</p>",
+{
+"html": "<p>\u2a8d</p>"
+}
+],
+[
+"<p>&lsimg;</p>",
+{
+"html": "<p>\u2a8f</p>"
+}
+],
+[
+"<p>&lsqb;</p>",
+{
+"html": "<p>[</p>"
+}
+],
+[
+"<p>&lsquo;</p>",
+{
+"html": "<p>\u2018</p>"
+}
+],
+[
+"<p>&lsquor;</p>",
+{
+"html": "<p>\u201a</p>"
+}
+],
+[
+"<p>&Lstrok;</p>",
+{
+"html": "<p>\u0141</p>"
+}
+],
+[
+"<p>&lstrok;</p>",
+{
+"html": "<p>\u0142</p>"
+}
+],
+[
+"<p>&LT</p>",
+{
+"html": "<p>&lt;</p>"
+}
+],
+[
+"<p>&lt</p>",
+{
+"html": "<p>&lt;</p>"
+}
+],
+[
+"<p>&LT;</p>",
+{
+"html": "<p>&lt;</p>"
+}
+],
+[
+"<p>&Lt;</p>",
+{
+"html": "<p>\u226a</p>"
+}
+],
+[
+"<p>&lt;</p>",
+{
+"html": "<p>&lt;</p>"
+}
+],
+[
+"<p>&ltcc;</p>",
+{
+"html": "<p>\u2aa6</p>"
+}
+],
+[
+"<p>&ltcir;</p>",
+{
+"html": "<p>\u2a79</p>"
+}
+],
+[
+"<p>&ltdot;</p>",
+{
+"html": "<p>\u22d6</p>"
+}
+],
+[
+"<p>&lthree;</p>",
+{
+"html": "<p>\u22cb</p>"
+}
+],
+[
+"<p>&ltimes;</p>",
+{
+"html": "<p>\u22c9</p>"
+}
+],
+[
+"<p>&ltlarr;</p>",
+{
+"html": "<p>\u2976</p>"
+}
+],
+[
+"<p>&ltquest;</p>",
+{
+"html": "<p>\u2a7b</p>"
+}
+],
+[
+"<p>&ltri;</p>",
+{
+"html": "<p>\u25c3</p>"
+}
+],
+[
+"<p>&ltrie;</p>",
+{
+"html": "<p>\u22b4</p>"
+}
+],
+[
+"<p>&ltrif;</p>",
+{
+"html": "<p>\u25c2</p>"
+}
+],
+[
+"<p>&ltrPar;</p>",
+{
+"html": "<p>\u2996</p>"
+}
+],
+[
+"<p>&lurdshar;</p>",
+{
+"html": "<p>\u294a</p>"
+}
+],
+[
+"<p>&luruhar;</p>",
+{
+"html": "<p>\u2966</p>"
+}
+],
+[
+"<p>&lvertneqq;</p>",
+{
+"html": "<p>\u2268\ufe00</p>"
+}
+],
+[
+"<p>&lvnE;</p>",
+{
+"html": "<p>\u2268\ufe00</p>"
+}
+],
+[
+"<p>&macr</p>",
+{
+"html": "<p>\u00af</p>"
+}
+],
+[
+"<p>&macr;</p>",
+{
+"html": "<p>\u00af</p>"
+}
+],
+[
+"<p>&male;</p>",
+{
+"html": "<p>\u2642</p>"
+}
+],
+[
+"<p>&malt;</p>",
+{
+"html": "<p>\u2720</p>"
+}
+],
+[
+"<p>&maltese;</p>",
+{
+"html": "<p>\u2720</p>"
+}
+],
+[
+"<p>&Map;</p>",
+{
+"html": "<p>\u2905</p>"
+}
+],
+[
+"<p>&map;</p>",
+{
+"html": "<p>\u21a6</p>"
+}
+],
+[
+"<p>&mapsto;</p>",
+{
+"html": "<p>\u21a6</p>"
+}
+],
+[
+"<p>&mapstodown;</p>",
+{
+"html": "<p>\u21a7</p>"
+}
+],
+[
+"<p>&mapstoleft;</p>",
+{
+"html": "<p>\u21a4</p>"
+}
+],
+[
+"<p>&mapstoup;</p>",
+{
+"html": "<p>\u21a5</p>"
+}
+],
+[
+"<p>&marker;</p>",
+{
+"html": "<p>\u25ae</p>"
+}
+],
+[
+"<p>&mcomma;</p>",
+{
+"html": "<p>\u2a29</p>"
+}
+],
+[
+"<p>&Mcy;</p>",
+{
+"html": "<p>\u041c</p>"
+}
+],
+[
+"<p>&mcy;</p>",
+{
+"html": "<p>\u043c</p>"
+}
+],
+[
+"<p>&mdash;</p>",
+{
+"html": "<p>\u2014</p>"
+}
+],
+[
+"<p>&mDDot;</p>",
+{
+"html": "<p>\u223a</p>"
+}
+],
+[
+"<p>&measuredangle;</p>",
+{
+"html": "<p>\u2221</p>"
+}
+],
+[
+"<p>&MediumSpace;</p>",
+{
+"html": "<p>\u205f</p>"
+}
+],
+[
+"<p>&Mellintrf;</p>",
+{
+"html": "<p>\u2133</p>"
+}
+],
+[
+"<p>&Mfr;</p>",
+{
+"html": "<p>\ud835\udd10</p>"
+}
+],
+[
+"<p>&mfr;</p>",
+{
+"html": "<p>\ud835\udd2a</p>"
+}
+],
+[
+"<p>&mho;</p>",
+{
+"html": "<p>\u2127</p>"
+}
+],
+[
+"<p>&micro</p>",
+{
+"html": "<p>\u00b5</p>"
+}
+],
+[
+"<p>&micro;</p>",
+{
+"html": "<p>\u00b5</p>"
+}
+],
+[
+"<p>&mid;</p>",
+{
+"html": "<p>\u2223</p>"
+}
+],
+[
+"<p>&midast;</p>",
+{
+"html": "<p>*</p>"
+}
+],
+[
+"<p>&midcir;</p>",
+{
+"html": "<p>\u2af0</p>"
+}
+],
+[
+"<p>&middot</p>",
+{
+"html": "<p>\u00b7</p>"
+}
+],
+[
+"<p>&middot;</p>",
+{
+"html": "<p>\u00b7</p>"
+}
+],
+[
+"<p>&minus;</p>",
+{
+"html": "<p>\u2212</p>"
+}
+],
+[
+"<p>&minusb;</p>",
+{
+"html": "<p>\u229f</p>"
+}
+],
+[
+"<p>&minusd;</p>",
+{
+"html": "<p>\u2238</p>"
+}
+],
+[
+"<p>&minusdu;</p>",
+{
+"html": "<p>\u2a2a</p>"
+}
+],
+[
+"<p>&MinusPlus;</p>",
+{
+"html": "<p>\u2213</p>"
+}
+],
+[
+"<p>&mlcp;</p>",
+{
+"html": "<p>\u2adb</p>"
+}
+],
+[
+"<p>&mldr;</p>",
+{
+"html": "<p>\u2026</p>"
+}
+],
+[
+"<p>&mnplus;</p>",
+{
+"html": "<p>\u2213</p>"
+}
+],
+[
+"<p>&models;</p>",
+{
+"html": "<p>\u22a7</p>"
+}
+],
+[
+"<p>&Mopf;</p>",
+{
+"html": "<p>\ud835\udd44</p>"
+}
+],
+[
+"<p>&mopf;</p>",
+{
+"html": "<p>\ud835\udd5e</p>"
+}
+],
+[
+"<p>&mp;</p>",
+{
+"html": "<p>\u2213</p>"
+}
+],
+[
+"<p>&Mscr;</p>",
+{
+"html": "<p>\u2133</p>"
+}
+],
+[
+"<p>&mscr;</p>",
+{
+"html": "<p>\ud835\udcc2</p>"
+}
+],
+[
+"<p>&mstpos;</p>",
+{
+"html": "<p>\u223e</p>"
+}
+],
+[
+"<p>&Mu;</p>",
+{
+"html": "<p>\u039c</p>"
+}
+],
+[
+"<p>&mu;</p>",
+{
+"html": "<p>\u03bc</p>"
+}
+],
+[
+"<p>&multimap;</p>",
+{
+"html": "<p>\u22b8</p>"
+}
+],
+[
+"<p>&mumap;</p>",
+{
+"html": "<p>\u22b8</p>"
+}
+],
+[
+"<p>&nabla;</p>",
+{
+"html": "<p>\u2207</p>"
+}
+],
+[
+"<p>&Nacute;</p>",
+{
+"html": "<p>\u0143</p>"
+}
+],
+[
+"<p>&nacute;</p>",
+{
+"html": "<p>\u0144</p>"
+}
+],
+[
+"<p>&nang;</p>",
+{
+"html": "<p>\u2220\u20d2</p>"
+}
+],
+[
+"<p>&nap;</p>",
+{
+"html": "<p>\u2249</p>"
+}
+],
+[
+"<p>&napE;</p>",
+{
+"html": "<p>\u2a70\u0338</p>"
+}
+],
+[
+"<p>&napid;</p>",
+{
+"html": "<p>\u224b\u0338</p>"
+}
+],
+[
+"<p>&napos;</p>",
+{
+"html": "<p>\u0149</p>"
+}
+],
+[
+"<p>&napprox;</p>",
+{
+"html": "<p>\u2249</p>"
+}
+],
+[
+"<p>&natur;</p>",
+{
+"html": "<p>\u266e</p>"
+}
+],
+[
+"<p>&natural;</p>",
+{
+"html": "<p>\u266e</p>"
+}
+],
+[
+"<p>&naturals;</p>",
+{
+"html": "<p>\u2115</p>"
+}
+],
+[
+"<p>&nbsp</p>",
+{
+"html": "<p>\u00a0</p>"
+}
+],
+[
+"<p>&nbsp;</p>",
+{
+"html": "<p>\u00a0</p>"
+}
+],
+[
+"<p>&nbump;</p>",
+{
+"html": "<p>\u224e\u0338</p>"
+}
+],
+[
+"<p>&nbumpe;</p>",
+{
+"html": "<p>\u224f\u0338</p>"
+}
+],
+[
+"<p>&ncap;</p>",
+{
+"html": "<p>\u2a43</p>"
+}
+],
+[
+"<p>&Ncaron;</p>",
+{
+"html": "<p>\u0147</p>"
+}
+],
+[
+"<p>&ncaron;</p>",
+{
+"html": "<p>\u0148</p>"
+}
+],
+[
+"<p>&Ncedil;</p>",
+{
+"html": "<p>\u0145</p>"
+}
+],
+[
+"<p>&ncedil;</p>",
+{
+"html": "<p>\u0146</p>"
+}
+],
+[
+"<p>&ncong;</p>",
+{
+"html": "<p>\u2247</p>"
+}
+],
+[
+"<p>&ncongdot;</p>",
+{
+"html": "<p>\u2a6d\u0338</p>"
+}
+],
+[
+"<p>&ncup;</p>",
+{
+"html": "<p>\u2a42</p>"
+}
+],
+[
+"<p>&Ncy;</p>",
+{
+"html": "<p>\u041d</p>"
+}
+],
+[
+"<p>&ncy;</p>",
+{
+"html": "<p>\u043d</p>"
+}
+],
+[
+"<p>&ndash;</p>",
+{
+"html": "<p>\u2013</p>"
+}
+],
+[
+"<p>&ne;</p>",
+{
+"html": "<p>\u2260</p>"
+}
+],
+[
+"<p>&nearhk;</p>",
+{
+"html": "<p>\u2924</p>"
+}
+],
+[
+"<p>&neArr;</p>",
+{
+"html": "<p>\u21d7</p>"
+}
+],
+[
+"<p>&nearr;</p>",
+{
+"html": "<p>\u2197</p>"
+}
+],
+[
+"<p>&nearrow;</p>",
+{
+"html": "<p>\u2197</p>"
+}
+],
+[
+"<p>&nedot;</p>",
+{
+"html": "<p>\u2250\u0338</p>"
+}
+],
+[
+"<p>&NegativeMediumSpace;</p>",
+{
+"html": "<p>\u200b</p>"
+}
+],
+[
+"<p>&NegativeThickSpace;</p>",
+{
+"html": "<p>\u200b</p>"
+}
+],
+[
+"<p>&NegativeThinSpace;</p>",
+{
+"html": "<p>\u200b</p>"
+}
+],
+[
+"<p>&NegativeVeryThinSpace;</p>",
+{
+"html": "<p>\u200b</p>"
+}
+],
+[
+"<p>&nequiv;</p>",
+{
+"html": "<p>\u2262</p>"
+}
+],
+[
+"<p>&nesear;</p>",
+{
+"html": "<p>\u2928</p>"
+}
+],
+[
+"<p>&nesim;</p>",
+{
+"html": "<p>\u2242\u0338</p>"
+}
+],
+[
+"<p>&NestedGreaterGreater;</p>",
+{
+"html": "<p>\u226b</p>"
+}
+],
+[
+"<p>&NestedLessLess;</p>",
+{
+"html": "<p>\u226a</p>"
+}
+],
+[
+"<p>&NewLine;</p>",
+{
+"html": "<p>\n</p>"
+}
+],
+[
+"<p>&nexist;</p>",
+{
+"html": "<p>\u2204</p>"
+}
+],
+[
+"<p>&nexists;</p>",
+{
+"html": "<p>\u2204</p>"
+}
+],
+[
+"<p>&Nfr;</p>",
+{
+"html": "<p>\ud835\udd11</p>"
+}
+],
+[
+"<p>&nfr;</p>",
+{
+"html": "<p>\ud835\udd2b</p>"
+}
+],
+[
+"<p>&ngE;</p>",
+{
+"html": "<p>\u2267\u0338</p>"
+}
+],
+[
+"<p>&nge;</p>",
+{
+"html": "<p>\u2271</p>"
+}
+],
+[
+"<p>&ngeq;</p>",
+{
+"html": "<p>\u2271</p>"
+}
+],
+[
+"<p>&ngeqq;</p>",
+{
+"html": "<p>\u2267\u0338</p>"
+}
+],
+[
+"<p>&ngeqslant;</p>",
+{
+"html": "<p>\u2a7e\u0338</p>"
+}
+],
+[
+"<p>&nges;</p>",
+{
+"html": "<p>\u2a7e\u0338</p>"
+}
+],
+[
+"<p>&nGg;</p>",
+{
+"html": "<p>\u22d9\u0338</p>"
+}
+],
+[
+"<p>&ngsim;</p>",
+{
+"html": "<p>\u2275</p>"
+}
+],
+[
+"<p>&nGt;</p>",
+{
+"html": "<p>\u226b\u20d2</p>"
+}
+],
+[
+"<p>&ngt;</p>",
+{
+"html": "<p>\u226f</p>"
+}
+],
+[
+"<p>&ngtr;</p>",
+{
+"html": "<p>\u226f</p>"
+}
+],
+[
+"<p>&nGtv;</p>",
+{
+"html": "<p>\u226b\u0338</p>"
+}
+],
+[
+"<p>&nhArr;</p>",
+{
+"html": "<p>\u21ce</p>"
+}
+],
+[
+"<p>&nharr;</p>",
+{
+"html": "<p>\u21ae</p>"
+}
+],
+[
+"<p>&nhpar;</p>",
+{
+"html": "<p>\u2af2</p>"
+}
+],
+[
+"<p>&ni;</p>",
+{
+"html": "<p>\u220b</p>"
+}
+],
+[
+"<p>&nis;</p>",
+{
+"html": "<p>\u22fc</p>"
+}
+],
+[
+"<p>&nisd;</p>",
+{
+"html": "<p>\u22fa</p>"
+}
+],
+[
+"<p>&niv;</p>",
+{
+"html": "<p>\u220b</p>"
+}
+],
+[
+"<p>&NJcy;</p>",
+{
+"html": "<p>\u040a</p>"
+}
+],
+[
+"<p>&njcy;</p>",
+{
+"html": "<p>\u045a</p>"
+}
+],
+[
+"<p>&nlArr;</p>",
+{
+"html": "<p>\u21cd</p>"
+}
+],
+[
+"<p>&nlarr;</p>",
+{
+"html": "<p>\u219a</p>"
+}
+],
+[
+"<p>&nldr;</p>",
+{
+"html": "<p>\u2025</p>"
+}
+],
+[
+"<p>&nlE;</p>",
+{
+"html": "<p>\u2266\u0338</p>"
+}
+],
+[
+"<p>&nle;</p>",
+{
+"html": "<p>\u2270</p>"
+}
+],
+[
+"<p>&nLeftarrow;</p>",
+{
+"html": "<p>\u21cd</p>"
+}
+],
+[
+"<p>&nleftarrow;</p>",
+{
+"html": "<p>\u219a</p>"
+}
+],
+[
+"<p>&nLeftrightarrow;</p>",
+{
+"html": "<p>\u21ce</p>"
+}
+],
+[
+"<p>&nleftrightarrow;</p>",
+{
+"html": "<p>\u21ae</p>"
+}
+],
+[
+"<p>&nleq;</p>",
+{
+"html": "<p>\u2270</p>"
+}
+],
+[
+"<p>&nleqq;</p>",
+{
+"html": "<p>\u2266\u0338</p>"
+}
+],
+[
+"<p>&nleqslant;</p>",
+{
+"html": "<p>\u2a7d\u0338</p>"
+}
+],
+[
+"<p>&nles;</p>",
+{
+"html": "<p>\u2a7d\u0338</p>"
+}
+],
+[
+"<p>&nless;</p>",
+{
+"html": "<p>\u226e</p>"
+}
+],
+[
+"<p>&nLl;</p>",
+{
+"html": "<p>\u22d8\u0338</p>"
+}
+],
+[
+"<p>&nlsim;</p>",
+{
+"html": "<p>\u2274</p>"
+}
+],
+[
+"<p>&nLt;</p>",
+{
+"html": "<p>\u226a\u20d2</p>"
+}
+],
+[
+"<p>&nlt;</p>",
+{
+"html": "<p>\u226e</p>"
+}
+],
+[
+"<p>&nltri;</p>",
+{
+"html": "<p>\u22ea</p>"
+}
+],
+[
+"<p>&nltrie;</p>",
+{
+"html": "<p>\u22ec</p>"
+}
+],
+[
+"<p>&nLtv;</p>",
+{
+"html": "<p>\u226a\u0338</p>"
+}
+],
+[
+"<p>&nmid;</p>",
+{
+"html": "<p>\u2224</p>"
+}
+],
+[
+"<p>&NoBreak;</p>",
+{
+"html": "<p>\u2060</p>"
+}
+],
+[
+"<p>&NonBreakingSpace;</p>",
+{
+"html": "<p>\u00a0</p>"
+}
+],
+[
+"<p>&Nopf;</p>",
+{
+"html": "<p>\u2115</p>"
+}
+],
+[
+"<p>&nopf;</p>",
+{
+"html": "<p>\ud835\udd5f</p>"
+}
+],
+[
+"<p>&not</p>",
+{
+"html": "<p>\u00ac</p>"
+}
+],
+[
+"<p>&Not;</p>",
+{
+"html": "<p>\u2aec</p>"
+}
+],
+[
+"<p>&not;</p>",
+{
+"html": "<p>\u00ac</p>"
+}
+],
+[
+"<p>&NotCongruent;</p>",
+{
+"html": "<p>\u2262</p>"
+}
+],
+[
+"<p>&NotCupCap;</p>",
+{
+"html": "<p>\u226d</p>"
+}
+],
+[
+"<p>&NotDoubleVerticalBar;</p>",
+{
+"html": "<p>\u2226</p>"
+}
+],
+[
+"<p>&NotElement;</p>",
+{
+"html": "<p>\u2209</p>"
+}
+],
+[
+"<p>&NotEqual;</p>",
+{
+"html": "<p>\u2260</p>"
+}
+],
+[
+"<p>&NotEqualTilde;</p>",
+{
+"html": "<p>\u2242\u0338</p>"
+}
+],
+[
+"<p>&NotExists;</p>",
+{
+"html": "<p>\u2204</p>"
+}
+],
+[
+"<p>&NotGreater;</p>",
+{
+"html": "<p>\u226f</p>"
+}
+],
+[
+"<p>&NotGreaterEqual;</p>",
+{
+"html": "<p>\u2271</p>"
+}
+],
+[
+"<p>&NotGreaterFullEqual;</p>",
+{
+"html": "<p>\u2267\u0338</p>"
+}
+],
+[
+"<p>&NotGreaterGreater;</p>",
+{
+"html": "<p>\u226b\u0338</p>"
+}
+],
+[
+"<p>&NotGreaterLess;</p>",
+{
+"html": "<p>\u2279</p>"
+}
+],
+[
+"<p>&NotGreaterSlantEqual;</p>",
+{
+"html": "<p>\u2a7e\u0338</p>"
+}
+],
+[
+"<p>&NotGreaterTilde;</p>",
+{
+"html": "<p>\u2275</p>"
+}
+],
+[
+"<p>&NotHumpDownHump;</p>",
+{
+"html": "<p>\u224e\u0338</p>"
+}
+],
+[
+"<p>&NotHumpEqual;</p>",
+{
+"html": "<p>\u224f\u0338</p>"
+}
+],
+[
+"<p>&notin;</p>",
+{
+"html": "<p>\u2209</p>"
+}
+],
+[
+"<p>&notindot;</p>",
+{
+"html": "<p>\u22f5\u0338</p>"
+}
+],
+[
+"<p>&notinE;</p>",
+{
+"html": "<p>\u22f9\u0338</p>"
+}
+],
+[
+"<p>&notinva;</p>",
+{
+"html": "<p>\u2209</p>"
+}
+],
+[
+"<p>&notinvb;</p>",
+{
+"html": "<p>\u22f7</p>"
+}
+],
+[
+"<p>&notinvc;</p>",
+{
+"html": "<p>\u22f6</p>"
+}
+],
+[
+"<p>&NotLeftTriangle;</p>",
+{
+"html": "<p>\u22ea</p>"
+}
+],
+[
+"<p>&NotLeftTriangleBar;</p>",
+{
+"html": "<p>\u29cf\u0338</p>"
+}
+],
+[
+"<p>&NotLeftTriangleEqual;</p>",
+{
+"html": "<p>\u22ec</p>"
+}
+],
+[
+"<p>&NotLess;</p>",
+{
+"html": "<p>\u226e</p>"
+}
+],
+[
+"<p>&NotLessEqual;</p>",
+{
+"html": "<p>\u2270</p>"
+}
+],
+[
+"<p>&NotLessGreater;</p>",
+{
+"html": "<p>\u2278</p>"
+}
+],
+[
+"<p>&NotLessLess;</p>",
+{
+"html": "<p>\u226a\u0338</p>"
+}
+],
+[
+"<p>&NotLessSlantEqual;</p>",
+{
+"html": "<p>\u2a7d\u0338</p>"
+}
+],
+[
+"<p>&NotLessTilde;</p>",
+{
+"html": "<p>\u2274</p>"
+}
+],
+[
+"<p>&NotNestedGreaterGreater;</p>",
+{
+"html": "<p>\u2aa2\u0338</p>"
+}
+],
+[
+"<p>&NotNestedLessLess;</p>",
+{
+"html": "<p>\u2aa1\u0338</p>"
+}
+],
+[
+"<p>&notni;</p>",
+{
+"html": "<p>\u220c</p>"
+}
+],
+[
+"<p>&notniva;</p>",
+{
+"html": "<p>\u220c</p>"
+}
+],
+[
+"<p>&notnivb;</p>",
+{
+"html": "<p>\u22fe</p>"
+}
+],
+[
+"<p>&notnivc;</p>",
+{
+"html": "<p>\u22fd</p>"
+}
+],
+[
+"<p>&NotPrecedes;</p>",
+{
+"html": "<p>\u2280</p>"
+}
+],
+[
+"<p>&NotPrecedesEqual;</p>",
+{
+"html": "<p>\u2aaf\u0338</p>"
+}
+],
+[
+"<p>&NotPrecedesSlantEqual;</p>",
+{
+"html": "<p>\u22e0</p>"
+}
+],
+[
+"<p>&NotReverseElement;</p>",
+{
+"html": "<p>\u220c</p>"
+}
+],
+[
+"<p>&NotRightTriangle;</p>",
+{
+"html": "<p>\u22eb</p>"
+}
+],
+[
+"<p>&NotRightTriangleBar;</p>",
+{
+"html": "<p>\u29d0\u0338</p>"
+}
+],
+[
+"<p>&NotRightTriangleEqual;</p>",
+{
+"html": "<p>\u22ed</p>"
+}
+],
+[
+"<p>&NotSquareSubset;</p>",
+{
+"html": "<p>\u228f\u0338</p>"
+}
+],
+[
+"<p>&NotSquareSubsetEqual;</p>",
+{
+"html": "<p>\u22e2</p>"
+}
+],
+[
+"<p>&NotSquareSuperset;</p>",
+{
+"html": "<p>\u2290\u0338</p>"
+}
+],
+[
+"<p>&NotSquareSupersetEqual;</p>",
+{
+"html": "<p>\u22e3</p>"
+}
+],
+[
+"<p>&NotSubset;</p>",
+{
+"html": "<p>\u2282\u20d2</p>"
+}
+],
+[
+"<p>&NotSubsetEqual;</p>",
+{
+"html": "<p>\u2288</p>"
+}
+],
+[
+"<p>&NotSucceeds;</p>",
+{
+"html": "<p>\u2281</p>"
+}
+],
+[
+"<p>&NotSucceedsEqual;</p>",
+{
+"html": "<p>\u2ab0\u0338</p>"
+}
+],
+[
+"<p>&NotSucceedsSlantEqual;</p>",
+{
+"html": "<p>\u22e1</p>"
+}
+],
+[
+"<p>&NotSucceedsTilde;</p>",
+{
+"html": "<p>\u227f\u0338</p>"
+}
+],
+[
+"<p>&NotSuperset;</p>",
+{
+"html": "<p>\u2283\u20d2</p>"
+}
+],
+[
+"<p>&NotSupersetEqual;</p>",
+{
+"html": "<p>\u2289</p>"
+}
+],
+[
+"<p>&NotTilde;</p>",
+{
+"html": "<p>\u2241</p>"
+}
+],
+[
+"<p>&NotTildeEqual;</p>",
+{
+"html": "<p>\u2244</p>"
+}
+],
+[
+"<p>&NotTildeFullEqual;</p>",
+{
+"html": "<p>\u2247</p>"
+}
+],
+[
+"<p>&NotTildeTilde;</p>",
+{
+"html": "<p>\u2249</p>"
+}
+],
+[
+"<p>&NotVerticalBar;</p>",
+{
+"html": "<p>\u2224</p>"
+}
+],
+[
+"<p>&npar;</p>",
+{
+"html": "<p>\u2226</p>"
+}
+],
+[
+"<p>&nparallel;</p>",
+{
+"html": "<p>\u2226</p>"
+}
+],
+[
+"<p>&nparsl;</p>",
+{
+"html": "<p>\u2afd\u20e5</p>"
+}
+],
+[
+"<p>&npart;</p>",
+{
+"html": "<p>\u2202\u0338</p>"
+}
+],
+[
+"<p>&npolint;</p>",
+{
+"html": "<p>\u2a14</p>"
+}
+],
+[
+"<p>&npr;</p>",
+{
+"html": "<p>\u2280</p>"
+}
+],
+[
+"<p>&nprcue;</p>",
+{
+"html": "<p>\u22e0</p>"
+}
+],
+[
+"<p>&npre;</p>",
+{
+"html": "<p>\u2aaf\u0338</p>"
+}
+],
+[
+"<p>&nprec;</p>",
+{
+"html": "<p>\u2280</p>"
+}
+],
+[
+"<p>&npreceq;</p>",
+{
+"html": "<p>\u2aaf\u0338</p>"
+}
+],
+[
+"<p>&nrArr;</p>",
+{
+"html": "<p>\u21cf</p>"
+}
+],
+[
+"<p>&nrarr;</p>",
+{
+"html": "<p>\u219b</p>"
+}
+],
+[
+"<p>&nrarrc;</p>",
+{
+"html": "<p>\u2933\u0338</p>"
+}
+],
+[
+"<p>&nrarrw;</p>",
+{
+"html": "<p>\u219d\u0338</p>"
+}
+],
+[
+"<p>&nRightarrow;</p>",
+{
+"html": "<p>\u21cf</p>"
+}
+],
+[
+"<p>&nrightarrow;</p>",
+{
+"html": "<p>\u219b</p>"
+}
+],
+[
+"<p>&nrtri;</p>",
+{
+"html": "<p>\u22eb</p>"
+}
+],
+[
+"<p>&nrtrie;</p>",
+{
+"html": "<p>\u22ed</p>"
+}
+],
+[
+"<p>&nsc;</p>",
+{
+"html": "<p>\u2281</p>"
+}
+],
+[
+"<p>&nsccue;</p>",
+{
+"html": "<p>\u22e1</p>"
+}
+],
+[
+"<p>&nsce;</p>",
+{
+"html": "<p>\u2ab0\u0338</p>"
+}
+],
+[
+"<p>&Nscr;</p>",
+{
+"html": "<p>\ud835\udca9</p>"
+}
+],
+[
+"<p>&nscr;</p>",
+{
+"html": "<p>\ud835\udcc3</p>"
+}
+],
+[
+"<p>&nshortmid;</p>",
+{
+"html": "<p>\u2224</p>"
+}
+],
+[
+"<p>&nshortparallel;</p>",
+{
+"html": "<p>\u2226</p>"
+}
+],
+[
+"<p>&nsim;</p>",
+{
+"html": "<p>\u2241</p>"
+}
+],
+[
+"<p>&nsime;</p>",
+{
+"html": "<p>\u2244</p>"
+}
+],
+[
+"<p>&nsimeq;</p>",
+{
+"html": "<p>\u2244</p>"
+}
+],
+[
+"<p>&nsmid;</p>",
+{
+"html": "<p>\u2224</p>"
+}
+],
+[
+"<p>&nspar;</p>",
+{
+"html": "<p>\u2226</p>"
+}
+],
+[
+"<p>&nsqsube;</p>",
+{
+"html": "<p>\u22e2</p>"
+}
+],
+[
+"<p>&nsqsupe;</p>",
+{
+"html": "<p>\u22e3</p>"
+}
+],
+[
+"<p>&nsub;</p>",
+{
+"html": "<p>\u2284</p>"
+}
+],
+[
+"<p>&nsubE;</p>",
+{
+"html": "<p>\u2ac5\u0338</p>"
+}
+],
+[
+"<p>&nsube;</p>",
+{
+"html": "<p>\u2288</p>"
+}
+],
+[
+"<p>&nsubset;</p>",
+{
+"html": "<p>\u2282\u20d2</p>"
+}
+],
+[
+"<p>&nsubseteq;</p>",
+{
+"html": "<p>\u2288</p>"
+}
+],
+[
+"<p>&nsubseteqq;</p>",
+{
+"html": "<p>\u2ac5\u0338</p>"
+}
+],
+[
+"<p>&nsucc;</p>",
+{
+"html": "<p>\u2281</p>"
+}
+],
+[
+"<p>&nsucceq;</p>",
+{
+"html": "<p>\u2ab0\u0338</p>"
+}
+],
+[
+"<p>&nsup;</p>",
+{
+"html": "<p>\u2285</p>"
+}
+],
+[
+"<p>&nsupE;</p>",
+{
+"html": "<p>\u2ac6\u0338</p>"
+}
+],
+[
+"<p>&nsupe;</p>",
+{
+"html": "<p>\u2289</p>"
+}
+],
+[
+"<p>&nsupset;</p>",
+{
+"html": "<p>\u2283\u20d2</p>"
+}
+],
+[
+"<p>&nsupseteq;</p>",
+{
+"html": "<p>\u2289</p>"
+}
+],
+[
+"<p>&nsupseteqq;</p>",
+{
+"html": "<p>\u2ac6\u0338</p>"
+}
+],
+[
+"<p>&ntgl;</p>",
+{
+"html": "<p>\u2279</p>"
+}
+],
+[
+"<p>&Ntilde</p>",
+{
+"html": "<p>\u00d1</p>"
+}
+],
+[
+"<p>&ntilde</p>",
+{
+"html": "<p>\u00f1</p>"
+}
+],
+[
+"<p>&Ntilde;</p>",
+{
+"html": "<p>\u00d1</p>"
+}
+],
+[
+"<p>&ntilde;</p>",
+{
+"html": "<p>\u00f1</p>"
+}
+],
+[
+"<p>&ntlg;</p>",
+{
+"html": "<p>\u2278</p>"
+}
+],
+[
+"<p>&ntriangleleft;</p>",
+{
+"html": "<p>\u22ea</p>"
+}
+],
+[
+"<p>&ntrianglelefteq;</p>",
+{
+"html": "<p>\u22ec</p>"
+}
+],
+[
+"<p>&ntriangleright;</p>",
+{
+"html": "<p>\u22eb</p>"
+}
+],
+[
+"<p>&ntrianglerighteq;</p>",
+{
+"html": "<p>\u22ed</p>"
+}
+],
+[
+"<p>&Nu;</p>",
+{
+"html": "<p>\u039d</p>"
+}
+],
+[
+"<p>&nu;</p>",
+{
+"html": "<p>\u03bd</p>"
+}
+],
+[
+"<p>&num;</p>",
+{
+"html": "<p>#</p>"
+}
+],
+[
+"<p>&numero;</p>",
+{
+"html": "<p>\u2116</p>"
+}
+],
+[
+"<p>&numsp;</p>",
+{
+"html": "<p>\u2007</p>"
+}
+],
+[
+"<p>&nvap;</p>",
+{
+"html": "<p>\u224d\u20d2</p>"
+}
+],
+[
+"<p>&nVDash;</p>",
+{
+"html": "<p>\u22af</p>"
+}
+],
+[
+"<p>&nVdash;</p>",
+{
+"html": "<p>\u22ae</p>"
+}
+],
+[
+"<p>&nvDash;</p>",
+{
+"html": "<p>\u22ad</p>"
+}
+],
+[
+"<p>&nvdash;</p>",
+{
+"html": "<p>\u22ac</p>"
+}
+],
+[
+"<p>&nvge;</p>",
+{
+"html": "<p>\u2265\u20d2</p>"
+}
+],
+[
+"<p>&nvgt;</p>",
+{
+"html": "<p>&gt;\u20d2</p>"
+}
+],
+[
+"<p>&nvHarr;</p>",
+{
+"html": "<p>\u2904</p>"
+}
+],
+[
+"<p>&nvinfin;</p>",
+{
+"html": "<p>\u29de</p>"
+}
+],
+[
+"<p>&nvlArr;</p>",
+{
+"html": "<p>\u2902</p>"
+}
+],
+[
+"<p>&nvle;</p>",
+{
+"html": "<p>\u2264\u20d2</p>"
+}
+],
+[
+"<p>&nvlt;</p>",
+{
+"html": "<p>&lt;\u20d2</p>"
+}
+],
+[
+"<p>&nvltrie;</p>",
+{
+"html": "<p>\u22b4\u20d2</p>"
+}
+],
+[
+"<p>&nvrArr;</p>",
+{
+"html": "<p>\u2903</p>"
+}
+],
+[
+"<p>&nvrtrie;</p>",
+{
+"html": "<p>\u22b5\u20d2</p>"
+}
+],
+[
+"<p>&nvsim;</p>",
+{
+"html": "<p>\u223c\u20d2</p>"
+}
+],
+[
+"<p>&nwarhk;</p>",
+{
+"html": "<p>\u2923</p>"
+}
+],
+[
+"<p>&nwArr;</p>",
+{
+"html": "<p>\u21d6</p>"
+}
+],
+[
+"<p>&nwarr;</p>",
+{
+"html": "<p>\u2196</p>"
+}
+],
+[
+"<p>&nwarrow;</p>",
+{
+"html": "<p>\u2196</p>"
+}
+],
+[
+"<p>&nwnear;</p>",
+{
+"html": "<p>\u2927</p>"
+}
+],
+[
+"<p>&Oacute</p>",
+{
+"html": "<p>\u00d3</p>"
+}
+],
+[
+"<p>&oacute</p>",
+{
+"html": "<p>\u00f3</p>"
+}
+],
+[
+"<p>&Oacute;</p>",
+{
+"html": "<p>\u00d3</p>"
+}
+],
+[
+"<p>&oacute;</p>",
+{
+"html": "<p>\u00f3</p>"
+}
+],
+[
+"<p>&oast;</p>",
+{
+"html": "<p>\u229b</p>"
+}
+],
+[
+"<p>&ocir;</p>",
+{
+"html": "<p>\u229a</p>"
+}
+],
+[
+"<p>&Ocirc</p>",
+{
+"html": "<p>\u00d4</p>"
+}
+],
+[
+"<p>&ocirc</p>",
+{
+"html": "<p>\u00f4</p>"
+}
+],
+[
+"<p>&Ocirc;</p>",
+{
+"html": "<p>\u00d4</p>"
+}
+],
+[
+"<p>&ocirc;</p>",
+{
+"html": "<p>\u00f4</p>"
+}
+],
+[
+"<p>&Ocy;</p>",
+{
+"html": "<p>\u041e</p>"
+}
+],
+[
+"<p>&ocy;</p>",
+{
+"html": "<p>\u043e</p>"
+}
+],
+[
+"<p>&odash;</p>",
+{
+"html": "<p>\u229d</p>"
+}
+],
+[
+"<p>&Odblac;</p>",
+{
+"html": "<p>\u0150</p>"
+}
+],
+[
+"<p>&odblac;</p>",
+{
+"html": "<p>\u0151</p>"
+}
+],
+[
+"<p>&odiv;</p>",
+{
+"html": "<p>\u2a38</p>"
+}
+],
+[
+"<p>&odot;</p>",
+{
+"html": "<p>\u2299</p>"
+}
+],
+[
+"<p>&odsold;</p>",
+{
+"html": "<p>\u29bc</p>"
+}
+],
+[
+"<p>&OElig;</p>",
+{
+"html": "<p>\u0152</p>"
+}
+],
+[
+"<p>&oelig;</p>",
+{
+"html": "<p>\u0153</p>"
+}
+],
+[
+"<p>&ofcir;</p>",
+{
+"html": "<p>\u29bf</p>"
+}
+],
+[
+"<p>&Ofr;</p>",
+{
+"html": "<p>\ud835\udd12</p>"
+}
+],
+[
+"<p>&ofr;</p>",
+{
+"html": "<p>\ud835\udd2c</p>"
+}
+],
+[
+"<p>&ogon;</p>",
+{
+"html": "<p>\u02db</p>"
+}
+],
+[
+"<p>&Ograve</p>",
+{
+"html": "<p>\u00d2</p>"
+}
+],
+[
+"<p>&ograve</p>",
+{
+"html": "<p>\u00f2</p>"
+}
+],
+[
+"<p>&Ograve;</p>",
+{
+"html": "<p>\u00d2</p>"
+}
+],
+[
+"<p>&ograve;</p>",
+{
+"html": "<p>\u00f2</p>"
+}
+],
+[
+"<p>&ogt;</p>",
+{
+"html": "<p>\u29c1</p>"
+}
+],
+[
+"<p>&ohbar;</p>",
+{
+"html": "<p>\u29b5</p>"
+}
+],
+[
+"<p>&ohm;</p>",
+{
+"html": "<p>\u03a9</p>"
+}
+],
+[
+"<p>&oint;</p>",
+{
+"html": "<p>\u222e</p>"
+}
+],
+[
+"<p>&olarr;</p>",
+{
+"html": "<p>\u21ba</p>"
+}
+],
+[
+"<p>&olcir;</p>",
+{
+"html": "<p>\u29be</p>"
+}
+],
+[
+"<p>&olcross;</p>",
+{
+"html": "<p>\u29bb</p>"
+}
+],
+[
+"<p>&oline;</p>",
+{
+"html": "<p>\u203e</p>"
+}
+],
+[
+"<p>&olt;</p>",
+{
+"html": "<p>\u29c0</p>"
+}
+],
+[
+"<p>&Omacr;</p>",
+{
+"html": "<p>\u014c</p>"
+}
+],
+[
+"<p>&omacr;</p>",
+{
+"html": "<p>\u014d</p>"
+}
+],
+[
+"<p>&Omega;</p>",
+{
+"html": "<p>\u03a9</p>"
+}
+],
+[
+"<p>&omega;</p>",
+{
+"html": "<p>\u03c9</p>"
+}
+],
+[
+"<p>&Omicron;</p>",
+{
+"html": "<p>\u039f</p>"
+}
+],
+[
+"<p>&omicron;</p>",
+{
+"html": "<p>\u03bf</p>"
+}
+],
+[
+"<p>&omid;</p>",
+{
+"html": "<p>\u29b6</p>"
+}
+],
+[
+"<p>&ominus;</p>",
+{
+"html": "<p>\u2296</p>"
+}
+],
+[
+"<p>&Oopf;</p>",
+{
+"html": "<p>\ud835\udd46</p>"
+}
+],
+[
+"<p>&oopf;</p>",
+{
+"html": "<p>\ud835\udd60</p>"
+}
+],
+[
+"<p>&opar;</p>",
+{
+"html": "<p>\u29b7</p>"
+}
+],
+[
+"<p>&OpenCurlyDoubleQuote;</p>",
+{
+"html": "<p>\u201c</p>"
+}
+],
+[
+"<p>&OpenCurlyQuote;</p>",
+{
+"html": "<p>\u2018</p>"
+}
+],
+[
+"<p>&operp;</p>",
+{
+"html": "<p>\u29b9</p>"
+}
+],
+[
+"<p>&oplus;</p>",
+{
+"html": "<p>\u2295</p>"
+}
+],
+[
+"<p>&Or;</p>",
+{
+"html": "<p>\u2a54</p>"
+}
+],
+[
+"<p>&or;</p>",
+{
+"html": "<p>\u2228</p>"
+}
+],
+[
+"<p>&orarr;</p>",
+{
+"html": "<p>\u21bb</p>"
+}
+],
+[
+"<p>&ord;</p>",
+{
+"html": "<p>\u2a5d</p>"
+}
+],
+[
+"<p>&order;</p>",
+{
+"html": "<p>\u2134</p>"
+}
+],
+[
+"<p>&orderof;</p>",
+{
+"html": "<p>\u2134</p>"
+}
+],
+[
+"<p>&ordf</p>",
+{
+"html": "<p>\u00aa</p>"
+}
+],
+[
+"<p>&ordf;</p>",
+{
+"html": "<p>\u00aa</p>"
+}
+],
+[
+"<p>&ordm</p>",
+{
+"html": "<p>\u00ba</p>"
+}
+],
+[
+"<p>&ordm;</p>",
+{
+"html": "<p>\u00ba</p>"
+}
+],
+[
+"<p>&origof;</p>",
+{
+"html": "<p>\u22b6</p>"
+}
+],
+[
+"<p>&oror;</p>",
+{
+"html": "<p>\u2a56</p>"
+}
+],
+[
+"<p>&orslope;</p>",
+{
+"html": "<p>\u2a57</p>"
+}
+],
+[
+"<p>&orv;</p>",
+{
+"html": "<p>\u2a5b</p>"
+}
+],
+[
+"<p>&oS;</p>",
+{
+"html": "<p>\u24c8</p>"
+}
+],
+[
+"<p>&Oscr;</p>",
+{
+"html": "<p>\ud835\udcaa</p>"
+}
+],
+[
+"<p>&oscr;</p>",
+{
+"html": "<p>\u2134</p>"
+}
+],
+[
+"<p>&Oslash</p>",
+{
+"html": "<p>\u00d8</p>"
+}
+],
+[
+"<p>&oslash</p>",
+{
+"html": "<p>\u00f8</p>"
+}
+],
+[
+"<p>&Oslash;</p>",
+{
+"html": "<p>\u00d8</p>"
+}
+],
+[
+"<p>&oslash;</p>",
+{
+"html": "<p>\u00f8</p>"
+}
+],
+[
+"<p>&osol;</p>",
+{
+"html": "<p>\u2298</p>"
+}
+],
+[
+"<p>&Otilde</p>",
+{
+"html": "<p>\u00d5</p>"
+}
+],
+[
+"<p>&otilde</p>",
+{
+"html": "<p>\u00f5</p>"
+}
+],
+[
+"<p>&Otilde;</p>",
+{
+"html": "<p>\u00d5</p>"
+}
+],
+[
+"<p>&otilde;</p>",
+{
+"html": "<p>\u00f5</p>"
+}
+],
+[
+"<p>&Otimes;</p>",
+{
+"html": "<p>\u2a37</p>"
+}
+],
+[
+"<p>&otimes;</p>",
+{
+"html": "<p>\u2297</p>"
+}
+],
+[
+"<p>&otimesas;</p>",
+{
+"html": "<p>\u2a36</p>"
+}
+],
+[
+"<p>&Ouml</p>",
+{
+"html": "<p>\u00d6</p>"
+}
+],
+[
+"<p>&ouml</p>",
+{
+"html": "<p>\u00f6</p>"
+}
+],
+[
+"<p>&Ouml;</p>",
+{
+"html": "<p>\u00d6</p>"
+}
+],
+[
+"<p>&ouml;</p>",
+{
+"html": "<p>\u00f6</p>"
+}
+],
+[
+"<p>&ovbar;</p>",
+{
+"html": "<p>\u233d</p>"
+}
+],
+[
+"<p>&OverBar;</p>",
+{
+"html": "<p>\u203e</p>"
+}
+],
+[
+"<p>&OverBrace;</p>",
+{
+"html": "<p>\u23de</p>"
+}
+],
+[
+"<p>&OverBracket;</p>",
+{
+"html": "<p>\u23b4</p>"
+}
+],
+[
+"<p>&OverParenthesis;</p>",
+{
+"html": "<p>\u23dc</p>"
+}
+],
+[
+"<p>&par;</p>",
+{
+"html": "<p>\u2225</p>"
+}
+],
+[
+"<p>&para</p>",
+{
+"html": "<p>\u00b6</p>"
+}
+],
+[
+"<p>&para;</p>",
+{
+"html": "<p>\u00b6</p>"
+}
+],
+[
+"<p>&parallel;</p>",
+{
+"html": "<p>\u2225</p>"
+}
+],
+[
+"<p>&parsim;</p>",
+{
+"html": "<p>\u2af3</p>"
+}
+],
+[
+"<p>&parsl;</p>",
+{
+"html": "<p>\u2afd</p>"
+}
+],
+[
+"<p>&part;</p>",
+{
+"html": "<p>\u2202</p>"
+}
+],
+[
+"<p>&PartialD;</p>",
+{
+"html": "<p>\u2202</p>"
+}
+],
+[
+"<p>&Pcy;</p>",
+{
+"html": "<p>\u041f</p>"
+}
+],
+[
+"<p>&pcy;</p>",
+{
+"html": "<p>\u043f</p>"
+}
+],
+[
+"<p>&percnt;</p>",
+{
+"html": "<p>%</p>"
+}
+],
+[
+"<p>&period;</p>",
+{
+"html": "<p>.</p>"
+}
+],
+[
+"<p>&permil;</p>",
+{
+"html": "<p>\u2030</p>"
+}
+],
+[
+"<p>&perp;</p>",
+{
+"html": "<p>\u22a5</p>"
+}
+],
+[
+"<p>&pertenk;</p>",
+{
+"html": "<p>\u2031</p>"
+}
+],
+[
+"<p>&Pfr;</p>",
+{
+"html": "<p>\ud835\udd13</p>"
+}
+],
+[
+"<p>&pfr;</p>",
+{
+"html": "<p>\ud835\udd2d</p>"
+}
+],
+[
+"<p>&Phi;</p>",
+{
+"html": "<p>\u03a6</p>"
+}
+],
+[
+"<p>&phi;</p>",
+{
+"html": "<p>\u03c6</p>"
+}
+],
+[
+"<p>&phiv;</p>",
+{
+"html": "<p>\u03d5</p>"
+}
+],
+[
+"<p>&phmmat;</p>",
+{
+"html": "<p>\u2133</p>"
+}
+],
+[
+"<p>&phone;</p>",
+{
+"html": "<p>\u260e</p>"
+}
+],
+[
+"<p>&Pi;</p>",
+{
+"html": "<p>\u03a0</p>"
+}
+],
+[
+"<p>&pi;</p>",
+{
+"html": "<p>\u03c0</p>"
+}
+],
+[
+"<p>&pitchfork;</p>",
+{
+"html": "<p>\u22d4</p>"
+}
+],
+[
+"<p>&piv;</p>",
+{
+"html": "<p>\u03d6</p>"
+}
+],
+[
+"<p>&planck;</p>",
+{
+"html": "<p>\u210f</p>"
+}
+],
+[
+"<p>&planckh;</p>",
+{
+"html": "<p>\u210e</p>"
+}
+],
+[
+"<p>&plankv;</p>",
+{
+"html": "<p>\u210f</p>"
+}
+],
+[
+"<p>&plus;</p>",
+{
+"html": "<p>+</p>"
+}
+],
+[
+"<p>&plusacir;</p>",
+{
+"html": "<p>\u2a23</p>"
+}
+],
+[
+"<p>&plusb;</p>",
+{
+"html": "<p>\u229e</p>"
+}
+],
+[
+"<p>&pluscir;</p>",
+{
+"html": "<p>\u2a22</p>"
+}
+],
+[
+"<p>&plusdo;</p>",
+{
+"html": "<p>\u2214</p>"
+}
+],
+[
+"<p>&plusdu;</p>",
+{
+"html": "<p>\u2a25</p>"
+}
+],
+[
+"<p>&pluse;</p>",
+{
+"html": "<p>\u2a72</p>"
+}
+],
+[
+"<p>&PlusMinus;</p>",
+{
+"html": "<p>\u00b1</p>"
+}
+],
+[
+"<p>&plusmn</p>",
+{
+"html": "<p>\u00b1</p>"
+}
+],
+[
+"<p>&plusmn;</p>",
+{
+"html": "<p>\u00b1</p>"
+}
+],
+[
+"<p>&plussim;</p>",
+{
+"html": "<p>\u2a26</p>"
+}
+],
+[
+"<p>&plustwo;</p>",
+{
+"html": "<p>\u2a27</p>"
+}
+],
+[
+"<p>&pm;</p>",
+{
+"html": "<p>\u00b1</p>"
+}
+],
+[
+"<p>&Poincareplane;</p>",
+{
+"html": "<p>\u210c</p>"
+}
+],
+[
+"<p>&pointint;</p>",
+{
+"html": "<p>\u2a15</p>"
+}
+],
+[
+"<p>&Popf;</p>",
+{
+"html": "<p>\u2119</p>"
+}
+],
+[
+"<p>&popf;</p>",
+{
+"html": "<p>\ud835\udd61</p>"
+}
+],
+[
+"<p>&pound</p>",
+{
+"html": "<p>\u00a3</p>"
+}
+],
+[
+"<p>&pound;</p>",
+{
+"html": "<p>\u00a3</p>"
+}
+],
+[
+"<p>&Pr;</p>",
+{
+"html": "<p>\u2abb</p>"
+}
+],
+[
+"<p>&pr;</p>",
+{
+"html": "<p>\u227a</p>"
+}
+],
+[
+"<p>&prap;</p>",
+{
+"html": "<p>\u2ab7</p>"
+}
+],
+[
+"<p>&prcue;</p>",
+{
+"html": "<p>\u227c</p>"
+}
+],
+[
+"<p>&prE;</p>",
+{
+"html": "<p>\u2ab3</p>"
+}
+],
+[
+"<p>&pre;</p>",
+{
+"html": "<p>\u2aaf</p>"
+}
+],
+[
+"<p>&prec;</p>",
+{
+"html": "<p>\u227a</p>"
+}
+],
+[
+"<p>&precapprox;</p>",
+{
+"html": "<p>\u2ab7</p>"
+}
+],
+[
+"<p>&preccurlyeq;</p>",
+{
+"html": "<p>\u227c</p>"
+}
+],
+[
+"<p>&Precedes;</p>",
+{
+"html": "<p>\u227a</p>"
+}
+],
+[
+"<p>&PrecedesEqual;</p>",
+{
+"html": "<p>\u2aaf</p>"
+}
+],
+[
+"<p>&PrecedesSlantEqual;</p>",
+{
+"html": "<p>\u227c</p>"
+}
+],
+[
+"<p>&PrecedesTilde;</p>",
+{
+"html": "<p>\u227e</p>"
+}
+],
+[
+"<p>&preceq;</p>",
+{
+"html": "<p>\u2aaf</p>"
+}
+],
+[
+"<p>&precnapprox;</p>",
+{
+"html": "<p>\u2ab9</p>"
+}
+],
+[
+"<p>&precneqq;</p>",
+{
+"html": "<p>\u2ab5</p>"
+}
+],
+[
+"<p>&precnsim;</p>",
+{
+"html": "<p>\u22e8</p>"
+}
+],
+[
+"<p>&precsim;</p>",
+{
+"html": "<p>\u227e</p>"
+}
+],
+[
+"<p>&Prime;</p>",
+{
+"html": "<p>\u2033</p>"
+}
+],
+[
+"<p>&prime;</p>",
+{
+"html": "<p>\u2032</p>"
+}
+],
+[
+"<p>&primes;</p>",
+{
+"html": "<p>\u2119</p>"
+}
+],
+[
+"<p>&prnap;</p>",
+{
+"html": "<p>\u2ab9</p>"
+}
+],
+[
+"<p>&prnE;</p>",
+{
+"html": "<p>\u2ab5</p>"
+}
+],
+[
+"<p>&prnsim;</p>",
+{
+"html": "<p>\u22e8</p>"
+}
+],
+[
+"<p>&prod;</p>",
+{
+"html": "<p>\u220f</p>"
+}
+],
+[
+"<p>&Product;</p>",
+{
+"html": "<p>\u220f</p>"
+}
+],
+[
+"<p>&profalar;</p>",
+{
+"html": "<p>\u232e</p>"
+}
+],
+[
+"<p>&profline;</p>",
+{
+"html": "<p>\u2312</p>"
+}
+],
+[
+"<p>&profsurf;</p>",
+{
+"html": "<p>\u2313</p>"
+}
+],
+[
+"<p>&prop;</p>",
+{
+"html": "<p>\u221d</p>"
+}
+],
+[
+"<p>&Proportion;</p>",
+{
+"html": "<p>\u2237</p>"
+}
+],
+[
+"<p>&Proportional;</p>",
+{
+"html": "<p>\u221d</p>"
+}
+],
+[
+"<p>&propto;</p>",
+{
+"html": "<p>\u221d</p>"
+}
+],
+[
+"<p>&prsim;</p>",
+{
+"html": "<p>\u227e</p>"
+}
+],
+[
+"<p>&prurel;</p>",
+{
+"html": "<p>\u22b0</p>"
+}
+],
+[
+"<p>&Pscr;</p>",
+{
+"html": "<p>\ud835\udcab</p>"
+}
+],
+[
+"<p>&pscr;</p>",
+{
+"html": "<p>\ud835\udcc5</p>"
+}
+],
+[
+"<p>&Psi;</p>",
+{
+"html": "<p>\u03a8</p>"
+}
+],
+[
+"<p>&psi;</p>",
+{
+"html": "<p>\u03c8</p>"
+}
+],
+[
+"<p>&puncsp;</p>",
+{
+"html": "<p>\u2008</p>"
+}
+],
+[
+"<p>&Qfr;</p>",
+{
+"html": "<p>\ud835\udd14</p>"
+}
+],
+[
+"<p>&qfr;</p>",
+{
+"html": "<p>\ud835\udd2e</p>"
+}
+],
+[
+"<p>&qint;</p>",
+{
+"html": "<p>\u2a0c</p>"
+}
+],
+[
+"<p>&Qopf;</p>",
+{
+"html": "<p>\u211a</p>"
+}
+],
+[
+"<p>&qopf;</p>",
+{
+"html": "<p>\ud835\udd62</p>"
+}
+],
+[
+"<p>&qprime;</p>",
+{
+"html": "<p>\u2057</p>"
+}
+],
+[
+"<p>&Qscr;</p>",
+{
+"html": "<p>\ud835\udcac</p>"
+}
+],
+[
+"<p>&qscr;</p>",
+{
+"html": "<p>\ud835\udcc6</p>"
+}
+],
+[
+"<p>&quaternions;</p>",
+{
+"html": "<p>\u210d</p>"
+}
+],
+[
+"<p>&quatint;</p>",
+{
+"html": "<p>\u2a16</p>"
+}
+],
+[
+"<p>&quest;</p>",
+{
+"html": "<p>?</p>"
+}
+],
+[
+"<p>&questeq;</p>",
+{
+"html": "<p>\u225f</p>"
+}
+],
+[
+"<p>&QUOT</p>",
+{
+"html": "<p>&quot;</p>"
+}
+],
+[
+"<p>&quot</p>",
+{
+"html": "<p>&quot;</p>"
+}
+],
+[
+"<p>&QUOT;</p>",
+{
+"html": "<p>&quot;</p>"
+}
+],
+[
+"<p>&quot;</p>",
+{
+"html": "<p>&quot;</p>"
+}
+],
+[
+"<p>&rAarr;</p>",
+{
+"html": "<p>\u21db</p>"
+}
+],
+[
+"<p>&race;</p>",
+{
+"html": "<p>\u223d\u0331</p>"
+}
+],
+[
+"<p>&Racute;</p>",
+{
+"html": "<p>\u0154</p>"
+}
+],
+[
+"<p>&racute;</p>",
+{
+"html": "<p>\u0155</p>"
+}
+],
+[
+"<p>&radic;</p>",
+{
+"html": "<p>\u221a</p>"
+}
+],
+[
+"<p>&raemptyv;</p>",
+{
+"html": "<p>\u29b3</p>"
+}
+],
+[
+"<p>&Rang;</p>",
+{
+"html": "<p>\u27eb</p>"
+}
+],
+[
+"<p>&rang;</p>",
+{
+"html": "<p>\u27e9</p>"
+}
+],
+[
+"<p>&rangd;</p>",
+{
+"html": "<p>\u2992</p>"
+}
+],
+[
+"<p>&range;</p>",
+{
+"html": "<p>\u29a5</p>"
+}
+],
+[
+"<p>&rangle;</p>",
+{
+"html": "<p>\u27e9</p>"
+}
+],
+[
+"<p>&raquo</p>",
+{
+"html": "<p>\u00bb</p>"
+}
+],
+[
+"<p>&raquo;</p>",
+{
+"html": "<p>\u00bb</p>"
+}
+],
+[
+"<p>&Rarr;</p>",
+{
+"html": "<p>\u21a0</p>"
+}
+],
+[
+"<p>&rArr;</p>",
+{
+"html": "<p>\u21d2</p>"
+}
+],
+[
+"<p>&rarr;</p>",
+{
+"html": "<p>\u2192</p>"
+}
+],
+[
+"<p>&rarrap;</p>",
+{
+"html": "<p>\u2975</p>"
+}
+],
+[
+"<p>&rarrb;</p>",
+{
+"html": "<p>\u21e5</p>"
+}
+],
+[
+"<p>&rarrbfs;</p>",
+{
+"html": "<p>\u2920</p>"
+}
+],
+[
+"<p>&rarrc;</p>",
+{
+"html": "<p>\u2933</p>"
+}
+],
+[
+"<p>&rarrfs;</p>",
+{
+"html": "<p>\u291e</p>"
+}
+],
+[
+"<p>&rarrhk;</p>",
+{
+"html": "<p>\u21aa</p>"
+}
+],
+[
+"<p>&rarrlp;</p>",
+{
+"html": "<p>\u21ac</p>"
+}
+],
+[
+"<p>&rarrpl;</p>",
+{
+"html": "<p>\u2945</p>"
+}
+],
+[
+"<p>&rarrsim;</p>",
+{
+"html": "<p>\u2974</p>"
+}
+],
+[
+"<p>&Rarrtl;</p>",
+{
+"html": "<p>\u2916</p>"
+}
+],
+[
+"<p>&rarrtl;</p>",
+{
+"html": "<p>\u21a3</p>"
+}
+],
+[
+"<p>&rarrw;</p>",
+{
+"html": "<p>\u219d</p>"
+}
+],
+[
+"<p>&rAtail;</p>",
+{
+"html": "<p>\u291c</p>"
+}
+],
+[
+"<p>&ratail;</p>",
+{
+"html": "<p>\u291a</p>"
+}
+],
+[
+"<p>&ratio;</p>",
+{
+"html": "<p>\u2236</p>"
+}
+],
+[
+"<p>&rationals;</p>",
+{
+"html": "<p>\u211a</p>"
+}
+],
+[
+"<p>&RBarr;</p>",
+{
+"html": "<p>\u2910</p>"
+}
+],
+[
+"<p>&rBarr;</p>",
+{
+"html": "<p>\u290f</p>"
+}
+],
+[
+"<p>&rbarr;</p>",
+{
+"html": "<p>\u290d</p>"
+}
+],
+[
+"<p>&rbbrk;</p>",
+{
+"html": "<p>\u2773</p>"
+}
+],
+[
+"<p>&rbrace;</p>",
+{
+"html": "<p>}</p>"
+}
+],
+[
+"<p>&rbrack;</p>",
+{
+"html": "<p>]</p>"
+}
+],
+[
+"<p>&rbrke;</p>",
+{
+"html": "<p>\u298c</p>"
+}
+],
+[
+"<p>&rbrksld;</p>",
+{
+"html": "<p>\u298e</p>"
+}
+],
+[
+"<p>&rbrkslu;</p>",
+{
+"html": "<p>\u2990</p>"
+}
+],
+[
+"<p>&Rcaron;</p>",
+{
+"html": "<p>\u0158</p>"
+}
+],
+[
+"<p>&rcaron;</p>",
+{
+"html": "<p>\u0159</p>"
+}
+],
+[
+"<p>&Rcedil;</p>",
+{
+"html": "<p>\u0156</p>"
+}
+],
+[
+"<p>&rcedil;</p>",
+{
+"html": "<p>\u0157</p>"
+}
+],
+[
+"<p>&rceil;</p>",
+{
+"html": "<p>\u2309</p>"
+}
+],
+[
+"<p>&rcub;</p>",
+{
+"html": "<p>}</p>"
+}
+],
+[
+"<p>&Rcy;</p>",
+{
+"html": "<p>\u0420</p>"
+}
+],
+[
+"<p>&rcy;</p>",
+{
+"html": "<p>\u0440</p>"
+}
+],
+[
+"<p>&rdca;</p>",
+{
+"html": "<p>\u2937</p>"
+}
+],
+[
+"<p>&rdldhar;</p>",
+{
+"html": "<p>\u2969</p>"
+}
+],
+[
+"<p>&rdquo;</p>",
+{
+"html": "<p>\u201d</p>"
+}
+],
+[
+"<p>&rdquor;</p>",
+{
+"html": "<p>\u201d</p>"
+}
+],
+[
+"<p>&rdsh;</p>",
+{
+"html": "<p>\u21b3</p>"
+}
+],
+[
+"<p>&Re;</p>",
+{
+"html": "<p>\u211c</p>"
+}
+],
+[
+"<p>&real;</p>",
+{
+"html": "<p>\u211c</p>"
+}
+],
+[
+"<p>&realine;</p>",
+{
+"html": "<p>\u211b</p>"
+}
+],
+[
+"<p>&realpart;</p>",
+{
+"html": "<p>\u211c</p>"
+}
+],
+[
+"<p>&reals;</p>",
+{
+"html": "<p>\u211d</p>"
+}
+],
+[
+"<p>&rect;</p>",
+{
+"html": "<p>\u25ad</p>"
+}
+],
+[
+"<p>&REG</p>",
+{
+"html": "<p>\u00ae</p>"
+}
+],
+[
+"<p>&reg</p>",
+{
+"html": "<p>\u00ae</p>"
+}
+],
+[
+"<p>&REG;</p>",
+{
+"html": "<p>\u00ae</p>"
+}
+],
+[
+"<p>&reg;</p>",
+{
+"html": "<p>\u00ae</p>"
+}
+],
+[
+"<p>&ReverseElement;</p>",
+{
+"html": "<p>\u220b</p>"
+}
+],
+[
+"<p>&ReverseEquilibrium;</p>",
+{
+"html": "<p>\u21cb</p>"
+}
+],
+[
+"<p>&ReverseUpEquilibrium;</p>",
+{
+"html": "<p>\u296f</p>"
+}
+],
+[
+"<p>&rfisht;</p>",
+{
+"html": "<p>\u297d</p>"
+}
+],
+[
+"<p>&rfloor;</p>",
+{
+"html": "<p>\u230b</p>"
+}
+],
+[
+"<p>&Rfr;</p>",
+{
+"html": "<p>\u211c</p>"
+}
+],
+[
+"<p>&rfr;</p>",
+{
+"html": "<p>\ud835\udd2f</p>"
+}
+],
+[
+"<p>&rHar;</p>",
+{
+"html": "<p>\u2964</p>"
+}
+],
+[
+"<p>&rhard;</p>",
+{
+"html": "<p>\u21c1</p>"
+}
+],
+[
+"<p>&rharu;</p>",
+{
+"html": "<p>\u21c0</p>"
+}
+],
+[
+"<p>&rharul;</p>",
+{
+"html": "<p>\u296c</p>"
+}
+],
+[
+"<p>&Rho;</p>",
+{
+"html": "<p>\u03a1</p>"
+}
+],
+[
+"<p>&rho;</p>",
+{
+"html": "<p>\u03c1</p>"
+}
+],
+[
+"<p>&rhov;</p>",
+{
+"html": "<p>\u03f1</p>"
+}
+],
+[
+"<p>&RightAngleBracket;</p>",
+{
+"html": "<p>\u27e9</p>"
+}
+],
+[
+"<p>&RightArrow;</p>",
+{
+"html": "<p>\u2192</p>"
+}
+],
+[
+"<p>&Rightarrow;</p>",
+{
+"html": "<p>\u21d2</p>"
+}
+],
+[
+"<p>&rightarrow;</p>",
+{
+"html": "<p>\u2192</p>"
+}
+],
+[
+"<p>&RightArrowBar;</p>",
+{
+"html": "<p>\u21e5</p>"
+}
+],
+[
+"<p>&RightArrowLeftArrow;</p>",
+{
+"html": "<p>\u21c4</p>"
+}
+],
+[
+"<p>&rightarrowtail;</p>",
+{
+"html": "<p>\u21a3</p>"
+}
+],
+[
+"<p>&RightCeiling;</p>",
+{
+"html": "<p>\u2309</p>"
+}
+],
+[
+"<p>&RightDoubleBracket;</p>",
+{
+"html": "<p>\u27e7</p>"
+}
+],
+[
+"<p>&RightDownTeeVector;</p>",
+{
+"html": "<p>\u295d</p>"
+}
+],
+[
+"<p>&RightDownVector;</p>",
+{
+"html": "<p>\u21c2</p>"
+}
+],
+[
+"<p>&RightDownVectorBar;</p>",
+{
+"html": "<p>\u2955</p>"
+}
+],
+[
+"<p>&RightFloor;</p>",
+{
+"html": "<p>\u230b</p>"
+}
+],
+[
+"<p>&rightharpoondown;</p>",
+{
+"html": "<p>\u21c1</p>"
+}
+],
+[
+"<p>&rightharpoonup;</p>",
+{
+"html": "<p>\u21c0</p>"
+}
+],
+[
+"<p>&rightleftarrows;</p>",
+{
+"html": "<p>\u21c4</p>"
+}
+],
+[
+"<p>&rightleftharpoons;</p>",
+{
+"html": "<p>\u21cc</p>"
+}
+],
+[
+"<p>&rightrightarrows;</p>",
+{
+"html": "<p>\u21c9</p>"
+}
+],
+[
+"<p>&rightsquigarrow;</p>",
+{
+"html": "<p>\u219d</p>"
+}
+],
+[
+"<p>&RightTee;</p>",
+{
+"html": "<p>\u22a2</p>"
+}
+],
+[
+"<p>&RightTeeArrow;</p>",
+{
+"html": "<p>\u21a6</p>"
+}
+],
+[
+"<p>&RightTeeVector;</p>",
+{
+"html": "<p>\u295b</p>"
+}
+],
+[
+"<p>&rightthreetimes;</p>",
+{
+"html": "<p>\u22cc</p>"
+}
+],
+[
+"<p>&RightTriangle;</p>",
+{
+"html": "<p>\u22b3</p>"
+}
+],
+[
+"<p>&RightTriangleBar;</p>",
+{
+"html": "<p>\u29d0</p>"
+}
+],
+[
+"<p>&RightTriangleEqual;</p>",
+{
+"html": "<p>\u22b5</p>"
+}
+],
+[
+"<p>&RightUpDownVector;</p>",
+{
+"html": "<p>\u294f</p>"
+}
+],
+[
+"<p>&RightUpTeeVector;</p>",
+{
+"html": "<p>\u295c</p>"
+}
+],
+[
+"<p>&RightUpVector;</p>",
+{
+"html": "<p>\u21be</p>"
+}
+],
+[
+"<p>&RightUpVectorBar;</p>",
+{
+"html": "<p>\u2954</p>"
+}
+],
+[
+"<p>&RightVector;</p>",
+{
+"html": "<p>\u21c0</p>"
+}
+],
+[
+"<p>&RightVectorBar;</p>",
+{
+"html": "<p>\u2953</p>"
+}
+],
+[
+"<p>&ring;</p>",
+{
+"html": "<p>\u02da</p>"
+}
+],
+[
+"<p>&risingdotseq;</p>",
+{
+"html": "<p>\u2253</p>"
+}
+],
+[
+"<p>&rlarr;</p>",
+{
+"html": "<p>\u21c4</p>"
+}
+],
+[
+"<p>&rlhar;</p>",
+{
+"html": "<p>\u21cc</p>"
+}
+],
+[
+"<p>&rlm;</p>",
+{
+"html": "<p>\u200f</p>"
+}
+],
+[
+"<p>&rmoust;</p>",
+{
+"html": "<p>\u23b1</p>"
+}
+],
+[
+"<p>&rmoustache;</p>",
+{
+"html": "<p>\u23b1</p>"
+}
+],
+[
+"<p>&rnmid;</p>",
+{
+"html": "<p>\u2aee</p>"
+}
+],
+[
+"<p>&roang;</p>",
+{
+"html": "<p>\u27ed</p>"
+}
+],
+[
+"<p>&roarr;</p>",
+{
+"html": "<p>\u21fe</p>"
+}
+],
+[
+"<p>&robrk;</p>",
+{
+"html": "<p>\u27e7</p>"
+}
+],
+[
+"<p>&ropar;</p>",
+{
+"html": "<p>\u2986</p>"
+}
+],
+[
+"<p>&Ropf;</p>",
+{
+"html": "<p>\u211d</p>"
+}
+],
+[
+"<p>&ropf;</p>",
+{
+"html": "<p>\ud835\udd63</p>"
+}
+],
+[
+"<p>&roplus;</p>",
+{
+"html": "<p>\u2a2e</p>"
+}
+],
+[
+"<p>&rotimes;</p>",
+{
+"html": "<p>\u2a35</p>"
+}
+],
+[
+"<p>&RoundImplies;</p>",
+{
+"html": "<p>\u2970</p>"
+}
+],
+[
+"<p>&rpar;</p>",
+{
+"html": "<p>)</p>"
+}
+],
+[
+"<p>&rpargt;</p>",
+{
+"html": "<p>\u2994</p>"
+}
+],
+[
+"<p>&rppolint;</p>",
+{
+"html": "<p>\u2a12</p>"
+}
+],
+[
+"<p>&rrarr;</p>",
+{
+"html": "<p>\u21c9</p>"
+}
+],
+[
+"<p>&Rrightarrow;</p>",
+{
+"html": "<p>\u21db</p>"
+}
+],
+[
+"<p>&rsaquo;</p>",
+{
+"html": "<p>\u203a</p>"
+}
+],
+[
+"<p>&Rscr;</p>",
+{
+"html": "<p>\u211b</p>"
+}
+],
+[
+"<p>&rscr;</p>",
+{
+"html": "<p>\ud835\udcc7</p>"
+}
+],
+[
+"<p>&Rsh;</p>",
+{
+"html": "<p>\u21b1</p>"
+}
+],
+[
+"<p>&rsh;</p>",
+{
+"html": "<p>\u21b1</p>"
+}
+],
+[
+"<p>&rsqb;</p>",
+{
+"html": "<p>]</p>"
+}
+],
+[
+"<p>&rsquo;</p>",
+{
+"html": "<p>\u2019</p>"
+}
+],
+[
+"<p>&rsquor;</p>",
+{
+"html": "<p>\u2019</p>"
+}
+],
+[
+"<p>&rthree;</p>",
+{
+"html": "<p>\u22cc</p>"
+}
+],
+[
+"<p>&rtimes;</p>",
+{
+"html": "<p>\u22ca</p>"
+}
+],
+[
+"<p>&rtri;</p>",
+{
+"html": "<p>\u25b9</p>"
+}
+],
+[
+"<p>&rtrie;</p>",
+{
+"html": "<p>\u22b5</p>"
+}
+],
+[
+"<p>&rtrif;</p>",
+{
+"html": "<p>\u25b8</p>"
+}
+],
+[
+"<p>&rtriltri;</p>",
+{
+"html": "<p>\u29ce</p>"
+}
+],
+[
+"<p>&RuleDelayed;</p>",
+{
+"html": "<p>\u29f4</p>"
+}
+],
+[
+"<p>&ruluhar;</p>",
+{
+"html": "<p>\u2968</p>"
+}
+],
+[
+"<p>&rx;</p>",
+{
+"html": "<p>\u211e</p>"
+}
+],
+[
+"<p>&Sacute;</p>",
+{
+"html": "<p>\u015a</p>"
+}
+],
+[
+"<p>&sacute;</p>",
+{
+"html": "<p>\u015b</p>"
+}
+],
+[
+"<p>&sbquo;</p>",
+{
+"html": "<p>\u201a</p>"
+}
+],
+[
+"<p>&Sc;</p>",
+{
+"html": "<p>\u2abc</p>"
+}
+],
+[
+"<p>&sc;</p>",
+{
+"html": "<p>\u227b</p>"
+}
+],
+[
+"<p>&scap;</p>",
+{
+"html": "<p>\u2ab8</p>"
+}
+],
+[
+"<p>&Scaron;</p>",
+{
+"html": "<p>\u0160</p>"
+}
+],
+[
+"<p>&scaron;</p>",
+{
+"html": "<p>\u0161</p>"
+}
+],
+[
+"<p>&sccue;</p>",
+{
+"html": "<p>\u227d</p>"
+}
+],
+[
+"<p>&scE;</p>",
+{
+"html": "<p>\u2ab4</p>"
+}
+],
+[
+"<p>&sce;</p>",
+{
+"html": "<p>\u2ab0</p>"
+}
+],
+[
+"<p>&Scedil;</p>",
+{
+"html": "<p>\u015e</p>"
+}
+],
+[
+"<p>&scedil;</p>",
+{
+"html": "<p>\u015f</p>"
+}
+],
+[
+"<p>&Scirc;</p>",
+{
+"html": "<p>\u015c</p>"
+}
+],
+[
+"<p>&scirc;</p>",
+{
+"html": "<p>\u015d</p>"
+}
+],
+[
+"<p>&scnap;</p>",
+{
+"html": "<p>\u2aba</p>"
+}
+],
+[
+"<p>&scnE;</p>",
+{
+"html": "<p>\u2ab6</p>"
+}
+],
+[
+"<p>&scnsim;</p>",
+{
+"html": "<p>\u22e9</p>"
+}
+],
+[
+"<p>&scpolint;</p>",
+{
+"html": "<p>\u2a13</p>"
+}
+],
+[
+"<p>&scsim;</p>",
+{
+"html": "<p>\u227f</p>"
+}
+],
+[
+"<p>&Scy;</p>",
+{
+"html": "<p>\u0421</p>"
+}
+],
+[
+"<p>&scy;</p>",
+{
+"html": "<p>\u0441</p>"
+}
+],
+[
+"<p>&sdot;</p>",
+{
+"html": "<p>\u22c5</p>"
+}
+],
+[
+"<p>&sdotb;</p>",
+{
+"html": "<p>\u22a1</p>"
+}
+],
+[
+"<p>&sdote;</p>",
+{
+"html": "<p>\u2a66</p>"
+}
+],
+[
+"<p>&searhk;</p>",
+{
+"html": "<p>\u2925</p>"
+}
+],
+[
+"<p>&seArr;</p>",
+{
+"html": "<p>\u21d8</p>"
+}
+],
+[
+"<p>&searr;</p>",
+{
+"html": "<p>\u2198</p>"
+}
+],
+[
+"<p>&searrow;</p>",
+{
+"html": "<p>\u2198</p>"
+}
+],
+[
+"<p>&sect</p>",
+{
+"html": "<p>\u00a7</p>"
+}
+],
+[
+"<p>&sect;</p>",
+{
+"html": "<p>\u00a7</p>"
+}
+],
+[
+"<p>&semi;</p>",
+{
+"html": "<p>;</p>"
+}
+],
+[
+"<p>&seswar;</p>",
+{
+"html": "<p>\u2929</p>"
+}
+],
+[
+"<p>&setminus;</p>",
+{
+"html": "<p>\u2216</p>"
+}
+],
+[
+"<p>&setmn;</p>",
+{
+"html": "<p>\u2216</p>"
+}
+],
+[
+"<p>&sext;</p>",
+{
+"html": "<p>\u2736</p>"
+}
+],
+[
+"<p>&Sfr;</p>",
+{
+"html": "<p>\ud835\udd16</p>"
+}
+],
+[
+"<p>&sfr;</p>",
+{
+"html": "<p>\ud835\udd30</p>"
+}
+],
+[
+"<p>&sfrown;</p>",
+{
+"html": "<p>\u2322</p>"
+}
+],
+[
+"<p>&sharp;</p>",
+{
+"html": "<p>\u266f</p>"
+}
+],
+[
+"<p>&SHCHcy;</p>",
+{
+"html": "<p>\u0429</p>"
+}
+],
+[
+"<p>&shchcy;</p>",
+{
+"html": "<p>\u0449</p>"
+}
+],
+[
+"<p>&SHcy;</p>",
+{
+"html": "<p>\u0428</p>"
+}
+],
+[
+"<p>&shcy;</p>",
+{
+"html": "<p>\u0448</p>"
+}
+],
+[
+"<p>&ShortDownArrow;</p>",
+{
+"html": "<p>\u2193</p>"
+}
+],
+[
+"<p>&ShortLeftArrow;</p>",
+{
+"html": "<p>\u2190</p>"
+}
+],
+[
+"<p>&shortmid;</p>",
+{
+"html": "<p>\u2223</p>"
+}
+],
+[
+"<p>&shortparallel;</p>",
+{
+"html": "<p>\u2225</p>"
+}
+],
+[
+"<p>&ShortRightArrow;</p>",
+{
+"html": "<p>\u2192</p>"
+}
+],
+[
+"<p>&ShortUpArrow;</p>",
+{
+"html": "<p>\u2191</p>"
+}
+],
+[
+"<p>&shy</p>",
+{
+"html": "<p>\u00ad</p>"
+}
+],
+[
+"<p>&shy;</p>",
+{
+"html": "<p>\u00ad</p>"
+}
+],
+[
+"<p>&Sigma;</p>",
+{
+"html": "<p>\u03a3</p>"
+}
+],
+[
+"<p>&sigma;</p>",
+{
+"html": "<p>\u03c3</p>"
+}
+],
+[
+"<p>&sigmaf;</p>",
+{
+"html": "<p>\u03c2</p>"
+}
+],
+[
+"<p>&sigmav;</p>",
+{
+"html": "<p>\u03c2</p>"
+}
+],
+[
+"<p>&sim;</p>",
+{
+"html": "<p>\u223c</p>"
+}
+],
+[
+"<p>&simdot;</p>",
+{
+"html": "<p>\u2a6a</p>"
+}
+],
+[
+"<p>&sime;</p>",
+{
+"html": "<p>\u2243</p>"
+}
+],
+[
+"<p>&simeq;</p>",
+{
+"html": "<p>\u2243</p>"
+}
+],
+[
+"<p>&simg;</p>",
+{
+"html": "<p>\u2a9e</p>"
+}
+],
+[
+"<p>&simgE;</p>",
+{
+"html": "<p>\u2aa0</p>"
+}
+],
+[
+"<p>&siml;</p>",
+{
+"html": "<p>\u2a9d</p>"
+}
+],
+[
+"<p>&simlE;</p>",
+{
+"html": "<p>\u2a9f</p>"
+}
+],
+[
+"<p>&simne;</p>",
+{
+"html": "<p>\u2246</p>"
+}
+],
+[
+"<p>&simplus;</p>",
+{
+"html": "<p>\u2a24</p>"
+}
+],
+[
+"<p>&simrarr;</p>",
+{
+"html": "<p>\u2972</p>"
+}
+],
+[
+"<p>&slarr;</p>",
+{
+"html": "<p>\u2190</p>"
+}
+],
+[
+"<p>&SmallCircle;</p>",
+{
+"html": "<p>\u2218</p>"
+}
+],
+[
+"<p>&smallsetminus;</p>",
+{
+"html": "<p>\u2216</p>"
+}
+],
+[
+"<p>&smashp;</p>",
+{
+"html": "<p>\u2a33</p>"
+}
+],
+[
+"<p>&smeparsl;</p>",
+{
+"html": "<p>\u29e4</p>"
+}
+],
+[
+"<p>&smid;</p>",
+{
+"html": "<p>\u2223</p>"
+}
+],
+[
+"<p>&smile;</p>",
+{
+"html": "<p>\u2323</p>"
+}
+],
+[
+"<p>&smt;</p>",
+{
+"html": "<p>\u2aaa</p>"
+}
+],
+[
+"<p>&smte;</p>",
+{
+"html": "<p>\u2aac</p>"
+}
+],
+[
+"<p>&smtes;</p>",
+{
+"html": "<p>\u2aac\ufe00</p>"
+}
+],
+[
+"<p>&SOFTcy;</p>",
+{
+"html": "<p>\u042c</p>"
+}
+],
+[
+"<p>&softcy;</p>",
+{
+"html": "<p>\u044c</p>"
+}
+],
+[
+"<p>&sol;</p>",
+{
+"html": "<p>/</p>"
+}
+],
+[
+"<p>&solb;</p>",
+{
+"html": "<p>\u29c4</p>"
+}
+],
+[
+"<p>&solbar;</p>",
+{
+"html": "<p>\u233f</p>"
+}
+],
+[
+"<p>&Sopf;</p>",
+{
+"html": "<p>\ud835\udd4a</p>"
+}
+],
+[
+"<p>&sopf;</p>",
+{
+"html": "<p>\ud835\udd64</p>"
+}
+],
+[
+"<p>&spades;</p>",
+{
+"html": "<p>\u2660</p>"
+}
+],
+[
+"<p>&spadesuit;</p>",
+{
+"html": "<p>\u2660</p>"
+}
+],
+[
+"<p>&spar;</p>",
+{
+"html": "<p>\u2225</p>"
+}
+],
+[
+"<p>&sqcap;</p>",
+{
+"html": "<p>\u2293</p>"
+}
+],
+[
+"<p>&sqcaps;</p>",
+{
+"html": "<p>\u2293\ufe00</p>"
+}
+],
+[
+"<p>&sqcup;</p>",
+{
+"html": "<p>\u2294</p>"
+}
+],
+[
+"<p>&sqcups;</p>",
+{
+"html": "<p>\u2294\ufe00</p>"
+}
+],
+[
+"<p>&Sqrt;</p>",
+{
+"html": "<p>\u221a</p>"
+}
+],
+[
+"<p>&sqsub;</p>",
+{
+"html": "<p>\u228f</p>"
+}
+],
+[
+"<p>&sqsube;</p>",
+{
+"html": "<p>\u2291</p>"
+}
+],
+[
+"<p>&sqsubset;</p>",
+{
+"html": "<p>\u228f</p>"
+}
+],
+[
+"<p>&sqsubseteq;</p>",
+{
+"html": "<p>\u2291</p>"
+}
+],
+[
+"<p>&sqsup;</p>",
+{
+"html": "<p>\u2290</p>"
+}
+],
+[
+"<p>&sqsupe;</p>",
+{
+"html": "<p>\u2292</p>"
+}
+],
+[
+"<p>&sqsupset;</p>",
+{
+"html": "<p>\u2290</p>"
+}
+],
+[
+"<p>&sqsupseteq;</p>",
+{
+"html": "<p>\u2292</p>"
+}
+],
+[
+"<p>&squ;</p>",
+{
+"html": "<p>\u25a1</p>"
+}
+],
+[
+"<p>&Square;</p>",
+{
+"html": "<p>\u25a1</p>"
+}
+],
+[
+"<p>&square;</p>",
+{
+"html": "<p>\u25a1</p>"
+}
+],
+[
+"<p>&SquareIntersection;</p>",
+{
+"html": "<p>\u2293</p>"
+}
+],
+[
+"<p>&SquareSubset;</p>",
+{
+"html": "<p>\u228f</p>"
+}
+],
+[
+"<p>&SquareSubsetEqual;</p>",
+{
+"html": "<p>\u2291</p>"
+}
+],
+[
+"<p>&SquareSuperset;</p>",
+{
+"html": "<p>\u2290</p>"
+}
+],
+[
+"<p>&SquareSupersetEqual;</p>",
+{
+"html": "<p>\u2292</p>"
+}
+],
+[
+"<p>&SquareUnion;</p>",
+{
+"html": "<p>\u2294</p>"
+}
+],
+[
+"<p>&squarf;</p>",
+{
+"html": "<p>\u25aa</p>"
+}
+],
+[
+"<p>&squf;</p>",
+{
+"html": "<p>\u25aa</p>"
+}
+],
+[
+"<p>&srarr;</p>",
+{
+"html": "<p>\u2192</p>"
+}
+],
+[
+"<p>&Sscr;</p>",
+{
+"html": "<p>\ud835\udcae</p>"
+}
+],
+[
+"<p>&sscr;</p>",
+{
+"html": "<p>\ud835\udcc8</p>"
+}
+],
+[
+"<p>&ssetmn;</p>",
+{
+"html": "<p>\u2216</p>"
+}
+],
+[
+"<p>&ssmile;</p>",
+{
+"html": "<p>\u2323</p>"
+}
+],
+[
+"<p>&sstarf;</p>",
+{
+"html": "<p>\u22c6</p>"
+}
+],
+[
+"<p>&Star;</p>",
+{
+"html": "<p>\u22c6</p>"
+}
+],
+[
+"<p>&star;</p>",
+{
+"html": "<p>\u2606</p>"
+}
+],
+[
+"<p>&starf;</p>",
+{
+"html": "<p>\u2605</p>"
+}
+],
+[
+"<p>&straightepsilon;</p>",
+{
+"html": "<p>\u03f5</p>"
+}
+],
+[
+"<p>&straightphi;</p>",
+{
+"html": "<p>\u03d5</p>"
+}
+],
+[
+"<p>&strns;</p>",
+{
+"html": "<p>\u00af</p>"
+}
+],
+[
+"<p>&Sub;</p>",
+{
+"html": "<p>\u22d0</p>"
+}
+],
+[
+"<p>&sub;</p>",
+{
+"html": "<p>\u2282</p>"
+}
+],
+[
+"<p>&subdot;</p>",
+{
+"html": "<p>\u2abd</p>"
+}
+],
+[
+"<p>&subE;</p>",
+{
+"html": "<p>\u2ac5</p>"
+}
+],
+[
+"<p>&sube;</p>",
+{
+"html": "<p>\u2286</p>"
+}
+],
+[
+"<p>&subedot;</p>",
+{
+"html": "<p>\u2ac3</p>"
+}
+],
+[
+"<p>&submult;</p>",
+{
+"html": "<p>\u2ac1</p>"
+}
+],
+[
+"<p>&subnE;</p>",
+{
+"html": "<p>\u2acb</p>"
+}
+],
+[
+"<p>&subne;</p>",
+{
+"html": "<p>\u228a</p>"
+}
+],
+[
+"<p>&subplus;</p>",
+{
+"html": "<p>\u2abf</p>"
+}
+],
+[
+"<p>&subrarr;</p>",
+{
+"html": "<p>\u2979</p>"
+}
+],
+[
+"<p>&Subset;</p>",
+{
+"html": "<p>\u22d0</p>"
+}
+],
+[
+"<p>&subset;</p>",
+{
+"html": "<p>\u2282</p>"
+}
+],
+[
+"<p>&subseteq;</p>",
+{
+"html": "<p>\u2286</p>"
+}
+],
+[
+"<p>&subseteqq;</p>",
+{
+"html": "<p>\u2ac5</p>"
+}
+],
+[
+"<p>&SubsetEqual;</p>",
+{
+"html": "<p>\u2286</p>"
+}
+],
+[
+"<p>&subsetneq;</p>",
+{
+"html": "<p>\u228a</p>"
+}
+],
+[
+"<p>&subsetneqq;</p>",
+{
+"html": "<p>\u2acb</p>"
+}
+],
+[
+"<p>&subsim;</p>",
+{
+"html": "<p>\u2ac7</p>"
+}
+],
+[
+"<p>&subsub;</p>",
+{
+"html": "<p>\u2ad5</p>"
+}
+],
+[
+"<p>&subsup;</p>",
+{
+"html": "<p>\u2ad3</p>"
+}
+],
+[
+"<p>&succ;</p>",
+{
+"html": "<p>\u227b</p>"
+}
+],
+[
+"<p>&succapprox;</p>",
+{
+"html": "<p>\u2ab8</p>"
+}
+],
+[
+"<p>&succcurlyeq;</p>",
+{
+"html": "<p>\u227d</p>"
+}
+],
+[
+"<p>&Succeeds;</p>",
+{
+"html": "<p>\u227b</p>"
+}
+],
+[
+"<p>&SucceedsEqual;</p>",
+{
+"html": "<p>\u2ab0</p>"
+}
+],
+[
+"<p>&SucceedsSlantEqual;</p>",
+{
+"html": "<p>\u227d</p>"
+}
+],
+[
+"<p>&SucceedsTilde;</p>",
+{
+"html": "<p>\u227f</p>"
+}
+],
+[
+"<p>&succeq;</p>",
+{
+"html": "<p>\u2ab0</p>"
+}
+],
+[
+"<p>&succnapprox;</p>",
+{
+"html": "<p>\u2aba</p>"
+}
+],
+[
+"<p>&succneqq;</p>",
+{
+"html": "<p>\u2ab6</p>"
+}
+],
+[
+"<p>&succnsim;</p>",
+{
+"html": "<p>\u22e9</p>"
+}
+],
+[
+"<p>&succsim;</p>",
+{
+"html": "<p>\u227f</p>"
+}
+],
+[
+"<p>&SuchThat;</p>",
+{
+"html": "<p>\u220b</p>"
+}
+],
+[
+"<p>&Sum;</p>",
+{
+"html": "<p>\u2211</p>"
+}
+],
+[
+"<p>&sum;</p>",
+{
+"html": "<p>\u2211</p>"
+}
+],
+[
+"<p>&sung;</p>",
+{
+"html": "<p>\u266a</p>"
+}
+],
+[
+"<p>&sup1</p>",
+{
+"html": "<p>\u00b9</p>"
+}
+],
+[
+"<p>&sup1;</p>",
+{
+"html": "<p>\u00b9</p>"
+}
+],
+[
+"<p>&sup2</p>",
+{
+"html": "<p>\u00b2</p>"
+}
+],
+[
+"<p>&sup2;</p>",
+{
+"html": "<p>\u00b2</p>"
+}
+],
+[
+"<p>&sup3</p>",
+{
+"html": "<p>\u00b3</p>"
+}
+],
+[
+"<p>&sup3;</p>",
+{
+"html": "<p>\u00b3</p>"
+}
+],
+[
+"<p>&Sup;</p>",
+{
+"html": "<p>\u22d1</p>"
+}
+],
+[
+"<p>&sup;</p>",
+{
+"html": "<p>\u2283</p>"
+}
+],
+[
+"<p>&supdot;</p>",
+{
+"html": "<p>\u2abe</p>"
+}
+],
+[
+"<p>&supdsub;</p>",
+{
+"html": "<p>\u2ad8</p>"
+}
+],
+[
+"<p>&supE;</p>",
+{
+"html": "<p>\u2ac6</p>"
+}
+],
+[
+"<p>&supe;</p>",
+{
+"html": "<p>\u2287</p>"
+}
+],
+[
+"<p>&supedot;</p>",
+{
+"html": "<p>\u2ac4</p>"
+}
+],
+[
+"<p>&Superset;</p>",
+{
+"html": "<p>\u2283</p>"
+}
+],
+[
+"<p>&SupersetEqual;</p>",
+{
+"html": "<p>\u2287</p>"
+}
+],
+[
+"<p>&suphsol;</p>",
+{
+"html": "<p>\u27c9</p>"
+}
+],
+[
+"<p>&suphsub;</p>",
+{
+"html": "<p>\u2ad7</p>"
+}
+],
+[
+"<p>&suplarr;</p>",
+{
+"html": "<p>\u297b</p>"
+}
+],
+[
+"<p>&supmult;</p>",
+{
+"html": "<p>\u2ac2</p>"
+}
+],
+[
+"<p>&supnE;</p>",
+{
+"html": "<p>\u2acc</p>"
+}
+],
+[
+"<p>&supne;</p>",
+{
+"html": "<p>\u228b</p>"
+}
+],
+[
+"<p>&supplus;</p>",
+{
+"html": "<p>\u2ac0</p>"
+}
+],
+[
+"<p>&Supset;</p>",
+{
+"html": "<p>\u22d1</p>"
+}
+],
+[
+"<p>&supset;</p>",
+{
+"html": "<p>\u2283</p>"
+}
+],
+[
+"<p>&supseteq;</p>",
+{
+"html": "<p>\u2287</p>"
+}
+],
+[
+"<p>&supseteqq;</p>",
+{
+"html": "<p>\u2ac6</p>"
+}
+],
+[
+"<p>&supsetneq;</p>",
+{
+"html": "<p>\u228b</p>"
+}
+],
+[
+"<p>&supsetneqq;</p>",
+{
+"html": "<p>\u2acc</p>"
+}
+],
+[
+"<p>&supsim;</p>",
+{
+"html": "<p>\u2ac8</p>"
+}
+],
+[
+"<p>&supsub;</p>",
+{
+"html": "<p>\u2ad4</p>"
+}
+],
+[
+"<p>&supsup;</p>",
+{
+"html": "<p>\u2ad6</p>"
+}
+],
+[
+"<p>&swarhk;</p>",
+{
+"html": "<p>\u2926</p>"
+}
+],
+[
+"<p>&swArr;</p>",
+{
+"html": "<p>\u21d9</p>"
+}
+],
+[
+"<p>&swarr;</p>",
+{
+"html": "<p>\u2199</p>"
+}
+],
+[
+"<p>&swarrow;</p>",
+{
+"html": "<p>\u2199</p>"
+}
+],
+[
+"<p>&swnwar;</p>",
+{
+"html": "<p>\u292a</p>"
+}
+],
+[
+"<p>&szlig</p>",
+{
+"html": "<p>\u00df</p>"
+}
+],
+[
+"<p>&szlig;</p>",
+{
+"html": "<p>\u00df</p>"
+}
+],
+[
+"<p>&Tab;</p>",
+{
+"html": "<p>\t</p>"
+}
+],
+[
+"<p>&target;</p>",
+{
+"html": "<p>\u2316</p>"
+}
+],
+[
+"<p>&Tau;</p>",
+{
+"html": "<p>\u03a4</p>"
+}
+],
+[
+"<p>&tau;</p>",
+{
+"html": "<p>\u03c4</p>"
+}
+],
+[
+"<p>&tbrk;</p>",
+{
+"html": "<p>\u23b4</p>"
+}
+],
+[
+"<p>&Tcaron;</p>",
+{
+"html": "<p>\u0164</p>"
+}
+],
+[
+"<p>&tcaron;</p>",
+{
+"html": "<p>\u0165</p>"
+}
+],
+[
+"<p>&Tcedil;</p>",
+{
+"html": "<p>\u0162</p>"
+}
+],
+[
+"<p>&tcedil;</p>",
+{
+"html": "<p>\u0163</p>"
+}
+],
+[
+"<p>&Tcy;</p>",
+{
+"html": "<p>\u0422</p>"
+}
+],
+[
+"<p>&tcy;</p>",
+{
+"html": "<p>\u0442</p>"
+}
+],
+[
+"<p>&tdot;</p>",
+{
+"html": "<p>\u20db</p>"
+}
+],
+[
+"<p>&telrec;</p>",
+{
+"html": "<p>\u2315</p>"
+}
+],
+[
+"<p>&Tfr;</p>",
+{
+"html": "<p>\ud835\udd17</p>"
+}
+],
+[
+"<p>&tfr;</p>",
+{
+"html": "<p>\ud835\udd31</p>"
+}
+],
+[
+"<p>&there4;</p>",
+{
+"html": "<p>\u2234</p>"
+}
+],
+[
+"<p>&Therefore;</p>",
+{
+"html": "<p>\u2234</p>"
+}
+],
+[
+"<p>&therefore;</p>",
+{
+"html": "<p>\u2234</p>"
+}
+],
+[
+"<p>&Theta;</p>",
+{
+"html": "<p>\u0398</p>"
+}
+],
+[
+"<p>&theta;</p>",
+{
+"html": "<p>\u03b8</p>"
+}
+],
+[
+"<p>&thetasym;</p>",
+{
+"html": "<p>\u03d1</p>"
+}
+],
+[
+"<p>&thetav;</p>",
+{
+"html": "<p>\u03d1</p>"
+}
+],
+[
+"<p>&thickapprox;</p>",
+{
+"html": "<p>\u2248</p>"
+}
+],
+[
+"<p>&thicksim;</p>",
+{
+"html": "<p>\u223c</p>"
+}
+],
+[
+"<p>&ThickSpace;</p>",
+{
+"html": "<p>\u205f\u200a</p>"
+}
+],
+[
+"<p>&thinsp;</p>",
+{
+"html": "<p>\u2009</p>"
+}
+],
+[
+"<p>&ThinSpace;</p>",
+{
+"html": "<p>\u2009</p>"
+}
+],
+[
+"<p>&thkap;</p>",
+{
+"html": "<p>\u2248</p>"
+}
+],
+[
+"<p>&thksim;</p>",
+{
+"html": "<p>\u223c</p>"
+}
+],
+[
+"<p>&THORN</p>",
+{
+"html": "<p>\u00de</p>"
+}
+],
+[
+"<p>&thorn</p>",
+{
+"html": "<p>\u00fe</p>"
+}
+],
+[
+"<p>&THORN;</p>",
+{
+"html": "<p>\u00de</p>"
+}
+],
+[
+"<p>&thorn;</p>",
+{
+"html": "<p>\u00fe</p>"
+}
+],
+[
+"<p>&Tilde;</p>",
+{
+"html": "<p>\u223c</p>"
+}
+],
+[
+"<p>&tilde;</p>",
+{
+"html": "<p>\u02dc</p>"
+}
+],
+[
+"<p>&TildeEqual;</p>",
+{
+"html": "<p>\u2243</p>"
+}
+],
+[
+"<p>&TildeFullEqual;</p>",
+{
+"html": "<p>\u2245</p>"
+}
+],
+[
+"<p>&TildeTilde;</p>",
+{
+"html": "<p>\u2248</p>"
+}
+],
+[
+"<p>&times</p>",
+{
+"html": "<p>\u00d7</p>"
+}
+],
+[
+"<p>&times;</p>",
+{
+"html": "<p>\u00d7</p>"
+}
+],
+[
+"<p>&timesb;</p>",
+{
+"html": "<p>\u22a0</p>"
+}
+],
+[
+"<p>&timesbar;</p>",
+{
+"html": "<p>\u2a31</p>"
+}
+],
+[
+"<p>&timesd;</p>",
+{
+"html": "<p>\u2a30</p>"
+}
+],
+[
+"<p>&tint;</p>",
+{
+"html": "<p>\u222d</p>"
+}
+],
+[
+"<p>&toea;</p>",
+{
+"html": "<p>\u2928</p>"
+}
+],
+[
+"<p>&top;</p>",
+{
+"html": "<p>\u22a4</p>"
+}
+],
+[
+"<p>&topbot;</p>",
+{
+"html": "<p>\u2336</p>"
+}
+],
+[
+"<p>&topcir;</p>",
+{
+"html": "<p>\u2af1</p>"
+}
+],
+[
+"<p>&Topf;</p>",
+{
+"html": "<p>\ud835\udd4b</p>"
+}
+],
+[
+"<p>&topf;</p>",
+{
+"html": "<p>\ud835\udd65</p>"
+}
+],
+[
+"<p>&topfork;</p>",
+{
+"html": "<p>\u2ada</p>"
+}
+],
+[
+"<p>&tosa;</p>",
+{
+"html": "<p>\u2929</p>"
+}
+],
+[
+"<p>&tprime;</p>",
+{
+"html": "<p>\u2034</p>"
+}
+],
+[
+"<p>&TRADE;</p>",
+{
+"html": "<p>\u2122</p>"
+}
+],
+[
+"<p>&trade;</p>",
+{
+"html": "<p>\u2122</p>"
+}
+],
+[
+"<p>&triangle;</p>",
+{
+"html": "<p>\u25b5</p>"
+}
+],
+[
+"<p>&triangledown;</p>",
+{
+"html": "<p>\u25bf</p>"
+}
+],
+[
+"<p>&triangleleft;</p>",
+{
+"html": "<p>\u25c3</p>"
+}
+],
+[
+"<p>&trianglelefteq;</p>",
+{
+"html": "<p>\u22b4</p>"
+}
+],
+[
+"<p>&triangleq;</p>",
+{
+"html": "<p>\u225c</p>"
+}
+],
+[
+"<p>&triangleright;</p>",
+{
+"html": "<p>\u25b9</p>"
+}
+],
+[
+"<p>&trianglerighteq;</p>",
+{
+"html": "<p>\u22b5</p>"
+}
+],
+[
+"<p>&tridot;</p>",
+{
+"html": "<p>\u25ec</p>"
+}
+],
+[
+"<p>&trie;</p>",
+{
+"html": "<p>\u225c</p>"
+}
+],
+[
+"<p>&triminus;</p>",
+{
+"html": "<p>\u2a3a</p>"
+}
+],
+[
+"<p>&TripleDot;</p>",
+{
+"html": "<p>\u20db</p>"
+}
+],
+[
+"<p>&triplus;</p>",
+{
+"html": "<p>\u2a39</p>"
+}
+],
+[
+"<p>&trisb;</p>",
+{
+"html": "<p>\u29cd</p>"
+}
+],
+[
+"<p>&tritime;</p>",
+{
+"html": "<p>\u2a3b</p>"
+}
+],
+[
+"<p>&trpezium;</p>",
+{
+"html": "<p>\u23e2</p>"
+}
+],
+[
+"<p>&Tscr;</p>",
+{
+"html": "<p>\ud835\udcaf</p>"
+}
+],
+[
+"<p>&tscr;</p>",
+{
+"html": "<p>\ud835\udcc9</p>"
+}
+],
+[
+"<p>&TScy;</p>",
+{
+"html": "<p>\u0426</p>"
+}
+],
+[
+"<p>&tscy;</p>",
+{
+"html": "<p>\u0446</p>"
+}
+],
+[
+"<p>&TSHcy;</p>",
+{
+"html": "<p>\u040b</p>"
+}
+],
+[
+"<p>&tshcy;</p>",
+{
+"html": "<p>\u045b</p>"
+}
+],
+[
+"<p>&Tstrok;</p>",
+{
+"html": "<p>\u0166</p>"
+}
+],
+[
+"<p>&tstrok;</p>",
+{
+"html": "<p>\u0167</p>"
+}
+],
+[
+"<p>&twixt;</p>",
+{
+"html": "<p>\u226c</p>"
+}
+],
+[
+"<p>&twoheadleftarrow;</p>",
+{
+"html": "<p>\u219e</p>"
+}
+],
+[
+"<p>&twoheadrightarrow;</p>",
+{
+"html": "<p>\u21a0</p>"
+}
+],
+[
+"<p>&Uacute</p>",
+{
+"html": "<p>\u00da</p>"
+}
+],
+[
+"<p>&uacute</p>",
+{
+"html": "<p>\u00fa</p>"
+}
+],
+[
+"<p>&Uacute;</p>",
+{
+"html": "<p>\u00da</p>"
+}
+],
+[
+"<p>&uacute;</p>",
+{
+"html": "<p>\u00fa</p>"
+}
+],
+[
+"<p>&Uarr;</p>",
+{
+"html": "<p>\u219f</p>"
+}
+],
+[
+"<p>&uArr;</p>",
+{
+"html": "<p>\u21d1</p>"
+}
+],
+[
+"<p>&uarr;</p>",
+{
+"html": "<p>\u2191</p>"
+}
+],
+[
+"<p>&Uarrocir;</p>",
+{
+"html": "<p>\u2949</p>"
+}
+],
+[
+"<p>&Ubrcy;</p>",
+{
+"html": "<p>\u040e</p>"
+}
+],
+[
+"<p>&ubrcy;</p>",
+{
+"html": "<p>\u045e</p>"
+}
+],
+[
+"<p>&Ubreve;</p>",
+{
+"html": "<p>\u016c</p>"
+}
+],
+[
+"<p>&ubreve;</p>",
+{
+"html": "<p>\u016d</p>"
+}
+],
+[
+"<p>&Ucirc</p>",
+{
+"html": "<p>\u00db</p>"
+}
+],
+[
+"<p>&ucirc</p>",
+{
+"html": "<p>\u00fb</p>"
+}
+],
+[
+"<p>&Ucirc;</p>",
+{
+"html": "<p>\u00db</p>"
+}
+],
+[
+"<p>&ucirc;</p>",
+{
+"html": "<p>\u00fb</p>"
+}
+],
+[
+"<p>&Ucy;</p>",
+{
+"html": "<p>\u0423</p>"
+}
+],
+[
+"<p>&ucy;</p>",
+{
+"html": "<p>\u0443</p>"
+}
+],
+[
+"<p>&udarr;</p>",
+{
+"html": "<p>\u21c5</p>"
+}
+],
+[
+"<p>&Udblac;</p>",
+{
+"html": "<p>\u0170</p>"
+}
+],
+[
+"<p>&udblac;</p>",
+{
+"html": "<p>\u0171</p>"
+}
+],
+[
+"<p>&udhar;</p>",
+{
+"html": "<p>\u296e</p>"
+}
+],
+[
+"<p>&ufisht;</p>",
+{
+"html": "<p>\u297e</p>"
+}
+],
+[
+"<p>&Ufr;</p>",
+{
+"html": "<p>\ud835\udd18</p>"
+}
+],
+[
+"<p>&ufr;</p>",
+{
+"html": "<p>\ud835\udd32</p>"
+}
+],
+[
+"<p>&Ugrave</p>",
+{
+"html": "<p>\u00d9</p>"
+}
+],
+[
+"<p>&ugrave</p>",
+{
+"html": "<p>\u00f9</p>"
+}
+],
+[
+"<p>&Ugrave;</p>",
+{
+"html": "<p>\u00d9</p>"
+}
+],
+[
+"<p>&ugrave;</p>",
+{
+"html": "<p>\u00f9</p>"
+}
+],
+[
+"<p>&uHar;</p>",
+{
+"html": "<p>\u2963</p>"
+}
+],
+[
+"<p>&uharl;</p>",
+{
+"html": "<p>\u21bf</p>"
+}
+],
+[
+"<p>&uharr;</p>",
+{
+"html": "<p>\u21be</p>"
+}
+],
+[
+"<p>&uhblk;</p>",
+{
+"html": "<p>\u2580</p>"
+}
+],
+[
+"<p>&ulcorn;</p>",
+{
+"html": "<p>\u231c</p>"
+}
+],
+[
+"<p>&ulcorner;</p>",
+{
+"html": "<p>\u231c</p>"
+}
+],
+[
+"<p>&ulcrop;</p>",
+{
+"html": "<p>\u230f</p>"
+}
+],
+[
+"<p>&ultri;</p>",
+{
+"html": "<p>\u25f8</p>"
+}
+],
+[
+"<p>&Umacr;</p>",
+{
+"html": "<p>\u016a</p>"
+}
+],
+[
+"<p>&umacr;</p>",
+{
+"html": "<p>\u016b</p>"
+}
+],
+[
+"<p>&uml</p>",
+{
+"html": "<p>\u00a8</p>"
+}
+],
+[
+"<p>&uml;</p>",
+{
+"html": "<p>\u00a8</p>"
+}
+],
+[
+"<p>&UnderBar;</p>",
+{
+"html": "<p>_</p>"
+}
+],
+[
+"<p>&UnderBrace;</p>",
+{
+"html": "<p>\u23df</p>"
+}
+],
+[
+"<p>&UnderBracket;</p>",
+{
+"html": "<p>\u23b5</p>"
+}
+],
+[
+"<p>&UnderParenthesis;</p>",
+{
+"html": "<p>\u23dd</p>"
+}
+],
+[
+"<p>&Union;</p>",
+{
+"html": "<p>\u22c3</p>"
+}
+],
+[
+"<p>&UnionPlus;</p>",
+{
+"html": "<p>\u228e</p>"
+}
+],
+[
+"<p>&Uogon;</p>",
+{
+"html": "<p>\u0172</p>"
+}
+],
+[
+"<p>&uogon;</p>",
+{
+"html": "<p>\u0173</p>"
+}
+],
+[
+"<p>&Uopf;</p>",
+{
+"html": "<p>\ud835\udd4c</p>"
+}
+],
+[
+"<p>&uopf;</p>",
+{
+"html": "<p>\ud835\udd66</p>"
+}
+],
+[
+"<p>&UpArrow;</p>",
+{
+"html": "<p>\u2191</p>"
+}
+],
+[
+"<p>&Uparrow;</p>",
+{
+"html": "<p>\u21d1</p>"
+}
+],
+[
+"<p>&uparrow;</p>",
+{
+"html": "<p>\u2191</p>"
+}
+],
+[
+"<p>&UpArrowBar;</p>",
+{
+"html": "<p>\u2912</p>"
+}
+],
+[
+"<p>&UpArrowDownArrow;</p>",
+{
+"html": "<p>\u21c5</p>"
+}
+],
+[
+"<p>&UpDownArrow;</p>",
+{
+"html": "<p>\u2195</p>"
+}
+],
+[
+"<p>&Updownarrow;</p>",
+{
+"html": "<p>\u21d5</p>"
+}
+],
+[
+"<p>&updownarrow;</p>",
+{
+"html": "<p>\u2195</p>"
+}
+],
+[
+"<p>&UpEquilibrium;</p>",
+{
+"html": "<p>\u296e</p>"
+}
+],
+[
+"<p>&upharpoonleft;</p>",
+{
+"html": "<p>\u21bf</p>"
+}
+],
+[
+"<p>&upharpoonright;</p>",
+{
+"html": "<p>\u21be</p>"
+}
+],
+[
+"<p>&uplus;</p>",
+{
+"html": "<p>\u228e</p>"
+}
+],
+[
+"<p>&UpperLeftArrow;</p>",
+{
+"html": "<p>\u2196</p>"
+}
+],
+[
+"<p>&UpperRightArrow;</p>",
+{
+"html": "<p>\u2197</p>"
+}
+],
+[
+"<p>&Upsi;</p>",
+{
+"html": "<p>\u03d2</p>"
+}
+],
+[
+"<p>&upsi;</p>",
+{
+"html": "<p>\u03c5</p>"
+}
+],
+[
+"<p>&upsih;</p>",
+{
+"html": "<p>\u03d2</p>"
+}
+],
+[
+"<p>&Upsilon;</p>",
+{
+"html": "<p>\u03a5</p>"
+}
+],
+[
+"<p>&upsilon;</p>",
+{
+"html": "<p>\u03c5</p>"
+}
+],
+[
+"<p>&UpTee;</p>",
+{
+"html": "<p>\u22a5</p>"
+}
+],
+[
+"<p>&UpTeeArrow;</p>",
+{
+"html": "<p>\u21a5</p>"
+}
+],
+[
+"<p>&upuparrows;</p>",
+{
+"html": "<p>\u21c8</p>"
+}
+],
+[
+"<p>&urcorn;</p>",
+{
+"html": "<p>\u231d</p>"
+}
+],
+[
+"<p>&urcorner;</p>",
+{
+"html": "<p>\u231d</p>"
+}
+],
+[
+"<p>&urcrop;</p>",
+{
+"html": "<p>\u230e</p>"
+}
+],
+[
+"<p>&Uring;</p>",
+{
+"html": "<p>\u016e</p>"
+}
+],
+[
+"<p>&uring;</p>",
+{
+"html": "<p>\u016f</p>"
+}
+],
+[
+"<p>&urtri;</p>",
+{
+"html": "<p>\u25f9</p>"
+}
+],
+[
+"<p>&Uscr;</p>",
+{
+"html": "<p>\ud835\udcb0</p>"
+}
+],
+[
+"<p>&uscr;</p>",
+{
+"html": "<p>\ud835\udcca</p>"
+}
+],
+[
+"<p>&utdot;</p>",
+{
+"html": "<p>\u22f0</p>"
+}
+],
+[
+"<p>&Utilde;</p>",
+{
+"html": "<p>\u0168</p>"
+}
+],
+[
+"<p>&utilde;</p>",
+{
+"html": "<p>\u0169</p>"
+}
+],
+[
+"<p>&utri;</p>",
+{
+"html": "<p>\u25b5</p>"
+}
+],
+[
+"<p>&utrif;</p>",
+{
+"html": "<p>\u25b4</p>"
+}
+],
+[
+"<p>&uuarr;</p>",
+{
+"html": "<p>\u21c8</p>"
+}
+],
+[
+"<p>&Uuml</p>",
+{
+"html": "<p>\u00dc</p>"
+}
+],
+[
+"<p>&uuml</p>",
+{
+"html": "<p>\u00fc</p>"
+}
+],
+[
+"<p>&Uuml;</p>",
+{
+"html": "<p>\u00dc</p>"
+}
+],
+[
+"<p>&uuml;</p>",
+{
+"html": "<p>\u00fc</p>"
+}
+],
+[
+"<p>&uwangle;</p>",
+{
+"html": "<p>\u29a7</p>"
+}
+],
+[
+"<p>&vangrt;</p>",
+{
+"html": "<p>\u299c</p>"
+}
+],
+[
+"<p>&varepsilon;</p>",
+{
+"html": "<p>\u03f5</p>"
+}
+],
+[
+"<p>&varkappa;</p>",
+{
+"html": "<p>\u03f0</p>"
+}
+],
+[
+"<p>&varnothing;</p>",
+{
+"html": "<p>\u2205</p>"
+}
+],
+[
+"<p>&varphi;</p>",
+{
+"html": "<p>\u03d5</p>"
+}
+],
+[
+"<p>&varpi;</p>",
+{
+"html": "<p>\u03d6</p>"
+}
+],
+[
+"<p>&varpropto;</p>",
+{
+"html": "<p>\u221d</p>"
+}
+],
+[
+"<p>&vArr;</p>",
+{
+"html": "<p>\u21d5</p>"
+}
+],
+[
+"<p>&varr;</p>",
+{
+"html": "<p>\u2195</p>"
+}
+],
+[
+"<p>&varrho;</p>",
+{
+"html": "<p>\u03f1</p>"
+}
+],
+[
+"<p>&varsigma;</p>",
+{
+"html": "<p>\u03c2</p>"
+}
+],
+[
+"<p>&varsubsetneq;</p>",
+{
+"html": "<p>\u228a\ufe00</p>"
+}
+],
+[
+"<p>&varsubsetneqq;</p>",
+{
+"html": "<p>\u2acb\ufe00</p>"
+}
+],
+[
+"<p>&varsupsetneq;</p>",
+{
+"html": "<p>\u228b\ufe00</p>"
+}
+],
+[
+"<p>&varsupsetneqq;</p>",
+{
+"html": "<p>\u2acc\ufe00</p>"
+}
+],
+[
+"<p>&vartheta;</p>",
+{
+"html": "<p>\u03d1</p>"
+}
+],
+[
+"<p>&vartriangleleft;</p>",
+{
+"html": "<p>\u22b2</p>"
+}
+],
+[
+"<p>&vartriangleright;</p>",
+{
+"html": "<p>\u22b3</p>"
+}
+],
+[
+"<p>&Vbar;</p>",
+{
+"html": "<p>\u2aeb</p>"
+}
+],
+[
+"<p>&vBar;</p>",
+{
+"html": "<p>\u2ae8</p>"
+}
+],
+[
+"<p>&vBarv;</p>",
+{
+"html": "<p>\u2ae9</p>"
+}
+],
+[
+"<p>&Vcy;</p>",
+{
+"html": "<p>\u0412</p>"
+}
+],
+[
+"<p>&vcy;</p>",
+{
+"html": "<p>\u0432</p>"
+}
+],
+[
+"<p>&VDash;</p>",
+{
+"html": "<p>\u22ab</p>"
+}
+],
+[
+"<p>&Vdash;</p>",
+{
+"html": "<p>\u22a9</p>"
+}
+],
+[
+"<p>&vDash;</p>",
+{
+"html": "<p>\u22a8</p>"
+}
+],
+[
+"<p>&vdash;</p>",
+{
+"html": "<p>\u22a2</p>"
+}
+],
+[
+"<p>&Vdashl;</p>",
+{
+"html": "<p>\u2ae6</p>"
+}
+],
+[
+"<p>&Vee;</p>",
+{
+"html": "<p>\u22c1</p>"
+}
+],
+[
+"<p>&vee;</p>",
+{
+"html": "<p>\u2228</p>"
+}
+],
+[
+"<p>&veebar;</p>",
+{
+"html": "<p>\u22bb</p>"
+}
+],
+[
+"<p>&veeeq;</p>",
+{
+"html": "<p>\u225a</p>"
+}
+],
+[
+"<p>&vellip;</p>",
+{
+"html": "<p>\u22ee</p>"
+}
+],
+[
+"<p>&Verbar;</p>",
+{
+"html": "<p>\u2016</p>"
+}
+],
+[
+"<p>&verbar;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&Vert;</p>",
+{
+"html": "<p>\u2016</p>"
+}
+],
+[
+"<p>&vert;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&VerticalBar;</p>",
+{
+"html": "<p>\u2223</p>"
+}
+],
+[
+"<p>&VerticalLine;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&VerticalSeparator;</p>",
+{
+"html": "<p>\u2758</p>"
+}
+],
+[
+"<p>&VerticalTilde;</p>",
+{
+"html": "<p>\u2240</p>"
+}
+],
+[
+"<p>&VeryThinSpace;</p>",
+{
+"html": "<p>\u200a</p>"
+}
+],
+[
+"<p>&Vfr;</p>",
+{
+"html": "<p>\ud835\udd19</p>"
+}
+],
+[
+"<p>&vfr;</p>",
+{
+"html": "<p>\ud835\udd33</p>"
+}
+],
+[
+"<p>&vltri;</p>",
+{
+"html": "<p>\u22b2</p>"
+}
+],
+[
+"<p>&vnsub;</p>",
+{
+"html": "<p>\u2282\u20d2</p>"
+}
+],
+[
+"<p>&vnsup;</p>",
+{
+"html": "<p>\u2283\u20d2</p>"
+}
+],
+[
+"<p>&Vopf;</p>",
+{
+"html": "<p>\ud835\udd4d</p>"
+}
+],
+[
+"<p>&vopf;</p>",
+{
+"html": "<p>\ud835\udd67</p>"
+}
+],
+[
+"<p>&vprop;</p>",
+{
+"html": "<p>\u221d</p>"
+}
+],
+[
+"<p>&vrtri;</p>",
+{
+"html": "<p>\u22b3</p>"
+}
+],
+[
+"<p>&Vscr;</p>",
+{
+"html": "<p>\ud835\udcb1</p>"
+}
+],
+[
+"<p>&vscr;</p>",
+{
+"html": "<p>\ud835\udccb</p>"
+}
+],
+[
+"<p>&vsubnE;</p>",
+{
+"html": "<p>\u2acb\ufe00</p>"
+}
+],
+[
+"<p>&vsubne;</p>",
+{
+"html": "<p>\u228a\ufe00</p>"
+}
+],
+[
+"<p>&vsupnE;</p>",
+{
+"html": "<p>\u2acc\ufe00</p>"
+}
+],
+[
+"<p>&vsupne;</p>",
+{
+"html": "<p>\u228b\ufe00</p>"
+}
+],
+[
+"<p>&Vvdash;</p>",
+{
+"html": "<p>\u22aa</p>"
+}
+],
+[
+"<p>&vzigzag;</p>",
+{
+"html": "<p>\u299a</p>"
+}
+],
+[
+"<p>&Wcirc;</p>",
+{
+"html": "<p>\u0174</p>"
+}
+],
+[
+"<p>&wcirc;</p>",
+{
+"html": "<p>\u0175</p>"
+}
+],
+[
+"<p>&wedbar;</p>",
+{
+"html": "<p>\u2a5f</p>"
+}
+],
+[
+"<p>&Wedge;</p>",
+{
+"html": "<p>\u22c0</p>"
+}
+],
+[
+"<p>&wedge;</p>",
+{
+"html": "<p>\u2227</p>"
+}
+],
+[
+"<p>&wedgeq;</p>",
+{
+"html": "<p>\u2259</p>"
+}
+],
+[
+"<p>&weierp;</p>",
+{
+"html": "<p>\u2118</p>"
+}
+],
+[
+"<p>&Wfr;</p>",
+{
+"html": "<p>\ud835\udd1a</p>"
+}
+],
+[
+"<p>&wfr;</p>",
+{
+"html": "<p>\ud835\udd34</p>"
+}
+],
+[
+"<p>&Wopf;</p>",
+{
+"html": "<p>\ud835\udd4e</p>"
+}
+],
+[
+"<p>&wopf;</p>",
+{
+"html": "<p>\ud835\udd68</p>"
+}
+],
+[
+"<p>&wp;</p>",
+{
+"html": "<p>\u2118</p>"
+}
+],
+[
+"<p>&wr;</p>",
+{
+"html": "<p>\u2240</p>"
+}
+],
+[
+"<p>&wreath;</p>",
+{
+"html": "<p>\u2240</p>"
+}
+],
+[
+"<p>&Wscr;</p>",
+{
+"html": "<p>\ud835\udcb2</p>"
+}
+],
+[
+"<p>&wscr;</p>",
+{
+"html": "<p>\ud835\udccc</p>"
+}
+],
+[
+"<p>&xcap;</p>",
+{
+"html": "<p>\u22c2</p>"
+}
+],
+[
+"<p>&xcirc;</p>",
+{
+"html": "<p>\u25ef</p>"
+}
+],
+[
+"<p>&xcup;</p>",
+{
+"html": "<p>\u22c3</p>"
+}
+],
+[
+"<p>&xdtri;</p>",
+{
+"html": "<p>\u25bd</p>"
+}
+],
+[
+"<p>&Xfr;</p>",
+{
+"html": "<p>\ud835\udd1b</p>"
+}
+],
+[
+"<p>&xfr;</p>",
+{
+"html": "<p>\ud835\udd35</p>"
+}
+],
+[
+"<p>&xhArr;</p>",
+{
+"html": "<p>\u27fa</p>"
+}
+],
+[
+"<p>&xharr;</p>",
+{
+"html": "<p>\u27f7</p>"
+}
+],
+[
+"<p>&Xi;</p>",
+{
+"html": "<p>\u039e</p>"
+}
+],
+[
+"<p>&xi;</p>",
+{
+"html": "<p>\u03be</p>"
+}
+],
+[
+"<p>&xlArr;</p>",
+{
+"html": "<p>\u27f8</p>"
+}
+],
+[
+"<p>&xlarr;</p>",
+{
+"html": "<p>\u27f5</p>"
+}
+],
+[
+"<p>&xmap;</p>",
+{
+"html": "<p>\u27fc</p>"
+}
+],
+[
+"<p>&xnis;</p>",
+{
+"html": "<p>\u22fb</p>"
+}
+],
+[
+"<p>&xodot;</p>",
+{
+"html": "<p>\u2a00</p>"
+}
+],
+[
+"<p>&Xopf;</p>",
+{
+"html": "<p>\ud835\udd4f</p>"
+}
+],
+[
+"<p>&xopf;</p>",
+{
+"html": "<p>\ud835\udd69</p>"
+}
+],
+[
+"<p>&xoplus;</p>",
+{
+"html": "<p>\u2a01</p>"
+}
+],
+[
+"<p>&xotime;</p>",
+{
+"html": "<p>\u2a02</p>"
+}
+],
+[
+"<p>&xrArr;</p>",
+{
+"html": "<p>\u27f9</p>"
+}
+],
+[
+"<p>&xrarr;</p>",
+{
+"html": "<p>\u27f6</p>"
+}
+],
+[
+"<p>&Xscr;</p>",
+{
+"html": "<p>\ud835\udcb3</p>"
+}
+],
+[
+"<p>&xscr;</p>",
+{
+"html": "<p>\ud835\udccd</p>"
+}
+],
+[
+"<p>&xsqcup;</p>",
+{
+"html": "<p>\u2a06</p>"
+}
+],
+[
+"<p>&xuplus;</p>",
+{
+"html": "<p>\u2a04</p>"
+}
+],
+[
+"<p>&xutri;</p>",
+{
+"html": "<p>\u25b3</p>"
+}
+],
+[
+"<p>&xvee;</p>",
+{
+"html": "<p>\u22c1</p>"
+}
+],
+[
+"<p>&xwedge;</p>",
+{
+"html": "<p>\u22c0</p>"
+}
+],
+[
+"<p>&Yacute</p>",
+{
+"html": "<p>\u00dd</p>"
+}
+],
+[
+"<p>&yacute</p>",
+{
+"html": "<p>\u00fd</p>"
+}
+],
+[
+"<p>&Yacute;</p>",
+{
+"html": "<p>\u00dd</p>"
+}
+],
+[
+"<p>&yacute;</p>",
+{
+"html": "<p>\u00fd</p>"
+}
+],
+[
+"<p>&YAcy;</p>",
+{
+"html": "<p>\u042f</p>"
+}
+],
+[
+"<p>&yacy;</p>",
+{
+"html": "<p>\u044f</p>"
+}
+],
+[
+"<p>&Ycirc;</p>",
+{
+"html": "<p>\u0176</p>"
+}
+],
+[
+"<p>&ycirc;</p>",
+{
+"html": "<p>\u0177</p>"
+}
+],
+[
+"<p>&Ycy;</p>",
+{
+"html": "<p>\u042b</p>"
+}
+],
+[
+"<p>&ycy;</p>",
+{
+"html": "<p>\u044b</p>"
+}
+],
+[
+"<p>&yen</p>",
+{
+"html": "<p>\u00a5</p>"
+}
+],
+[
+"<p>&yen;</p>",
+{
+"html": "<p>\u00a5</p>"
+}
+],
+[
+"<p>&Yfr;</p>",
+{
+"html": "<p>\ud835\udd1c</p>"
+}
+],
+[
+"<p>&yfr;</p>",
+{
+"html": "<p>\ud835\udd36</p>"
+}
+],
+[
+"<p>&YIcy;</p>",
+{
+"html": "<p>\u0407</p>"
+}
+],
+[
+"<p>&yicy;</p>",
+{
+"html": "<p>\u0457</p>"
+}
+],
+[
+"<p>&Yopf;</p>",
+{
+"html": "<p>\ud835\udd50</p>"
+}
+],
+[
+"<p>&yopf;</p>",
+{
+"html": "<p>\ud835\udd6a</p>"
+}
+],
+[
+"<p>&Yscr;</p>",
+{
+"html": "<p>\ud835\udcb4</p>"
+}
+],
+[
+"<p>&yscr;</p>",
+{
+"html": "<p>\ud835\udcce</p>"
+}
+],
+[
+"<p>&YUcy;</p>",
+{
+"html": "<p>\u042e</p>"
+}
+],
+[
+"<p>&yucy;</p>",
+{
+"html": "<p>\u044e</p>"
+}
+],
+[
+"<p>&yuml</p>",
+{
+"html": "<p>\u00ff</p>"
+}
+],
+[
+"<p>&Yuml;</p>",
+{
+"html": "<p>\u0178</p>"
+}
+],
+[
+"<p>&yuml;</p>",
+{
+"html": "<p>\u00ff</p>"
+}
+],
+[
+"<p>&Zacute;</p>",
+{
+"html": "<p>\u0179</p>"
+}
+],
+[
+"<p>&zacute;</p>",
+{
+"html": "<p>\u017a</p>"
+}
+],
+[
+"<p>&Zcaron;</p>",
+{
+"html": "<p>\u017d</p>"
+}
+],
+[
+"<p>&zcaron;</p>",
+{
+"html": "<p>\u017e</p>"
+}
+],
+[
+"<p>&Zcy;</p>",
+{
+"html": "<p>\u0417</p>"
+}
+],
+[
+"<p>&zcy;</p>",
+{
+"html": "<p>\u0437</p>"
+}
+],
+[
+"<p>&Zdot;</p>",
+{
+"html": "<p>\u017b</p>"
+}
+],
+[
+"<p>&zdot;</p>",
+{
+"html": "<p>\u017c</p>"
+}
+],
+[
+"<p>&zeetrf;</p>",
+{
+"html": "<p>\u2128</p>"
+}
+],
+[
+"<p>&ZeroWidthSpace;</p>",
+{
+"html": "<p>\u200b</p>"
+}
+],
+[
+"<p>&Zeta;</p>",
+{
+"html": "<p>\u0396</p>"
+}
+],
+[
+"<p>&zeta;</p>",
+{
+"html": "<p>\u03b6</p>"
+}
+],
+[
+"<p>&Zfr;</p>",
+{
+"html": "<p>\u2128</p>"
+}
+],
+[
+"<p>&zfr;</p>",
+{
+"html": "<p>\ud835\udd37</p>"
+}
+],
+[
+"<p>&ZHcy;</p>",
+{
+"html": "<p>\u0416</p>"
+}
+],
+[
+"<p>&zhcy;</p>",
+{
+"html": "<p>\u0436</p>"
+}
+],
+[
+"<p>&zigrarr;</p>",
+{
+"html": "<p>\u21dd</p>"
+}
+],
+[
+"<p>&Zopf;</p>",
+{
+"html": "<p>\u2124</p>"
+}
+],
+[
+"<p>&zopf;</p>",
+{
+"html": "<p>\ud835\udd6b</p>"
+}
+],
+[
+"<p>&Zscr;</p>",
+{
+"html": "<p>\ud835\udcb5</p>"
+}
+],
+[
+"<p>&zscr;</p>",
+{
+"html": "<p>\ud835\udccf</p>"
+}
+],
+[
+"<p>&zwj;</p>",
+{
+"html": "<p>\u200d</p>"
+}
+],
+[
+"<p>&zwnj;</p>",
+{
+"html": "<p>\u200c</p>"
+}
+],
+[
+"<p>&copy test &notit; &#x80;</p>",
+{
+"html": "<p>\u00a9 test \u00acit; \u20ac</p>"
+}
+],
+[
+"<p>&#0;|&#x0;</p>",
+{
+"html": "<p>\ufffd|\ufffd</p>"
+}
+],
+[
+"<p>&#1;|&#x1;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#8;|&#x8;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#9;|&#x9;</p>",
+{
+"html": "<p>\t|\t</p>"
+}
+],
+[
+"<p>&#10;|&#xa;</p>",
+{
+"html": "<p>\n|\n</p>"
+}
+],
+[
+"<p>&#11;|&#xb;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#12;|&#xc;</p>",
+{
+"html": "<p>\f|\f</p>"
+}
+],
+[
+"<p>&#13;|&#xd;</p>",
+{
+"html": "<p>\r|\r</p>"
+}
+],
+[
+"<p>&#31;|&#x1f;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#127;|&#x7f;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#128;|&#x80;</p>",
+{
+"html": "<p>\u20ac|\u20ac</p>"
+}
+],
+[
+"<p>&#129;|&#x81;</p>",
+{
+"html": "<p>\u0081|\u0081</p>"
+}
+],
+[
+"<p>&#159;|&#x9f;</p>",
+{
+"html": "<p>\u0178|\u0178</p>"
+}
+],
+[
+"<p>&#160;|&#xa0;</p>",
+{
+"html": "<p>\u00a0|\u00a0</p>"
+}
+],
+[
+"<p>&#55296;|&#xd800;</p>",
+{
+"html": "<p>\ufffd|\ufffd</p>"
+}
+],
+[
+"<p>&#57343;|&#xdfff;</p>",
+{
+"html": "<p>\ufffd|\ufffd</p>"
+}
+],
+[
+"<p>&#64976;|&#xfdd0;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#65534;|&#xfffe;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#65535;|&#xffff;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#1114111;|&#x10ffff;</p>",
+{
+"html": "<p>|</p>"
+}
+],
+[
+"<p>&#1114112;|&#x110000;</p>",
+{
+"html": "<p>\ufffd|\ufffd</p>"
+}
+]
+],
+"raw_text": {
+"<script>&#99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;</script>": {
+"html": ""
+},
+"<script>&#99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;": {
+"html": ""
+},
+"<style>&#99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;</style>": {
+"html": ""
+},
+"<style>&#99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;": {
+"html": ""
+}
+},
+"visible_entity_error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit",
+"shelf_page_limit_2": {
+"items": [
+{
+"id": "id /?#\u96ea",
+"name": "\u0130\u0131\u03a3\u03c3\u03c2 \ufb03 \u1e9e",
+"author": "T\u00c1C GI\u1ea2",
+"source": "file",
+"path": "",
+"cover": "javascript:bad()",
+"kind": "text",
+"format": "online",
+"description": "",
+"progress": 0.5,
+"chapter_index": 0,
+"position": 0.0,
+"archived": false,
+"added_at": 10.0,
+"trashed_at": 0.0,
+"updated_at": 10.0,
+"read_at": 10.0,
+"chapter_count": 20,
+"groups": [
+"two"
+],
+"trash_expires_at": null,
+"warnings": [
+{
+"html": "<p onclick=\"bad()\">Safe<script>bad()</script><img src=\"https://cdn.example/x.png\"><img src=\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIvPjwvc3ZnPg==\"></p>",
+"cover": "https://cdn.example/nested.png"
+},
+{
+"html": "<img src=\"data:image/svg+xml;base64,PHN2Zz4=\"><img src=\"data:image/svg+xml;base64,@@@\">"
+}
+],
+"ocr": {
+"cover": "javascript:bad()"
+}
+},
+{
+"id": "1",
+"name": "\u00e1NH tr\u0103ng",
+"author": "T\u00c1C GI\u1ea2",
+"source": "hako",
+"path": "",
+"cover": "http://127.0.0.1/secret",
+"kind": "text",
+"format": "online",
+"description": "",
+"progress": 0.5,
+"chapter_index": 0,
+"position": 0.0,
+"archived": false,
+"added_at": 10.0,
+"trashed_at": 0.0,
+"updated_at": 10.0,
+"read_at": 10.0,
+"chapter_count": 20,
+"groups": [
+"two"
+],
+"trash_expires_at": null,
+"warnings": [
+{
+"html": "<p onclick=\"bad()\">Safe<script>bad()</script><img src=\"https://cdn.example/x.png\"><img src=\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIvPjwvc3ZnPg==\"></p>",
+"cover": "https://cdn.example/nested.png"
+},
+{
+"html": "<img src=\"data:image/svg+xml;base64,PHN2Zz4=\"><img src=\"data:image/svg+xml;base64,@@@\">"
+}
+],
+"ocr": {
+"cover": "javascript:bad()"
+}
+}
+],
+"total": 8,
+"shelf_total": 8,
+"limit": 2,
+"offset": 0,
+"next_offset": 2
+},
+"casefold": {
+"65": "a",
+"66": "b",
+"67": "c",
+"68": "d",
+"69": "e",
+"70": "f",
+"71": "g",
+"72": "h",
+"73": "i",
+"74": "j",
+"75": "k",
+"76": "l",
+"77": "m",
+"78": "n",
+"79": "o",
+"80": "p",
+"81": "q",
+"82": "r",
+"83": "s",
+"84": "t",
+"85": "u",
+"86": "v",
+"87": "w",
+"88": "x",
+"89": "y",
+"90": "z",
+"181": "\u03bc",
+"192": "\u00e0",
+"193": "\u00e1",
+"194": "\u00e2",
+"195": "\u00e3",
+"196": "\u00e4",
+"197": "\u00e5",
+"198": "\u00e6",
+"199": "\u00e7",
+"200": "\u00e8",
+"201": "\u00e9",
+"202": "\u00ea",
+"203": "\u00eb",
+"204": "\u00ec",
+"205": "\u00ed",
+"206": "\u00ee",
+"207": "\u00ef",
+"208": "\u00f0",
+"209": "\u00f1",
+"210": "\u00f2",
+"211": "\u00f3",
+"212": "\u00f4",
+"213": "\u00f5",
+"214": "\u00f6",
+"216": "\u00f8",
+"217": "\u00f9",
+"218": "\u00fa",
+"219": "\u00fb",
+"220": "\u00fc",
+"221": "\u00fd",
+"222": "\u00fe",
+"223": "ss",
+"256": "\u0101",
+"258": "\u0103",
+"260": "\u0105",
+"262": "\u0107",
+"264": "\u0109",
+"266": "\u010b",
+"268": "\u010d",
+"270": "\u010f",
+"272": "\u0111",
+"274": "\u0113",
+"276": "\u0115",
+"278": "\u0117",
+"280": "\u0119",
+"282": "\u011b",
+"284": "\u011d",
+"286": "\u011f",
+"288": "\u0121",
+"290": "\u0123",
+"292": "\u0125",
+"294": "\u0127",
+"296": "\u0129",
+"298": "\u012b",
+"300": "\u012d",
+"302": "\u012f",
+"304": "i\u0307",
+"306": "\u0133",
+"308": "\u0135",
+"310": "\u0137",
+"313": "\u013a",
+"315": "\u013c",
+"317": "\u013e",
+"319": "\u0140",
+"321": "\u0142",
+"323": "\u0144",
+"325": "\u0146",
+"327": "\u0148",
+"329": "\u02bcn",
+"330": "\u014b",
+"332": "\u014d",
+"334": "\u014f",
+"336": "\u0151",
+"338": "\u0153",
+"340": "\u0155",
+"342": "\u0157",
+"344": "\u0159",
+"346": "\u015b",
+"348": "\u015d",
+"350": "\u015f",
+"352": "\u0161",
+"354": "\u0163",
+"356": "\u0165",
+"358": "\u0167",
+"360": "\u0169",
+"362": "\u016b",
+"364": "\u016d",
+"366": "\u016f",
+"368": "\u0171",
+"370": "\u0173",
+"372": "\u0175",
+"374": "\u0177",
+"376": "\u00ff",
+"377": "\u017a",
+"379": "\u017c",
+"381": "\u017e",
+"383": "s",
+"385": "\u0253",
+"386": "\u0183",
+"388": "\u0185",
+"390": "\u0254",
+"391": "\u0188",
+"393": "\u0256",
+"394": "\u0257",
+"395": "\u018c",
+"398": "\u01dd",
+"399": "\u0259",
+"400": "\u025b",
+"401": "\u0192",
+"403": "\u0260",
+"404": "\u0263",
+"406": "\u0269",
+"407": "\u0268",
+"408": "\u0199",
+"412": "\u026f",
+"413": "\u0272",
+"415": "\u0275",
+"416": "\u01a1",
+"418": "\u01a3",
+"420": "\u01a5",
+"422": "\u0280",
+"423": "\u01a8",
+"425": "\u0283",
+"428": "\u01ad",
+"430": "\u0288",
+"431": "\u01b0",
+"433": "\u028a",
+"434": "\u028b",
+"435": "\u01b4",
+"437": "\u01b6",
+"439": "\u0292",
+"440": "\u01b9",
+"444": "\u01bd",
+"452": "\u01c6",
+"453": "\u01c6",
+"455": "\u01c9",
+"456": "\u01c9",
+"458": "\u01cc",
+"459": "\u01cc",
+"461": "\u01ce",
+"463": "\u01d0",
+"465": "\u01d2",
+"467": "\u01d4",
+"469": "\u01d6",
+"471": "\u01d8",
+"473": "\u01da",
+"475": "\u01dc",
+"478": "\u01df",
+"480": "\u01e1",
+"482": "\u01e3",
+"484": "\u01e5",
+"486": "\u01e7",
+"488": "\u01e9",
+"490": "\u01eb",
+"492": "\u01ed",
+"494": "\u01ef",
+"496": "j\u030c",
+"497": "\u01f3",
+"498": "\u01f3",
+"500": "\u01f5",
+"502": "\u0195",
+"503": "\u01bf",
+"504": "\u01f9",
+"506": "\u01fb",
+"508": "\u01fd",
+"510": "\u01ff",
+"512": "\u0201",
+"514": "\u0203",
+"516": "\u0205",
+"518": "\u0207",
+"520": "\u0209",
+"522": "\u020b",
+"524": "\u020d",
+"526": "\u020f",
+"528": "\u0211",
+"530": "\u0213",
+"532": "\u0215",
+"534": "\u0217",
+"536": "\u0219",
+"538": "\u021b",
+"540": "\u021d",
+"542": "\u021f",
+"544": "\u019e",
+"546": "\u0223",
+"548": "\u0225",
+"550": "\u0227",
+"552": "\u0229",
+"554": "\u022b",
+"556": "\u022d",
+"558": "\u022f",
+"560": "\u0231",
+"562": "\u0233",
+"570": "\u2c65",
+"571": "\u023c",
+"573": "\u019a",
+"574": "\u2c66",
+"577": "\u0242",
+"579": "\u0180",
+"580": "\u0289",
+"581": "\u028c",
+"582": "\u0247",
+"584": "\u0249",
+"586": "\u024b",
+"588": "\u024d",
+"590": "\u024f",
+"837": "\u03b9",
+"880": "\u0371",
+"882": "\u0373",
+"886": "\u0377",
+"895": "\u03f3",
+"902": "\u03ac",
+"904": "\u03ad",
+"905": "\u03ae",
+"906": "\u03af",
+"908": "\u03cc",
+"910": "\u03cd",
+"911": "\u03ce",
+"912": "\u03b9\u0308\u0301",
+"913": "\u03b1",
+"914": "\u03b2",
+"915": "\u03b3",
+"916": "\u03b4",
+"917": "\u03b5",
+"918": "\u03b6",
+"919": "\u03b7",
+"920": "\u03b8",
+"921": "\u03b9",
+"922": "\u03ba",
+"923": "\u03bb",
+"924": "\u03bc",
+"925": "\u03bd",
+"926": "\u03be",
+"927": "\u03bf",
+"928": "\u03c0",
+"929": "\u03c1",
+"931": "\u03c3",
+"932": "\u03c4",
+"933": "\u03c5",
+"934": "\u03c6",
+"935": "\u03c7",
+"936": "\u03c8",
+"937": "\u03c9",
+"938": "\u03ca",
+"939": "\u03cb",
+"944": "\u03c5\u0308\u0301",
+"962": "\u03c3",
+"975": "\u03d7",
+"976": "\u03b2",
+"977": "\u03b8",
+"981": "\u03c6",
+"982": "\u03c0",
+"984": "\u03d9",
+"986": "\u03db",
+"988": "\u03dd",
+"990": "\u03df",
+"992": "\u03e1",
+"994": "\u03e3",
+"996": "\u03e5",
+"998": "\u03e7",
+"1000": "\u03e9",
+"1002": "\u03eb",
+"1004": "\u03ed",
+"1006": "\u03ef",
+"1008": "\u03ba",
+"1009": "\u03c1",
+"1012": "\u03b8",
+"1013": "\u03b5",
+"1015": "\u03f8",
+"1017": "\u03f2",
+"1018": "\u03fb",
+"1021": "\u037b",
+"1022": "\u037c",
+"1023": "\u037d",
+"1024": "\u0450",
+"1025": "\u0451",
+"1026": "\u0452",
+"1027": "\u0453",
+"1028": "\u0454",
+"1029": "\u0455",
+"1030": "\u0456",
+"1031": "\u0457",
+"1032": "\u0458",
+"1033": "\u0459",
+"1034": "\u045a",
+"1035": "\u045b",
+"1036": "\u045c",
+"1037": "\u045d",
+"1038": "\u045e",
+"1039": "\u045f",
+"1040": "\u0430",
+"1041": "\u0431",
+"1042": "\u0432",
+"1043": "\u0433",
+"1044": "\u0434",
+"1045": "\u0435",
+"1046": "\u0436",
+"1047": "\u0437",
+"1048": "\u0438",
+"1049": "\u0439",
+"1050": "\u043a",
+"1051": "\u043b",
+"1052": "\u043c",
+"1053": "\u043d",
+"1054": "\u043e",
+"1055": "\u043f",
+"1056": "\u0440",
+"1057": "\u0441",
+"1058": "\u0442",
+"1059": "\u0443",
+"1060": "\u0444",
+"1061": "\u0445",
+"1062": "\u0446",
+"1063": "\u0447",
+"1064": "\u0448",
+"1065": "\u0449",
+"1066": "\u044a",
+"1067": "\u044b",
+"1068": "\u044c",
+"1069": "\u044d",
+"1070": "\u044e",
+"1071": "\u044f",
+"1120": "\u0461",
+"1122": "\u0463",
+"1124": "\u0465",
+"1126": "\u0467",
+"1128": "\u0469",
+"1130": "\u046b",
+"1132": "\u046d",
+"1134": "\u046f",
+"1136": "\u0471",
+"1138": "\u0473",
+"1140": "\u0475",
+"1142": "\u0477",
+"1144": "\u0479",
+"1146": "\u047b",
+"1148": "\u047d",
+"1150": "\u047f",
+"1152": "\u0481",
+"1162": "\u048b",
+"1164": "\u048d",
+"1166": "\u048f",
+"1168": "\u0491",
+"1170": "\u0493",
+"1172": "\u0495",
+"1174": "\u0497",
+"1176": "\u0499",
+"1178": "\u049b",
+"1180": "\u049d",
+"1182": "\u049f",
+"1184": "\u04a1",
+"1186": "\u04a3",
+"1188": "\u04a5",
+"1190": "\u04a7",
+"1192": "\u04a9",
+"1194": "\u04ab",
+"1196": "\u04ad",
+"1198": "\u04af",
+"1200": "\u04b1",
+"1202": "\u04b3",
+"1204": "\u04b5",
+"1206": "\u04b7",
+"1208": "\u04b9",
+"1210": "\u04bb",
+"1212": "\u04bd",
+"1214": "\u04bf",
+"1216": "\u04cf",
+"1217": "\u04c2",
+"1219": "\u04c4",
+"1221": "\u04c6",
+"1223": "\u04c8",
+"1225": "\u04ca",
+"1227": "\u04cc",
+"1229": "\u04ce",
+"1232": "\u04d1",
+"1234": "\u04d3",
+"1236": "\u04d5",
+"1238": "\u04d7",
+"1240": "\u04d9",
+"1242": "\u04db",
+"1244": "\u04dd",
+"1246": "\u04df",
+"1248": "\u04e1",
+"1250": "\u04e3",
+"1252": "\u04e5",
+"1254": "\u04e7",
+"1256": "\u04e9",
+"1258": "\u04eb",
+"1260": "\u04ed",
+"1262": "\u04ef",
+"1264": "\u04f1",
+"1266": "\u04f3",
+"1268": "\u04f5",
+"1270": "\u04f7",
+"1272": "\u04f9",
+"1274": "\u04fb",
+"1276": "\u04fd",
+"1278": "\u04ff",
+"1280": "\u0501",
+"1282": "\u0503",
+"1284": "\u0505",
+"1286": "\u0507",
+"1288": "\u0509",
+"1290": "\u050b",
+"1292": "\u050d",
+"1294": "\u050f",
+"1296": "\u0511",
+"1298": "\u0513",
+"1300": "\u0515",
+"1302": "\u0517",
+"1304": "\u0519",
+"1306": "\u051b",
+"1308": "\u051d",
+"1310": "\u051f",
+"1312": "\u0521",
+"1314": "\u0523",
+"1316": "\u0525",
+"1318": "\u0527",
+"1320": "\u0529",
+"1322": "\u052b",
+"1324": "\u052d",
+"1326": "\u052f",
+"1329": "\u0561",
+"1330": "\u0562",
+"1331": "\u0563",
+"1332": "\u0564",
+"1333": "\u0565",
+"1334": "\u0566",
+"1335": "\u0567",
+"1336": "\u0568",
+"1337": "\u0569",
+"1338": "\u056a",
+"1339": "\u056b",
+"1340": "\u056c",
+"1341": "\u056d",
+"1342": "\u056e",
+"1343": "\u056f",
+"1344": "\u0570",
+"1345": "\u0571",
+"1346": "\u0572",
+"1347": "\u0573",
+"1348": "\u0574",
+"1349": "\u0575",
+"1350": "\u0576",
+"1351": "\u0577",
+"1352": "\u0578",
+"1353": "\u0579",
+"1354": "\u057a",
+"1355": "\u057b",
+"1356": "\u057c",
+"1357": "\u057d",
+"1358": "\u057e",
+"1359": "\u057f",
+"1360": "\u0580",
+"1361": "\u0581",
+"1362": "\u0582",
+"1363": "\u0583",
+"1364": "\u0584",
+"1365": "\u0585",
+"1366": "\u0586",
+"1415": "\u0565\u0582",
+"4256": "\u2d00",
+"4257": "\u2d01",
+"4258": "\u2d02",
+"4259": "\u2d03",
+"4260": "\u2d04",
+"4261": "\u2d05",
+"4262": "\u2d06",
+"4263": "\u2d07",
+"4264": "\u2d08",
+"4265": "\u2d09",
+"4266": "\u2d0a",
+"4267": "\u2d0b",
+"4268": "\u2d0c",
+"4269": "\u2d0d",
+"4270": "\u2d0e",
+"4271": "\u2d0f",
+"4272": "\u2d10",
+"4273": "\u2d11",
+"4274": "\u2d12",
+"4275": "\u2d13",
+"4276": "\u2d14",
+"4277": "\u2d15",
+"4278": "\u2d16",
+"4279": "\u2d17",
+"4280": "\u2d18",
+"4281": "\u2d19",
+"4282": "\u2d1a",
+"4283": "\u2d1b",
+"4284": "\u2d1c",
+"4285": "\u2d1d",
+"4286": "\u2d1e",
+"4287": "\u2d1f",
+"4288": "\u2d20",
+"4289": "\u2d21",
+"4290": "\u2d22",
+"4291": "\u2d23",
+"4292": "\u2d24",
+"4293": "\u2d25",
+"4295": "\u2d27",
+"4301": "\u2d2d",
+"5112": "\u13f0",
+"5113": "\u13f1",
+"5114": "\u13f2",
+"5115": "\u13f3",
+"5116": "\u13f4",
+"5117": "\u13f5",
+"7296": "\u0432",
+"7297": "\u0434",
+"7298": "\u043e",
+"7299": "\u0441",
+"7300": "\u0442",
+"7301": "\u0442",
+"7302": "\u044a",
+"7303": "\u0463",
+"7304": "\ua64b",
+"7305": "\u1c8a",
+"7312": "\u10d0",
+"7313": "\u10d1",
+"7314": "\u10d2",
+"7315": "\u10d3",
+"7316": "\u10d4",
+"7317": "\u10d5",
+"7318": "\u10d6",
+"7319": "\u10d7",
+"7320": "\u10d8",
+"7321": "\u10d9",
+"7322": "\u10da",
+"7323": "\u10db",
+"7324": "\u10dc",
+"7325": "\u10dd",
+"7326": "\u10de",
+"7327": "\u10df",
+"7328": "\u10e0",
+"7329": "\u10e1",
+"7330": "\u10e2",
+"7331": "\u10e3",
+"7332": "\u10e4",
+"7333": "\u10e5",
+"7334": "\u10e6",
+"7335": "\u10e7",
+"7336": "\u10e8",
+"7337": "\u10e9",
+"7338": "\u10ea",
+"7339": "\u10eb",
+"7340": "\u10ec",
+"7341": "\u10ed",
+"7342": "\u10ee",
+"7343": "\u10ef",
+"7344": "\u10f0",
+"7345": "\u10f1",
+"7346": "\u10f2",
+"7347": "\u10f3",
+"7348": "\u10f4",
+"7349": "\u10f5",
+"7350": "\u10f6",
+"7351": "\u10f7",
+"7352": "\u10f8",
+"7353": "\u10f9",
+"7354": "\u10fa",
+"7357": "\u10fd",
+"7358": "\u10fe",
+"7359": "\u10ff",
+"7680": "\u1e01",
+"7682": "\u1e03",
+"7684": "\u1e05",
+"7686": "\u1e07",
+"7688": "\u1e09",
+"7690": "\u1e0b",
+"7692": "\u1e0d",
+"7694": "\u1e0f",
+"7696": "\u1e11",
+"7698": "\u1e13",
+"7700": "\u1e15",
+"7702": "\u1e17",
+"7704": "\u1e19",
+"7706": "\u1e1b",
+"7708": "\u1e1d",
+"7710": "\u1e1f",
+"7712": "\u1e21",
+"7714": "\u1e23",
+"7716": "\u1e25",
+"7718": "\u1e27",
+"7720": "\u1e29",
+"7722": "\u1e2b",
+"7724": "\u1e2d",
+"7726": "\u1e2f",
+"7728": "\u1e31",
+"7730": "\u1e33",
+"7732": "\u1e35",
+"7734": "\u1e37",
+"7736": "\u1e39",
+"7738": "\u1e3b",
+"7740": "\u1e3d",
+"7742": "\u1e3f",
+"7744": "\u1e41",
+"7746": "\u1e43",
+"7748": "\u1e45",
+"7750": "\u1e47",
+"7752": "\u1e49",
+"7754": "\u1e4b",
+"7756": "\u1e4d",
+"7758": "\u1e4f",
+"7760": "\u1e51",
+"7762": "\u1e53",
+"7764": "\u1e55",
+"7766": "\u1e57",
+"7768": "\u1e59",
+"7770": "\u1e5b",
+"7772": "\u1e5d",
+"7774": "\u1e5f",
+"7776": "\u1e61",
+"7778": "\u1e63",
+"7780": "\u1e65",
+"7782": "\u1e67",
+"7784": "\u1e69",
+"7786": "\u1e6b",
+"7788": "\u1e6d",
+"7790": "\u1e6f",
+"7792": "\u1e71",
+"7794": "\u1e73",
+"7796": "\u1e75",
+"7798": "\u1e77",
+"7800": "\u1e79",
+"7802": "\u1e7b",
+"7804": "\u1e7d",
+"7806": "\u1e7f",
+"7808": "\u1e81",
+"7810": "\u1e83",
+"7812": "\u1e85",
+"7814": "\u1e87",
+"7816": "\u1e89",
+"7818": "\u1e8b",
+"7820": "\u1e8d",
+"7822": "\u1e8f",
+"7824": "\u1e91",
+"7826": "\u1e93",
+"7828": "\u1e95",
+"7830": "h\u0331",
+"7831": "t\u0308",
+"7832": "w\u030a",
+"7833": "y\u030a",
+"7834": "a\u02be",
+"7835": "\u1e61",
+"7838": "ss",
+"7840": "\u1ea1",
+"7842": "\u1ea3",
+"7844": "\u1ea5",
+"7846": "\u1ea7",
+"7848": "\u1ea9",
+"7850": "\u1eab",
+"7852": "\u1ead",
+"7854": "\u1eaf",
+"7856": "\u1eb1",
+"7858": "\u1eb3",
+"7860": "\u1eb5",
+"7862": "\u1eb7",
+"7864": "\u1eb9",
+"7866": "\u1ebb",
+"7868": "\u1ebd",
+"7870": "\u1ebf",
+"7872": "\u1ec1",
+"7874": "\u1ec3",
+"7876": "\u1ec5",
+"7878": "\u1ec7",
+"7880": "\u1ec9",
+"7882": "\u1ecb",
+"7884": "\u1ecd",
+"7886": "\u1ecf",
+"7888": "\u1ed1",
+"7890": "\u1ed3",
+"7892": "\u1ed5",
+"7894": "\u1ed7",
+"7896": "\u1ed9",
+"7898": "\u1edb",
+"7900": "\u1edd",
+"7902": "\u1edf",
+"7904": "\u1ee1",
+"7906": "\u1ee3",
+"7908": "\u1ee5",
+"7910": "\u1ee7",
+"7912": "\u1ee9",
+"7914": "\u1eeb",
+"7916": "\u1eed",
+"7918": "\u1eef",
+"7920": "\u1ef1",
+"7922": "\u1ef3",
+"7924": "\u1ef5",
+"7926": "\u1ef7",
+"7928": "\u1ef9",
+"7930": "\u1efb",
+"7932": "\u1efd",
+"7934": "\u1eff",
+"7944": "\u1f00",
+"7945": "\u1f01",
+"7946": "\u1f02",
+"7947": "\u1f03",
+"7948": "\u1f04",
+"7949": "\u1f05",
+"7950": "\u1f06",
+"7951": "\u1f07",
+"7960": "\u1f10",
+"7961": "\u1f11",
+"7962": "\u1f12",
+"7963": "\u1f13",
+"7964": "\u1f14",
+"7965": "\u1f15",
+"7976": "\u1f20",
+"7977": "\u1f21",
+"7978": "\u1f22",
+"7979": "\u1f23",
+"7980": "\u1f24",
+"7981": "\u1f25",
+"7982": "\u1f26",
+"7983": "\u1f27",
+"7992": "\u1f30",
+"7993": "\u1f31",
+"7994": "\u1f32",
+"7995": "\u1f33",
+"7996": "\u1f34",
+"7997": "\u1f35",
+"7998": "\u1f36",
+"7999": "\u1f37",
+"8008": "\u1f40",
+"8009": "\u1f41",
+"8010": "\u1f42",
+"8011": "\u1f43",
+"8012": "\u1f44",
+"8013": "\u1f45",
+"8016": "\u03c5\u0313",
+"8018": "\u03c5\u0313\u0300",
+"8020": "\u03c5\u0313\u0301",
+"8022": "\u03c5\u0313\u0342",
+"8025": "\u1f51",
+"8027": "\u1f53",
+"8029": "\u1f55",
+"8031": "\u1f57",
+"8040": "\u1f60",
+"8041": "\u1f61",
+"8042": "\u1f62",
+"8043": "\u1f63",
+"8044": "\u1f64",
+"8045": "\u1f65",
+"8046": "\u1f66",
+"8047": "\u1f67",
+"8064": "\u1f00\u03b9",
+"8065": "\u1f01\u03b9",
+"8066": "\u1f02\u03b9",
+"8067": "\u1f03\u03b9",
+"8068": "\u1f04\u03b9",
+"8069": "\u1f05\u03b9",
+"8070": "\u1f06\u03b9",
+"8071": "\u1f07\u03b9",
+"8072": "\u1f00\u03b9",
+"8073": "\u1f01\u03b9",
+"8074": "\u1f02\u03b9",
+"8075": "\u1f03\u03b9",
+"8076": "\u1f04\u03b9",
+"8077": "\u1f05\u03b9",
+"8078": "\u1f06\u03b9",
+"8079": "\u1f07\u03b9",
+"8080": "\u1f20\u03b9",
+"8081": "\u1f21\u03b9",
+"8082": "\u1f22\u03b9",
+"8083": "\u1f23\u03b9",
+"8084": "\u1f24\u03b9",
+"8085": "\u1f25\u03b9",
+"8086": "\u1f26\u03b9",
+"8087": "\u1f27\u03b9",
+"8088": "\u1f20\u03b9",
+"8089": "\u1f21\u03b9",
+"8090": "\u1f22\u03b9",
+"8091": "\u1f23\u03b9",
+"8092": "\u1f24\u03b9",
+"8093": "\u1f25\u03b9",
+"8094": "\u1f26\u03b9",
+"8095": "\u1f27\u03b9",
+"8096": "\u1f60\u03b9",
+"8097": "\u1f61\u03b9",
+"8098": "\u1f62\u03b9",
+"8099": "\u1f63\u03b9",
+"8100": "\u1f64\u03b9",
+"8101": "\u1f65\u03b9",
+"8102": "\u1f66\u03b9",
+"8103": "\u1f67\u03b9",
+"8104": "\u1f60\u03b9",
+"8105": "\u1f61\u03b9",
+"8106": "\u1f62\u03b9",
+"8107": "\u1f63\u03b9",
+"8108": "\u1f64\u03b9",
+"8109": "\u1f65\u03b9",
+"8110": "\u1f66\u03b9",
+"8111": "\u1f67\u03b9",
+"8114": "\u1f70\u03b9",
+"8115": "\u03b1\u03b9",
+"8116": "\u03ac\u03b9",
+"8118": "\u03b1\u0342",
+"8119": "\u03b1\u0342\u03b9",
+"8120": "\u1fb0",
+"8121": "\u1fb1",
+"8122": "\u1f70",
+"8123": "\u1f71",
+"8124": "\u03b1\u03b9",
+"8126": "\u03b9",
+"8130": "\u1f74\u03b9",
+"8131": "\u03b7\u03b9",
+"8132": "\u03ae\u03b9",
+"8134": "\u03b7\u0342",
+"8135": "\u03b7\u0342\u03b9",
+"8136": "\u1f72",
+"8137": "\u1f73",
+"8138": "\u1f74",
+"8139": "\u1f75",
+"8140": "\u03b7\u03b9",
+"8146": "\u03b9\u0308\u0300",
+"8147": "\u03b9\u0308\u0301",
+"8150": "\u03b9\u0342",
+"8151": "\u03b9\u0308\u0342",
+"8152": "\u1fd0",
+"8153": "\u1fd1",
+"8154": "\u1f76",
+"8155": "\u1f77",
+"8162": "\u03c5\u0308\u0300",
+"8163": "\u03c5\u0308\u0301",
+"8164": "\u03c1\u0313",
+"8166": "\u03c5\u0342",
+"8167": "\u03c5\u0308\u0342",
+"8168": "\u1fe0",
+"8169": "\u1fe1",
+"8170": "\u1f7a",
+"8171": "\u1f7b",
+"8172": "\u1fe5",
+"8178": "\u1f7c\u03b9",
+"8179": "\u03c9\u03b9",
+"8180": "\u03ce\u03b9",
+"8182": "\u03c9\u0342",
+"8183": "\u03c9\u0342\u03b9",
+"8184": "\u1f78",
+"8185": "\u1f79",
+"8186": "\u1f7c",
+"8187": "\u1f7d",
+"8188": "\u03c9\u03b9",
+"8486": "\u03c9",
+"8490": "k",
+"8491": "\u00e5",
+"8498": "\u214e",
+"8544": "\u2170",
+"8545": "\u2171",
+"8546": "\u2172",
+"8547": "\u2173",
+"8548": "\u2174",
+"8549": "\u2175",
+"8550": "\u2176",
+"8551": "\u2177",
+"8552": "\u2178",
+"8553": "\u2179",
+"8554": "\u217a",
+"8555": "\u217b",
+"8556": "\u217c",
+"8557": "\u217d",
+"8558": "\u217e",
+"8559": "\u217f",
+"8579": "\u2184",
+"9398": "\u24d0",
+"9399": "\u24d1",
+"9400": "\u24d2",
+"9401": "\u24d3",
+"9402": "\u24d4",
+"9403": "\u24d5",
+"9404": "\u24d6",
+"9405": "\u24d7",
+"9406": "\u24d8",
+"9407": "\u24d9",
+"9408": "\u24da",
+"9409": "\u24db",
+"9410": "\u24dc",
+"9411": "\u24dd",
+"9412": "\u24de",
+"9413": "\u24df",
+"9414": "\u24e0",
+"9415": "\u24e1",
+"9416": "\u24e2",
+"9417": "\u24e3",
+"9418": "\u24e4",
+"9419": "\u24e5",
+"9420": "\u24e6",
+"9421": "\u24e7",
+"9422": "\u24e8",
+"9423": "\u24e9",
+"11264": "\u2c30",
+"11265": "\u2c31",
+"11266": "\u2c32",
+"11267": "\u2c33",
+"11268": "\u2c34",
+"11269": "\u2c35",
+"11270": "\u2c36",
+"11271": "\u2c37",
+"11272": "\u2c38",
+"11273": "\u2c39",
+"11274": "\u2c3a",
+"11275": "\u2c3b",
+"11276": "\u2c3c",
+"11277": "\u2c3d",
+"11278": "\u2c3e",
+"11279": "\u2c3f",
+"11280": "\u2c40",
+"11281": "\u2c41",
+"11282": "\u2c42",
+"11283": "\u2c43",
+"11284": "\u2c44",
+"11285": "\u2c45",
+"11286": "\u2c46",
+"11287": "\u2c47",
+"11288": "\u2c48",
+"11289": "\u2c49",
+"11290": "\u2c4a",
+"11291": "\u2c4b",
+"11292": "\u2c4c",
+"11293": "\u2c4d",
+"11294": "\u2c4e",
+"11295": "\u2c4f",
+"11296": "\u2c50",
+"11297": "\u2c51",
+"11298": "\u2c52",
+"11299": "\u2c53",
+"11300": "\u2c54",
+"11301": "\u2c55",
+"11302": "\u2c56",
+"11303": "\u2c57",
+"11304": "\u2c58",
+"11305": "\u2c59",
+"11306": "\u2c5a",
+"11307": "\u2c5b",
+"11308": "\u2c5c",
+"11309": "\u2c5d",
+"11310": "\u2c5e",
+"11311": "\u2c5f",
+"11360": "\u2c61",
+"11362": "\u026b",
+"11363": "\u1d7d",
+"11364": "\u027d",
+"11367": "\u2c68",
+"11369": "\u2c6a",
+"11371": "\u2c6c",
+"11373": "\u0251",
+"11374": "\u0271",
+"11375": "\u0250",
+"11376": "\u0252",
+"11378": "\u2c73",
+"11381": "\u2c76",
+"11390": "\u023f",
+"11391": "\u0240",
+"11392": "\u2c81",
+"11394": "\u2c83",
+"11396": "\u2c85",
+"11398": "\u2c87",
+"11400": "\u2c89",
+"11402": "\u2c8b",
+"11404": "\u2c8d",
+"11406": "\u2c8f",
+"11408": "\u2c91",
+"11410": "\u2c93",
+"11412": "\u2c95",
+"11414": "\u2c97",
+"11416": "\u2c99",
+"11418": "\u2c9b",
+"11420": "\u2c9d",
+"11422": "\u2c9f",
+"11424": "\u2ca1",
+"11426": "\u2ca3",
+"11428": "\u2ca5",
+"11430": "\u2ca7",
+"11432": "\u2ca9",
+"11434": "\u2cab",
+"11436": "\u2cad",
+"11438": "\u2caf",
+"11440": "\u2cb1",
+"11442": "\u2cb3",
+"11444": "\u2cb5",
+"11446": "\u2cb7",
+"11448": "\u2cb9",
+"11450": "\u2cbb",
+"11452": "\u2cbd",
+"11454": "\u2cbf",
+"11456": "\u2cc1",
+"11458": "\u2cc3",
+"11460": "\u2cc5",
+"11462": "\u2cc7",
+"11464": "\u2cc9",
+"11466": "\u2ccb",
+"11468": "\u2ccd",
+"11470": "\u2ccf",
+"11472": "\u2cd1",
+"11474": "\u2cd3",
+"11476": "\u2cd5",
+"11478": "\u2cd7",
+"11480": "\u2cd9",
+"11482": "\u2cdb",
+"11484": "\u2cdd",
+"11486": "\u2cdf",
+"11488": "\u2ce1",
+"11490": "\u2ce3",
+"11499": "\u2cec",
+"11501": "\u2cee",
+"11506": "\u2cf3",
+"42560": "\ua641",
+"42562": "\ua643",
+"42564": "\ua645",
+"42566": "\ua647",
+"42568": "\ua649",
+"42570": "\ua64b",
+"42572": "\ua64d",
+"42574": "\ua64f",
+"42576": "\ua651",
+"42578": "\ua653",
+"42580": "\ua655",
+"42582": "\ua657",
+"42584": "\ua659",
+"42586": "\ua65b",
+"42588": "\ua65d",
+"42590": "\ua65f",
+"42592": "\ua661",
+"42594": "\ua663",
+"42596": "\ua665",
+"42598": "\ua667",
+"42600": "\ua669",
+"42602": "\ua66b",
+"42604": "\ua66d",
+"42624": "\ua681",
+"42626": "\ua683",
+"42628": "\ua685",
+"42630": "\ua687",
+"42632": "\ua689",
+"42634": "\ua68b",
+"42636": "\ua68d",
+"42638": "\ua68f",
+"42640": "\ua691",
+"42642": "\ua693",
+"42644": "\ua695",
+"42646": "\ua697",
+"42648": "\ua699",
+"42650": "\ua69b",
+"42786": "\ua723",
+"42788": "\ua725",
+"42790": "\ua727",
+"42792": "\ua729",
+"42794": "\ua72b",
+"42796": "\ua72d",
+"42798": "\ua72f",
+"42802": "\ua733",
+"42804": "\ua735",
+"42806": "\ua737",
+"42808": "\ua739",
+"42810": "\ua73b",
+"42812": "\ua73d",
+"42814": "\ua73f",
+"42816": "\ua741",
+"42818": "\ua743",
+"42820": "\ua745",
+"42822": "\ua747",
+"42824": "\ua749",
+"42826": "\ua74b",
+"42828": "\ua74d",
+"42830": "\ua74f",
+"42832": "\ua751",
+"42834": "\ua753",
+"42836": "\ua755",
+"42838": "\ua757",
+"42840": "\ua759",
+"42842": "\ua75b",
+"42844": "\ua75d",
+"42846": "\ua75f",
+"42848": "\ua761",
+"42850": "\ua763",
+"42852": "\ua765",
+"42854": "\ua767",
+"42856": "\ua769",
+"42858": "\ua76b",
+"42860": "\ua76d",
+"42862": "\ua76f",
+"42873": "\ua77a",
+"42875": "\ua77c",
+"42877": "\u1d79",
+"42878": "\ua77f",
+"42880": "\ua781",
+"42882": "\ua783",
+"42884": "\ua785",
+"42886": "\ua787",
+"42891": "\ua78c",
+"42893": "\u0265",
+"42896": "\ua791",
+"42898": "\ua793",
+"42902": "\ua797",
+"42904": "\ua799",
+"42906": "\ua79b",
+"42908": "\ua79d",
+"42910": "\ua79f",
+"42912": "\ua7a1",
+"42914": "\ua7a3",
+"42916": "\ua7a5",
+"42918": "\ua7a7",
+"42920": "\ua7a9",
+"42922": "\u0266",
+"42923": "\u025c",
+"42924": "\u0261",
+"42925": "\u026c",
+"42926": "\u026a",
+"42928": "\u029e",
+"42929": "\u0287",
+"42930": "\u029d",
+"42931": "\uab53",
+"42932": "\ua7b5",
+"42934": "\ua7b7",
+"42936": "\ua7b9",
+"42938": "\ua7bb",
+"42940": "\ua7bd",
+"42942": "\ua7bf",
+"42944": "\ua7c1",
+"42946": "\ua7c3",
+"42948": "\ua794",
+"42949": "\u0282",
+"42950": "\u1d8e",
+"42951": "\ua7c8",
+"42953": "\ua7ca",
+"42955": "\u0264",
+"42956": "\ua7cd",
+"42960": "\ua7d1",
+"42966": "\ua7d7",
+"42968": "\ua7d9",
+"42970": "\ua7db",
+"42972": "\u019b",
+"42997": "\ua7f6",
+"43888": "\u13a0",
+"43889": "\u13a1",
+"43890": "\u13a2",
+"43891": "\u13a3",
+"43892": "\u13a4",
+"43893": "\u13a5",
+"43894": "\u13a6",
+"43895": "\u13a7",
+"43896": "\u13a8",
+"43897": "\u13a9",
+"43898": "\u13aa",
+"43899": "\u13ab",
+"43900": "\u13ac",
+"43901": "\u13ad",
+"43902": "\u13ae",
+"43903": "\u13af",
+"43904": "\u13b0",
+"43905": "\u13b1",
+"43906": "\u13b2",
+"43907": "\u13b3",
+"43908": "\u13b4",
+"43909": "\u13b5",
+"43910": "\u13b6",
+"43911": "\u13b7",
+"43912": "\u13b8",
+"43913": "\u13b9",
+"43914": "\u13ba",
+"43915": "\u13bb",
+"43916": "\u13bc",
+"43917": "\u13bd",
+"43918": "\u13be",
+"43919": "\u13bf",
+"43920": "\u13c0",
+"43921": "\u13c1",
+"43922": "\u13c2",
+"43923": "\u13c3",
+"43924": "\u13c4",
+"43925": "\u13c5",
+"43926": "\u13c6",
+"43927": "\u13c7",
+"43928": "\u13c8",
+"43929": "\u13c9",
+"43930": "\u13ca",
+"43931": "\u13cb",
+"43932": "\u13cc",
+"43933": "\u13cd",
+"43934": "\u13ce",
+"43935": "\u13cf",
+"43936": "\u13d0",
+"43937": "\u13d1",
+"43938": "\u13d2",
+"43939": "\u13d3",
+"43940": "\u13d4",
+"43941": "\u13d5",
+"43942": "\u13d6",
+"43943": "\u13d7",
+"43944": "\u13d8",
+"43945": "\u13d9",
+"43946": "\u13da",
+"43947": "\u13db",
+"43948": "\u13dc",
+"43949": "\u13dd",
+"43950": "\u13de",
+"43951": "\u13df",
+"43952": "\u13e0",
+"43953": "\u13e1",
+"43954": "\u13e2",
+"43955": "\u13e3",
+"43956": "\u13e4",
+"43957": "\u13e5",
+"43958": "\u13e6",
+"43959": "\u13e7",
+"43960": "\u13e8",
+"43961": "\u13e9",
+"43962": "\u13ea",
+"43963": "\u13eb",
+"43964": "\u13ec",
+"43965": "\u13ed",
+"43966": "\u13ee",
+"43967": "\u13ef",
+"64256": "ff",
+"64257": "fi",
+"64258": "fl",
+"64259": "ffi",
+"64260": "ffl",
+"64261": "st",
+"64262": "st",
+"64275": "\u0574\u0576",
+"64276": "\u0574\u0565",
+"64277": "\u0574\u056b",
+"64278": "\u057e\u0576",
+"64279": "\u0574\u056d",
+"65313": "\uff41",
+"65314": "\uff42",
+"65315": "\uff43",
+"65316": "\uff44",
+"65317": "\uff45",
+"65318": "\uff46",
+"65319": "\uff47",
+"65320": "\uff48",
+"65321": "\uff49",
+"65322": "\uff4a",
+"65323": "\uff4b",
+"65324": "\uff4c",
+"65325": "\uff4d",
+"65326": "\uff4e",
+"65327": "\uff4f",
+"65328": "\uff50",
+"65329": "\uff51",
+"65330": "\uff52",
+"65331": "\uff53",
+"65332": "\uff54",
+"65333": "\uff55",
+"65334": "\uff56",
+"65335": "\uff57",
+"65336": "\uff58",
+"65337": "\uff59",
+"65338": "\uff5a",
+"66560": "\ud801\udc28",
+"66561": "\ud801\udc29",
+"66562": "\ud801\udc2a",
+"66563": "\ud801\udc2b",
+"66564": "\ud801\udc2c",
+"66565": "\ud801\udc2d",
+"66566": "\ud801\udc2e",
+"66567": "\ud801\udc2f",
+"66568": "\ud801\udc30",
+"66569": "\ud801\udc31",
+"66570": "\ud801\udc32",
+"66571": "\ud801\udc33",
+"66572": "\ud801\udc34",
+"66573": "\ud801\udc35",
+"66574": "\ud801\udc36",
+"66575": "\ud801\udc37",
+"66576": "\ud801\udc38",
+"66577": "\ud801\udc39",
+"66578": "\ud801\udc3a",
+"66579": "\ud801\udc3b",
+"66580": "\ud801\udc3c",
+"66581": "\ud801\udc3d",
+"66582": "\ud801\udc3e",
+"66583": "\ud801\udc3f",
+"66584": "\ud801\udc40",
+"66585": "\ud801\udc41",
+"66586": "\ud801\udc42",
+"66587": "\ud801\udc43",
+"66588": "\ud801\udc44",
+"66589": "\ud801\udc45",
+"66590": "\ud801\udc46",
+"66591": "\ud801\udc47",
+"66592": "\ud801\udc48",
+"66593": "\ud801\udc49",
+"66594": "\ud801\udc4a",
+"66595": "\ud801\udc4b",
+"66596": "\ud801\udc4c",
+"66597": "\ud801\udc4d",
+"66598": "\ud801\udc4e",
+"66599": "\ud801\udc4f",
+"66736": "\ud801\udcd8",
+"66737": "\ud801\udcd9",
+"66738": "\ud801\udcda",
+"66739": "\ud801\udcdb",
+"66740": "\ud801\udcdc",
+"66741": "\ud801\udcdd",
+"66742": "\ud801\udcde",
+"66743": "\ud801\udcdf",
+"66744": "\ud801\udce0",
+"66745": "\ud801\udce1",
+"66746": "\ud801\udce2",
+"66747": "\ud801\udce3",
+"66748": "\ud801\udce4",
+"66749": "\ud801\udce5",
+"66750": "\ud801\udce6",
+"66751": "\ud801\udce7",
+"66752": "\ud801\udce8",
+"66753": "\ud801\udce9",
+"66754": "\ud801\udcea",
+"66755": "\ud801\udceb",
+"66756": "\ud801\udcec",
+"66757": "\ud801\udced",
+"66758": "\ud801\udcee",
+"66759": "\ud801\udcef",
+"66760": "\ud801\udcf0",
+"66761": "\ud801\udcf1",
+"66762": "\ud801\udcf2",
+"66763": "\ud801\udcf3",
+"66764": "\ud801\udcf4",
+"66765": "\ud801\udcf5",
+"66766": "\ud801\udcf6",
+"66767": "\ud801\udcf7",
+"66768": "\ud801\udcf8",
+"66769": "\ud801\udcf9",
+"66770": "\ud801\udcfa",
+"66771": "\ud801\udcfb",
+"66928": "\ud801\udd97",
+"66929": "\ud801\udd98",
+"66930": "\ud801\udd99",
+"66931": "\ud801\udd9a",
+"66932": "\ud801\udd9b",
+"66933": "\ud801\udd9c",
+"66934": "\ud801\udd9d",
+"66935": "\ud801\udd9e",
+"66936": "\ud801\udd9f",
+"66937": "\ud801\udda0",
+"66938": "\ud801\udda1",
+"66940": "\ud801\udda3",
+"66941": "\ud801\udda4",
+"66942": "\ud801\udda5",
+"66943": "\ud801\udda6",
+"66944": "\ud801\udda7",
+"66945": "\ud801\udda8",
+"66946": "\ud801\udda9",
+"66947": "\ud801\uddaa",
+"66948": "\ud801\uddab",
+"66949": "\ud801\uddac",
+"66950": "\ud801\uddad",
+"66951": "\ud801\uddae",
+"66952": "\ud801\uddaf",
+"66953": "\ud801\uddb0",
+"66954": "\ud801\uddb1",
+"66956": "\ud801\uddb3",
+"66957": "\ud801\uddb4",
+"66958": "\ud801\uddb5",
+"66959": "\ud801\uddb6",
+"66960": "\ud801\uddb7",
+"66961": "\ud801\uddb8",
+"66962": "\ud801\uddb9",
+"66964": "\ud801\uddbb",
+"66965": "\ud801\uddbc",
+"68736": "\ud803\udcc0",
+"68737": "\ud803\udcc1",
+"68738": "\ud803\udcc2",
+"68739": "\ud803\udcc3",
+"68740": "\ud803\udcc4",
+"68741": "\ud803\udcc5",
+"68742": "\ud803\udcc6",
+"68743": "\ud803\udcc7",
+"68744": "\ud803\udcc8",
+"68745": "\ud803\udcc9",
+"68746": "\ud803\udcca",
+"68747": "\ud803\udccb",
+"68748": "\ud803\udccc",
+"68749": "\ud803\udccd",
+"68750": "\ud803\udcce",
+"68751": "\ud803\udccf",
+"68752": "\ud803\udcd0",
+"68753": "\ud803\udcd1",
+"68754": "\ud803\udcd2",
+"68755": "\ud803\udcd3",
+"68756": "\ud803\udcd4",
+"68757": "\ud803\udcd5",
+"68758": "\ud803\udcd6",
+"68759": "\ud803\udcd7",
+"68760": "\ud803\udcd8",
+"68761": "\ud803\udcd9",
+"68762": "\ud803\udcda",
+"68763": "\ud803\udcdb",
+"68764": "\ud803\udcdc",
+"68765": "\ud803\udcdd",
+"68766": "\ud803\udcde",
+"68767": "\ud803\udcdf",
+"68768": "\ud803\udce0",
+"68769": "\ud803\udce1",
+"68770": "\ud803\udce2",
+"68771": "\ud803\udce3",
+"68772": "\ud803\udce4",
+"68773": "\ud803\udce5",
+"68774": "\ud803\udce6",
+"68775": "\ud803\udce7",
+"68776": "\ud803\udce8",
+"68777": "\ud803\udce9",
+"68778": "\ud803\udcea",
+"68779": "\ud803\udceb",
+"68780": "\ud803\udcec",
+"68781": "\ud803\udced",
+"68782": "\ud803\udcee",
+"68783": "\ud803\udcef",
+"68784": "\ud803\udcf0",
+"68785": "\ud803\udcf1",
+"68786": "\ud803\udcf2",
+"68944": "\ud803\udd70",
+"68945": "\ud803\udd71",
+"68946": "\ud803\udd72",
+"68947": "\ud803\udd73",
+"68948": "\ud803\udd74",
+"68949": "\ud803\udd75",
+"68950": "\ud803\udd76",
+"68951": "\ud803\udd77",
+"68952": "\ud803\udd78",
+"68953": "\ud803\udd79",
+"68954": "\ud803\udd7a",
+"68955": "\ud803\udd7b",
+"68956": "\ud803\udd7c",
+"68957": "\ud803\udd7d",
+"68958": "\ud803\udd7e",
+"68959": "\ud803\udd7f",
+"68960": "\ud803\udd80",
+"68961": "\ud803\udd81",
+"68962": "\ud803\udd82",
+"68963": "\ud803\udd83",
+"68964": "\ud803\udd84",
+"68965": "\ud803\udd85",
+"71840": "\ud806\udcc0",
+"71841": "\ud806\udcc1",
+"71842": "\ud806\udcc2",
+"71843": "\ud806\udcc3",
+"71844": "\ud806\udcc4",
+"71845": "\ud806\udcc5",
+"71846": "\ud806\udcc6",
+"71847": "\ud806\udcc7",
+"71848": "\ud806\udcc8",
+"71849": "\ud806\udcc9",
+"71850": "\ud806\udcca",
+"71851": "\ud806\udccb",
+"71852": "\ud806\udccc",
+"71853": "\ud806\udccd",
+"71854": "\ud806\udcce",
+"71855": "\ud806\udccf",
+"71856": "\ud806\udcd0",
+"71857": "\ud806\udcd1",
+"71858": "\ud806\udcd2",
+"71859": "\ud806\udcd3",
+"71860": "\ud806\udcd4",
+"71861": "\ud806\udcd5",
+"71862": "\ud806\udcd6",
+"71863": "\ud806\udcd7",
+"71864": "\ud806\udcd8",
+"71865": "\ud806\udcd9",
+"71866": "\ud806\udcda",
+"71867": "\ud806\udcdb",
+"71868": "\ud806\udcdc",
+"71869": "\ud806\udcdd",
+"71870": "\ud806\udcde",
+"71871": "\ud806\udcdf",
+"93760": "\ud81b\ude60",
+"93761": "\ud81b\ude61",
+"93762": "\ud81b\ude62",
+"93763": "\ud81b\ude63",
+"93764": "\ud81b\ude64",
+"93765": "\ud81b\ude65",
+"93766": "\ud81b\ude66",
+"93767": "\ud81b\ude67",
+"93768": "\ud81b\ude68",
+"93769": "\ud81b\ude69",
+"93770": "\ud81b\ude6a",
+"93771": "\ud81b\ude6b",
+"93772": "\ud81b\ude6c",
+"93773": "\ud81b\ude6d",
+"93774": "\ud81b\ude6e",
+"93775": "\ud81b\ude6f",
+"93776": "\ud81b\ude70",
+"93777": "\ud81b\ude71",
+"93778": "\ud81b\ude72",
+"93779": "\ud81b\ude73",
+"93780": "\ud81b\ude74",
+"93781": "\ud81b\ude75",
+"93782": "\ud81b\ude76",
+"93783": "\ud81b\ude77",
+"93784": "\ud81b\ude78",
+"93785": "\ud81b\ude79",
+"93786": "\ud81b\ude7a",
+"93787": "\ud81b\ude7b",
+"93788": "\ud81b\ude7c",
+"93789": "\ud81b\ude7d",
+"93790": "\ud81b\ude7e",
+"93791": "\ud81b\ude7f",
+"125184": "\ud83a\udd22",
+"125185": "\ud83a\udd23",
+"125186": "\ud83a\udd24",
+"125187": "\ud83a\udd25",
+"125188": "\ud83a\udd26",
+"125189": "\ud83a\udd27",
+"125190": "\ud83a\udd28",
+"125191": "\ud83a\udd29",
+"125192": "\ud83a\udd2a",
+"125193": "\ud83a\udd2b",
+"125194": "\ud83a\udd2c",
+"125195": "\ud83a\udd2d",
+"125196": "\ud83a\udd2e",
+"125197": "\ud83a\udd2f",
+"125198": "\ud83a\udd30",
+"125199": "\ud83a\udd31",
+"125200": "\ud83a\udd32",
+"125201": "\ud83a\udd33",
+"125202": "\ud83a\udd34",
+"125203": "\ud83a\udd35",
+"125204": "\ud83a\udd36",
+"125205": "\ud83a\udd37",
+"125206": "\ud83a\udd38",
+"125207": "\ud83a\udd39",
+"125208": "\ud83a\udd3a",
+"125209": "\ud83a\udd3b",
+"125210": "\ud83a\udd3c",
+"125211": "\ud83a\udd3d",
+"125212": "\ud83a\udd3e",
+"125213": "\ud83a\udd3f",
+"125214": "\ud83a\udd40",
+"125215": "\ud83a\udd41",
+"125216": "\ud83a\udd42",
+"125217": "\ud83a\udd43"
+},
+"shortcut_file_name": "Truy\u1ec7n_ th\u1eed_1 _b_ - e97cf03a76658c5c.lnk"
+}

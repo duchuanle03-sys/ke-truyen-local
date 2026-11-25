@@ -988,34 +988,11 @@ mod tests {
         // The cross-language owner lock keeps a second server off the same library.
         assert!(Library::open_production(&root).is_err());
     }
-    /// Catalog, singleton state rows and journal mode, read without opening a Python Store.
-    const DUMP: &str = "import json,sqlite3,sys\n\
-        c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)\n\
-        c.create_function('shelf_fold',1,str.casefold,deterministic=True)\n\
-        cat=c.execute('SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name').fetchall()\n\
-        state={t:c.execute('SELECT * FROM '+t).fetchall() for t in ('asset_index_state','chapter_cache_state','chapter_search_state','image_cache_state')}\n\
-        print(json.dumps({'catalog':cat,'state':state,'journal':c.execute('pragma journal_mode').fetchone()[0]}))";
 
     fn fresh_dirs(name: &str) -> PathBuf {
         let base = std::env::temp_dir().join(format!("reader-m7-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         base
-    }
-
-    #[test]
-    fn fresh_library_matches_python_catalog() {
-        let base = fresh_dirs("fresh");
-        let (ours, theirs) = (base.join("rust"), base.join("python"));
-        drop(Library::open_production(&ours).unwrap());
-        test_common::python(
-            "import sys;sys.path.insert(0,'.');from library import Store;Store(sys.argv[1])",
-            &[theirs.to_str().unwrap()],
-        );
-        let dump = |dir: &Path| {
-            test_common::python(DUMP, &[dir.join("library.sqlite3").to_str().unwrap()])
-        };
-        assert_eq!(dump(&ours), dump(&theirs));
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -1034,25 +1011,6 @@ mod tests {
             0
         );
         drop(library);
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn python_reopens_rust_created_library() {
-        let base = fresh_dirs("reopen");
-        let ours = base.join("rust");
-        drop(Library::open_production(&ours).unwrap());
-        let before = test_common::python(DUMP, &[ours.join("library.sqlite3").to_str().unwrap()]);
-        let shelf = test_common::python(
-            "import sys,json;sys.path.insert(0,'.');from library import Store;s=Store(sys.argv[1]);print(s.list_books()['total'])",
-            &[ours.to_str().unwrap()],
-        );
-        assert_eq!(shelf.trim(), "0");
-        let after = test_common::python(DUMP, &[ours.join("library.sqlite3").to_str().unwrap()]);
-        assert_eq!(
-            before, after,
-            "Python must accept the Rust catalog without migrating it"
-        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

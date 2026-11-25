@@ -1,0 +1,622 @@
+{
+  "format": "reader-local-rust-m1",
+  "version": 1,
+  "database": "library.sqlite3",
+  "synthetic": true,
+  "sealed": true,
+  "python": "3.14.7",
+  "unicode": "16.0.0",
+  "sqlite": "3.50.4",
+  "books": 10,
+  "cached_bodies": 0,
+  "journal_mode": "delete",
+  "sha256": "43e72f5c2997a8edc64d88177fe4e766361915b7f6022ca3d223befbc1e5120e",
+  "schema": [
+    [
+      "index",
+      "asset_gc_cache",
+      "asset_gc_candidates",
+      "CREATE INDEX asset_gc_cache ON asset_gc_candidates(evict,retry_at,id)"
+    ],
+    [
+      "index",
+      "asset_gc_due",
+      "asset_gc_candidates",
+      "CREATE INDEX asset_gc_due ON asset_gc_candidates(retry_at,id)"
+    ],
+    [
+      "index",
+      "asset_lookup",
+      "asset_refs",
+      "CREATE INDEX asset_lookup ON asset_refs(kind,name)"
+    ],
+    [
+      "index",
+      "asset_pending_work",
+      "asset_pending",
+      "CREATE INDEX asset_pending_work ON asset_pending(blocked,id)"
+    ],
+    [
+      "index",
+      "book_group_lookup",
+      "book_groups",
+      "CREATE INDEX book_group_lookup ON book_groups(group_id,book_id)"
+    ],
+    [
+      "index",
+      "books_shelf_added",
+      "books",
+      "CREATE INDEX books_shelf_added ON books((trashed_at>0),archived,added_at DESC,name DESC,id DESC)"
+    ],
+    [
+      "index",
+      "books_shelf_chapters",
+      "books",
+      "CREATE INDEX books_shelf_chapters ON books((trashed_at>0),archived,chapter_count DESC,name DESC,id DESC)"
+    ],
+    [
+      "index",
+      "books_shelf_kind",
+      "books",
+      "CREATE INDEX books_shelf_kind ON books((trashed_at>0),archived,kind,read_at DESC,name DESC,id DESC)"
+    ],
+    [
+      "index",
+      "books_shelf_name",
+      "books",
+      "CREATE INDEX books_shelf_name ON books((trashed_at>0),archived,shelf_fold(name) ASC,name ASC,id ASC)"
+    ],
+    [
+      "index",
+      "books_shelf_progress",
+      "books",
+      "CREATE INDEX books_shelf_progress ON books((trashed_at>0),archived,progress DESC,name DESC,id DESC)"
+    ],
+    [
+      "index",
+      "books_shelf_recent",
+      "books",
+      "CREATE INDEX books_shelf_recent ON books((trashed_at>0),archived,read_at DESC,name DESC,id DESC)"
+    ],
+    [
+      "index",
+      "books_shelf_search",
+      "books",
+      "CREATE INDEX books_shelf_search ON books((trashed_at>0),archived,shelf_fold(name || ' ' || author),id)"
+    ],
+    [
+      "index",
+      "books_shelf_source",
+      "books",
+      "CREATE INDEX books_shelf_source ON books((trashed_at>0),archived,source,read_at DESC,name DESC,id DESC)"
+    ],
+    [
+      "index",
+      "books_shelf_updated",
+      "books",
+      "CREATE INDEX books_shelf_updated ON books((trashed_at>0),archived,updated_at DESC,name DESC,id DESC)"
+    ],
+    [
+      "index",
+      "chapter_book",
+      "chapters",
+      "CREATE INDEX chapter_book ON chapters(book_id)"
+    ],
+    [
+      "index",
+      "chapter_cache_class",
+      "chapter_cache",
+      "CREATE INDEX chapter_cache_class ON chapter_cache(kind,id)"
+    ],
+    [
+      "index",
+      "chapter_cache_lru",
+      "chapter_cache",
+      "CREATE INDEX chapter_cache_lru ON chapter_cache(kind,last_used,id)"
+    ],
+    [
+      "index",
+      "chapter_readers_expiry",
+      "chapter_readers",
+      "CREATE INDEX chapter_readers_expiry ON chapter_readers(expires)"
+    ],
+    [
+      "index",
+      "download_active_book",
+      "download_jobs",
+      "CREATE UNIQUE INDEX download_active_book ON download_jobs(book_id)\n                    WHERE status IN ('queued','running','paused','verification_required')"
+    ],
+    [
+      "index",
+      "download_book",
+      "download_jobs",
+      "CREATE INDEX download_book ON download_jobs(book_id)"
+    ],
+    [
+      "index",
+      "download_history",
+      "download_jobs",
+      "CREATE INDEX download_history ON download_jobs(created_at DESC,id DESC)"
+    ],
+    [
+      "index",
+      "download_queue",
+      "download_jobs",
+      "CREATE INDEX download_queue ON download_jobs(status,created_at,id)"
+    ],
+    [
+      "index",
+      "image_cache_clear",
+      "image_cache",
+      "CREATE INDEX image_cache_clear ON image_cache(protected,id)"
+    ],
+    [
+      "index",
+      "image_cache_lru",
+      "image_cache",
+      "CREATE INDEX image_cache_lru ON image_cache(protected,evicting,last_used,id)"
+    ],
+    [
+      "index",
+      "image_pin_lookup",
+      "image_pins",
+      "CREATE INDEX image_pin_lookup ON image_pins(name)"
+    ],
+    [
+      "index",
+      "note_book",
+      "notes",
+      "CREATE INDEX note_book ON notes(book_id)"
+    ],
+    [
+      "index",
+      "sqlite_autoindex_asset_gc_candidates_1",
+      "asset_gc_candidates",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_asset_pending_1",
+      "asset_pending",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_asset_refs_1",
+      "asset_refs",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_book_groups_1",
+      "book_groups",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_books_1",
+      "books",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_chapter_cache_1",
+      "chapter_cache",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_chapter_readers_1",
+      "chapter_readers",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_chapter_search_docs_1",
+      "chapter_search_docs",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_chapter_search_pending_1",
+      "chapter_search_pending",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_chapters_1",
+      "chapters",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_download_jobs_1",
+      "download_jobs",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_groups_list_1",
+      "groups_list",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_image_cache_1",
+      "image_cache",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_image_pins_1",
+      "image_pins",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_legacy_1",
+      "legacy",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_notes_1",
+      "notes",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_settings_1",
+      "settings",
+      null
+    ],
+    [
+      "table",
+      "asset_gc_candidates",
+      "asset_gc_candidates",
+      "CREATE TABLE asset_gc_candidates (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, name TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1, retry_at REAL NOT NULL DEFAULT 0, evict INTEGER NOT NULL DEFAULT 0, UNIQUE(kind,name))"
+    ],
+    [
+      "table",
+      "asset_index_state",
+      "asset_index_state",
+      "CREATE TABLE asset_index_state (id INTEGER PRIMARY KEY CHECK(id=1), book_id TEXT NOT NULL DEFAULT '', idx INTEGER NOT NULL DEFAULT -1, complete INTEGER NOT NULL DEFAULT 0, inventory_files INTEGER NOT NULL DEFAULT 0, inventory_images INTEGER NOT NULL DEFAULT 0)"
+    ],
+    [
+      "table",
+      "asset_pending",
+      "asset_pending",
+      "CREATE TABLE asset_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, idx INTEGER NOT NULL, blocked INTEGER NOT NULL DEFAULT 0, UNIQUE(book_id,idx))"
+    ],
+    [
+      "table",
+      "asset_refs",
+      "asset_refs",
+      "CREATE TABLE asset_refs (book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, idx INTEGER NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY(book_id,idx,kind,name))"
+    ],
+    [
+      "table",
+      "book_groups",
+      "book_groups",
+      "CREATE TABLE book_groups (book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, group_id TEXT NOT NULL, PRIMARY KEY(book_id,group_id))"
+    ],
+    [
+      "table",
+      "books",
+      "books",
+      "CREATE TABLE books (\n                    id TEXT PRIMARY KEY, name TEXT NOT NULL, author TEXT NOT NULL DEFAULT '',\n                    source TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '',\n                    cover TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'text',\n                    format TEXT NOT NULL DEFAULT 'online', description TEXT NOT NULL DEFAULT '',\n                    progress REAL NOT NULL DEFAULT 0, chapter_index INTEGER NOT NULL DEFAULT 0,\n                    position REAL NOT NULL DEFAULT 0, groups_json TEXT NOT NULL DEFAULT '[]',\n                    archived INTEGER NOT NULL DEFAULT 0, added_at REAL NOT NULL,\n                    trashed_at REAL NOT NULL DEFAULT 0,\n                    updated_at REAL NOT NULL, read_at REAL NOT NULL DEFAULT 0,\n                    chapter_count INTEGER NOT NULL DEFAULT 0, raw TEXT NOT NULL DEFAULT '{}'\n                )"
+    ],
+    [
+      "table",
+      "chapter_cache",
+      "chapter_cache",
+      "CREATE TABLE chapter_cache (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL, idx INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('cache','protected','legacy')), offline INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0, last_used REAL NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, UNIQUE(book_id,idx), FOREIGN KEY(book_id,idx) REFERENCES chapters(book_id,idx) ON DELETE CASCADE)"
+    ],
+    [
+      "table",
+      "chapter_cache_state",
+      "chapter_cache_state",
+      "CREATE TABLE chapter_cache_state (id INTEGER PRIMARY KEY CHECK(id=1), max_chapters INTEGER NOT NULL DEFAULT 100, cache_count INTEGER NOT NULL DEFAULT 0, cache_bytes INTEGER NOT NULL DEFAULT 0, protected_count INTEGER NOT NULL DEFAULT 0, protected_bytes INTEGER NOT NULL DEFAULT 0, legacy_count INTEGER NOT NULL DEFAULT 0, legacy_bytes INTEGER NOT NULL DEFAULT 0, book_id TEXT NOT NULL DEFAULT '', idx INTEGER NOT NULL DEFAULT -1, complete INTEGER NOT NULL DEFAULT 0, clear_until INTEGER NOT NULL DEFAULT 0, clear_before REAL NOT NULL DEFAULT 0, legacy_until INTEGER NOT NULL DEFAULT 0, legacy_cursor INTEGER NOT NULL DEFAULT 0, fts_merge INTEGER NOT NULL DEFAULT 0)"
+    ],
+    [
+      "table",
+      "chapter_readers",
+      "chapter_readers",
+      "CREATE TABLE chapter_readers (id TEXT PRIMARY KEY, book_id TEXT, idx INTEGER, sequence INTEGER NOT NULL, expires REAL NOT NULL, FOREIGN KEY(book_id,idx) REFERENCES chapters(book_id,idx) ON DELETE CASCADE)"
+    ],
+    [
+      "table",
+      "chapter_search_docs",
+      "chapter_search_docs",
+      "CREATE TABLE chapter_search_docs (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL, idx INTEGER NOT NULL, scope TEXT NOT NULL, literal_check INTEGER NOT NULL, text TEXT NOT NULL, UNIQUE(book_id,idx), FOREIGN KEY(book_id,idx) REFERENCES chapters(book_id,idx) ON DELETE CASCADE)"
+    ],
+    [
+      "table",
+      "chapter_search_fts",
+      "chapter_search_fts",
+      "CREATE VIRTUAL TABLE chapter_search_fts USING fts5(scope,text,content='chapter_search_docs',content_rowid='id',tokenize='trigram case_sensitive 1')"
+    ],
+    [
+      "table",
+      "chapter_search_fts_config",
+      "chapter_search_fts_config",
+      "CREATE TABLE 'chapter_search_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID"
+    ],
+    [
+      "table",
+      "chapter_search_fts_data",
+      "chapter_search_fts_data",
+      "CREATE TABLE 'chapter_search_fts_data'(id INTEGER PRIMARY KEY, block BLOB)"
+    ],
+    [
+      "table",
+      "chapter_search_fts_docsize",
+      "chapter_search_fts_docsize",
+      "CREATE TABLE 'chapter_search_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB)"
+    ],
+    [
+      "table",
+      "chapter_search_fts_idx",
+      "chapter_search_fts_idx",
+      "CREATE TABLE 'chapter_search_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID"
+    ],
+    [
+      "table",
+      "chapter_search_pending",
+      "chapter_search_pending",
+      "CREATE TABLE chapter_search_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL, idx INTEGER NOT NULL, UNIQUE(book_id,idx), FOREIGN KEY(book_id,idx) REFERENCES chapters(book_id,idx) ON DELETE CASCADE)"
+    ],
+    [
+      "table",
+      "chapter_search_state",
+      "chapter_search_state",
+      "CREATE TABLE chapter_search_state (id INTEGER PRIMARY KEY CHECK(id=1), book_id TEXT NOT NULL DEFAULT '', idx INTEGER NOT NULL DEFAULT -1, complete INTEGER NOT NULL DEFAULT 0)"
+    ],
+    [
+      "table",
+      "chapters",
+      "chapters",
+      "CREATE TABLE chapters (\n                    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,\n                    idx INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '',\n                    html TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '',\n                    images TEXT NOT NULL DEFAULT '[]', downloaded INTEGER NOT NULL DEFAULT 0,\n                    original_html TEXT, original_text TEXT, raw TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 0,\n                    PRIMARY KEY (book_id, idx)\n                )"
+    ],
+    [
+      "table",
+      "download_jobs",
+      "download_jobs",
+      "CREATE TABLE download_jobs (\n                    id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,\n                    status TEXT NOT NULL, cancelled INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL,\n                    created_at REAL NOT NULL, updated_at REAL NOT NULL\n                )"
+    ],
+    [
+      "table",
+      "groups_list",
+      "groups_list",
+      "CREATE TABLE groups_list (id TEXT PRIMARY KEY, name TEXT NOT NULL)"
+    ],
+    [
+      "table",
+      "image_cache",
+      "image_cache",
+      "CREATE TABLE image_cache (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, size INTEGER NOT NULL DEFAULT 0, last_used REAL NOT NULL, legacy INTEGER NOT NULL DEFAULT 0, pin_count INTEGER NOT NULL DEFAULT 0, protected INTEGER GENERATED ALWAYS AS (legacy OR pin_count>0) VIRTUAL, evicting INTEGER NOT NULL DEFAULT 0)"
+    ],
+    [
+      "table",
+      "image_cache_state",
+      "image_cache_state",
+      "CREATE TABLE image_cache_state (id INTEGER PRIMARY KEY CHECK(id=1), max_bytes INTEGER NOT NULL DEFAULT 1073741824, total_bytes INTEGER NOT NULL DEFAULT 0, protected_bytes INTEGER NOT NULL DEFAULT 0, legacy_bytes INTEGER NOT NULL DEFAULT 0, entries INTEGER NOT NULL DEFAULT 0, protected_entries INTEGER NOT NULL DEFAULT 0, pending_bytes INTEGER NOT NULL DEFAULT 0, trim_to INTEGER NOT NULL DEFAULT -1, clear_until INTEGER NOT NULL DEFAULT 0, clear_cursor INTEGER NOT NULL DEFAULT 0)"
+    ],
+    [
+      "table",
+      "image_pins",
+      "image_pins",
+      "CREATE TABLE image_pins (book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE, idx INTEGER NOT NULL, name TEXT NOT NULL REFERENCES image_cache(name) ON DELETE CASCADE, PRIMARY KEY(book_id,idx,name))"
+    ],
+    [
+      "table",
+      "legacy",
+      "legacy",
+      "CREATE TABLE legacy (path TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    ],
+    [
+      "table",
+      "notes",
+      "notes",
+      "CREATE TABLE notes (\n                    id TEXT PRIMARY KEY, book_id TEXT NOT NULL, chapter_index INTEGER NOT NULL DEFAULT 0,\n                    quote TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '',\n                    position REAL NOT NULL DEFAULT 0, type TEXT NOT NULL DEFAULT 'note',\n                    created_at REAL NOT NULL, raw TEXT NOT NULL DEFAULT '{}'\n                )"
+    ],
+    [
+      "table",
+      "settings",
+      "settings",
+      "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    ],
+    [
+      "table",
+      "sqlite_sequence",
+      "sqlite_sequence",
+      "CREATE TABLE sqlite_sequence(name,seq)"
+    ],
+    [
+      "trigger",
+      "asset_book_insert",
+      "books",
+      "CREATE TRIGGER asset_book_insert AFTER INSERT ON books BEGIN INSERT INTO asset_pending(book_id,idx) VALUES(NEW.id,-1) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END"
+    ],
+    [
+      "trigger",
+      "asset_book_path",
+      "books",
+      "CREATE TRIGGER asset_book_path AFTER UPDATE OF path ON books WHEN NEW.path IS NOT OLD.path BEGIN INSERT INTO asset_pending(book_id,idx) SELECT book_id,idx FROM chapters WHERE book_id=NEW.id ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END"
+    ],
+    [
+      "trigger",
+      "asset_book_update",
+      "books",
+      "CREATE TRIGGER asset_book_update AFTER UPDATE OF path,cover ON books WHEN NEW.path IS NOT OLD.path OR NEW.cover IS NOT OLD.cover BEGIN INSERT INTO asset_pending(book_id,idx) VALUES(NEW.id,-1) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END"
+    ],
+    [
+      "trigger",
+      "asset_chapter_delete",
+      "chapters",
+      "CREATE TRIGGER asset_chapter_delete AFTER DELETE ON chapters BEGIN DELETE FROM asset_refs WHERE book_id=OLD.book_id AND idx=OLD.idx; DELETE FROM asset_pending WHERE book_id=OLD.book_id AND idx=OLD.idx; END"
+    ],
+    [
+      "trigger",
+      "asset_chapter_insert",
+      "chapters",
+      "CREATE TRIGGER asset_chapter_insert AFTER INSERT ON chapters WHEN NEW.html!='' OR NEW.original_html IS NOT NULL OR NEW.images!='[]' BEGIN INSERT INTO asset_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END"
+    ],
+    [
+      "trigger",
+      "asset_chapter_update",
+      "chapters",
+      "CREATE TRIGGER asset_chapter_update AFTER UPDATE OF html,original_html,images ON chapters WHEN NEW.html IS NOT OLD.html OR NEW.original_html IS NOT OLD.original_html OR NEW.images IS NOT OLD.images BEGIN INSERT INTO asset_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id,blocked=0; END"
+    ],
+    [
+      "trigger",
+      "asset_ref_gc",
+      "asset_refs",
+      "CREATE TRIGGER asset_ref_gc BEFORE DELETE ON asset_refs BEGIN INSERT INTO asset_gc_candidates(kind,name) VALUES(OLD.kind,OLD.name) ON CONFLICT(kind,name) DO UPDATE SET generation=generation+1,retry_at=0; END"
+    ],
+    [
+      "trigger",
+      "cache_count_delete",
+      "image_cache",
+      "CREATE TRIGGER cache_count_delete AFTER DELETE ON image_cache BEGIN UPDATE image_cache_state SET total_bytes=total_bytes-OLD.size,protected_bytes=protected_bytes-OLD.size*OLD.protected,legacy_bytes=legacy_bytes-OLD.size*OLD.legacy,entries=entries-(OLD.size>0),protected_entries=protected_entries-(OLD.size>0)*OLD.protected,pending_bytes=pending_bytes-OLD.size*(1-OLD.protected)*OLD.evicting WHERE id=1; END"
+    ],
+    [
+      "trigger",
+      "cache_count_insert",
+      "image_cache",
+      "CREATE TRIGGER cache_count_insert AFTER INSERT ON image_cache BEGIN UPDATE image_cache_state SET total_bytes=total_bytes+NEW.size,protected_bytes=protected_bytes+NEW.size*NEW.protected,legacy_bytes=legacy_bytes+NEW.size*NEW.legacy,entries=entries+(NEW.size>0),protected_entries=protected_entries+(NEW.size>0)*NEW.protected,pending_bytes=pending_bytes+NEW.size*(1-NEW.protected)*NEW.evicting WHERE id=1; END"
+    ],
+    [
+      "trigger",
+      "cache_count_update",
+      "image_cache",
+      "CREATE TRIGGER cache_count_update AFTER UPDATE OF size,legacy,pin_count,evicting ON image_cache BEGIN UPDATE image_cache_state SET total_bytes=total_bytes+NEW.size-OLD.size,protected_bytes=protected_bytes+NEW.size*NEW.protected-OLD.size*OLD.protected,legacy_bytes=legacy_bytes+NEW.size*NEW.legacy-OLD.size*OLD.legacy,entries=entries+(NEW.size>0)-(OLD.size>0),protected_entries=protected_entries+(NEW.size>0)*NEW.protected-(OLD.size>0)*OLD.protected,pending_bytes=pending_bytes+NEW.size*(1-NEW.protected)*NEW.evicting-OLD.size*(1-OLD.protected)*OLD.evicting WHERE id=1; END"
+    ],
+    [
+      "trigger",
+      "cache_evict_delete",
+      "asset_gc_candidates",
+      "CREATE TRIGGER cache_evict_delete AFTER DELETE ON asset_gc_candidates WHEN OLD.kind='images' BEGIN UPDATE image_cache SET evicting=0 WHERE name=OLD.name; END"
+    ],
+    [
+      "trigger",
+      "cache_evict_insert",
+      "asset_gc_candidates",
+      "CREATE TRIGGER cache_evict_insert AFTER INSERT ON asset_gc_candidates WHEN NEW.kind='images' AND NEW.evict>0 BEGIN UPDATE image_cache SET evicting=1 WHERE name=NEW.name; END"
+    ],
+    [
+      "trigger",
+      "cache_evict_update",
+      "asset_gc_candidates",
+      "CREATE TRIGGER cache_evict_update AFTER UPDATE OF evict ON asset_gc_candidates WHEN NEW.kind='images' BEGIN UPDATE image_cache SET evicting=(NEW.evict>0) WHERE name=NEW.name; END"
+    ],
+    [
+      "trigger",
+      "chapter_body_insert",
+      "chapters",
+      "CREATE TRIGGER chapter_body_insert AFTER INSERT ON chapters BEGIN INSERT INTO chapter_cache(book_id,idx,kind,bytes) SELECT NEW.book_id,NEW.idx,CASE WHEN NEW.original_html IS NOT NULL OR NEW.original_text IS NOT NULL OR (SELECT source FROM books WHERE id=NEW.book_id) NOT IN ('qq','full','hako','stv') THEN 'protected' ELSE 'legacy' END,length(CAST(NEW.html AS BLOB))+length(CAST(NEW.text AS BLOB))+length(CAST(NEW.images AS BLOB))+coalesce(length(CAST(NEW.original_html AS BLOB)),0)+coalesce(length(CAST(NEW.original_text AS BLOB)),0)+length(CAST(NEW.raw AS BLOB)) WHERE NEW.downloaded=1 ON CONFLICT(book_id,idx) DO UPDATE SET bytes=excluded.bytes,version=chapter_cache.version+1,kind=CASE WHEN NEW.original_html IS NOT NULL OR NEW.original_text IS NOT NULL OR (SELECT source FROM books WHERE id=NEW.book_id) NOT IN ('qq','full','hako','stv') THEN 'protected' ELSE chapter_cache.kind END; END"
+    ],
+    [
+      "trigger",
+      "chapter_body_update",
+      "chapters",
+      "CREATE TRIGGER chapter_body_update AFTER UPDATE OF html,text,images,original_html,original_text,downloaded,url ON chapters WHEN NEW.html IS NOT OLD.html OR NEW.text IS NOT OLD.text OR NEW.images IS NOT OLD.images OR NEW.original_html IS NOT OLD.original_html OR NEW.original_text IS NOT OLD.original_text OR NEW.downloaded IS NOT OLD.downloaded OR NEW.url IS NOT OLD.url BEGIN UPDATE chapters SET revision=revision+1 WHERE book_id=NEW.book_id AND idx=NEW.idx; INSERT INTO chapter_cache(book_id,idx,kind,bytes) SELECT NEW.book_id,NEW.idx,CASE WHEN NEW.original_html IS NOT NULL OR NEW.original_text IS NOT NULL OR (SELECT source FROM books WHERE id=NEW.book_id) NOT IN ('qq','full','hako','stv') THEN 'protected' ELSE 'legacy' END,length(CAST(NEW.html AS BLOB))+length(CAST(NEW.text AS BLOB))+length(CAST(NEW.images AS BLOB))+coalesce(length(CAST(NEW.original_html AS BLOB)),0)+coalesce(length(CAST(NEW.original_text AS BLOB)),0)+length(CAST(NEW.raw AS BLOB)) WHERE NEW.downloaded=1 ON CONFLICT(book_id,idx) DO UPDATE SET bytes=excluded.bytes,version=chapter_cache.version+1,kind=CASE WHEN NEW.original_html IS NOT NULL OR NEW.original_text IS NOT NULL OR (SELECT source FROM books WHERE id=NEW.book_id) NOT IN ('qq','full','hako','stv') THEN 'protected' ELSE chapter_cache.kind END; DELETE FROM chapter_cache WHERE book_id=NEW.book_id AND idx=NEW.idx AND NEW.downloaded=0; END"
+    ],
+    [
+      "trigger",
+      "chapter_cache_count_delete",
+      "chapter_cache",
+      "CREATE TRIGGER chapter_cache_count_delete AFTER DELETE ON chapter_cache BEGIN UPDATE chapter_cache_state SET cache_count=cache_count-(OLD.kind='cache')*1,cache_bytes=cache_bytes-(OLD.kind='cache')*OLD.bytes,protected_count=protected_count-(OLD.kind='protected')*1,protected_bytes=protected_bytes-(OLD.kind='protected')*OLD.bytes,legacy_count=legacy_count-(OLD.kind='legacy')*1,legacy_bytes=legacy_bytes-(OLD.kind='legacy')*OLD.bytes WHERE id=1; END"
+    ],
+    [
+      "trigger",
+      "chapter_cache_count_insert",
+      "chapter_cache",
+      "CREATE TRIGGER chapter_cache_count_insert AFTER INSERT ON chapter_cache BEGIN UPDATE chapter_cache_state SET cache_count=cache_count+(NEW.kind='cache')*1,cache_bytes=cache_bytes+(NEW.kind='cache')*NEW.bytes,protected_count=protected_count+(NEW.kind='protected')*1,protected_bytes=protected_bytes+(NEW.kind='protected')*NEW.bytes,legacy_count=legacy_count+(NEW.kind='legacy')*1,legacy_bytes=legacy_bytes+(NEW.kind='legacy')*NEW.bytes WHERE id=1; END"
+    ],
+    [
+      "trigger",
+      "chapter_cache_count_update",
+      "chapter_cache",
+      "CREATE TRIGGER chapter_cache_count_update AFTER UPDATE ON chapter_cache WHEN OLD.kind IS NOT NEW.kind OR OLD.bytes IS NOT NEW.bytes BEGIN UPDATE chapter_cache_state SET cache_count=cache_count-(OLD.kind='cache')*1+(NEW.kind='cache')*1,cache_bytes=cache_bytes-(OLD.kind='cache')*OLD.bytes+(NEW.kind='cache')*NEW.bytes,protected_count=protected_count-(OLD.kind='protected')*1+(NEW.kind='protected')*1,protected_bytes=protected_bytes-(OLD.kind='protected')*OLD.bytes+(NEW.kind='protected')*NEW.bytes,legacy_count=legacy_count-(OLD.kind='legacy')*1+(NEW.kind='legacy')*1,legacy_bytes=legacy_bytes-(OLD.kind='legacy')*OLD.bytes+(NEW.kind='legacy')*NEW.bytes WHERE id=1; END"
+    ],
+    [
+      "trigger",
+      "chapter_source_protect",
+      "books",
+      "CREATE TRIGGER chapter_source_protect AFTER UPDATE OF source ON books WHEN NEW.source IS NOT OLD.source AND NEW.source NOT IN ('qq','full','hako','stv') BEGIN UPDATE chapter_cache SET kind='protected',version=version+1 WHERE book_id=NEW.id AND kind!='protected'; END"
+    ],
+    [
+      "trigger",
+      "image_pin_chapter_delete",
+      "chapters",
+      "CREATE TRIGGER image_pin_chapter_delete AFTER DELETE ON chapters BEGIN DELETE FROM image_pins WHERE book_id=OLD.book_id AND idx=OLD.idx; END"
+    ],
+    [
+      "trigger",
+      "image_pin_delete",
+      "image_pins",
+      "CREATE TRIGGER image_pin_delete AFTER DELETE ON image_pins BEGIN UPDATE image_cache SET pin_count=pin_count-1 WHERE name=OLD.name; END"
+    ],
+    [
+      "trigger",
+      "image_pin_file_ref",
+      "asset_refs",
+      "CREATE TRIGGER image_pin_file_ref AFTER INSERT ON asset_refs WHEN NEW.kind='images' AND EXISTS(SELECT 1 FROM books WHERE id=NEW.book_id AND source IN ('file','local')) BEGIN INSERT OR IGNORE INTO image_pins SELECT NEW.book_id,NEW.idx,NEW.name WHERE EXISTS(SELECT 1 FROM image_cache WHERE name=NEW.name); END"
+    ],
+    [
+      "trigger",
+      "image_pin_insert",
+      "image_pins",
+      "CREATE TRIGGER image_pin_insert AFTER INSERT ON image_pins BEGIN UPDATE image_cache SET pin_count=pin_count+1 WHERE name=NEW.name; END"
+    ],
+    [
+      "trigger",
+      "image_pin_ref_delete",
+      "asset_refs",
+      "CREATE TRIGGER image_pin_ref_delete AFTER DELETE ON asset_refs WHEN OLD.kind='images' BEGIN DELETE FROM image_pins WHERE book_id=OLD.book_id AND idx=OLD.idx AND name=OLD.name; END"
+    ],
+    [
+      "trigger",
+      "search_chapter_insert",
+      "chapters",
+      "CREATE TRIGGER search_chapter_insert AFTER INSERT ON chapters WHEN NEW.downloaded=1 BEGIN INSERT INTO chapter_search_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id; END"
+    ],
+    [
+      "trigger",
+      "search_chapter_update",
+      "chapters",
+      "CREATE TRIGGER search_chapter_update AFTER UPDATE OF text,downloaded ON chapters WHEN NEW.text IS NOT OLD.text OR NEW.downloaded IS NOT OLD.downloaded BEGIN INSERT INTO chapter_search_pending(book_id,idx) VALUES(NEW.book_id,NEW.idx) ON CONFLICT(book_id,idx) DO UPDATE SET id=excluded.id; END"
+    ],
+    [
+      "trigger",
+      "search_doc_delete",
+      "chapter_search_docs",
+      "CREATE TRIGGER search_doc_delete AFTER DELETE ON chapter_search_docs BEGIN INSERT INTO chapter_search_fts(chapter_search_fts,rowid,scope,text) VALUES('delete',OLD.id,OLD.scope,OLD.text); END"
+    ],
+    [
+      "trigger",
+      "search_doc_insert",
+      "chapter_search_docs",
+      "CREATE TRIGGER search_doc_insert AFTER INSERT ON chapter_search_docs BEGIN INSERT INTO chapter_search_fts(rowid,scope,text) VALUES(NEW.id,NEW.scope,NEW.text); END"
+    ],
+    [
+      "trigger",
+      "search_doc_update",
+      "chapter_search_docs",
+      "CREATE TRIGGER search_doc_update AFTER UPDATE OF text ON chapter_search_docs WHEN NEW.text IS NOT OLD.text BEGIN INSERT INTO chapter_search_fts(chapter_search_fts,rowid,scope,text) VALUES('delete',OLD.id,OLD.scope,OLD.text); INSERT INTO chapter_search_fts(rowid,scope,text) VALUES(NEW.id,NEW.scope,NEW.text); END"
+    ],
+    [
+      "trigger",
+      "shelf_group_insert",
+      "books",
+      "CREATE TRIGGER shelf_group_insert AFTER INSERT ON books BEGIN INSERT OR IGNORE INTO book_groups SELECT NEW.id,value FROM json_each(NEW.groups_json) WHERE type='text'; END"
+    ],
+    [
+      "trigger",
+      "shelf_group_update",
+      "books",
+      "CREATE TRIGGER shelf_group_update AFTER UPDATE OF groups_json ON books WHEN NEW.groups_json IS NOT OLD.groups_json BEGIN DELETE FROM book_groups WHERE book_id=NEW.id; INSERT OR IGNORE INTO book_groups SELECT NEW.id,value FROM json_each(NEW.groups_json) WHERE type='text'; END"
+    ]
+  ]
+}

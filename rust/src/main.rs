@@ -14,18 +14,8 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut args = std::env::args().skip(1);
     let mut options = HashMap::new();
-    let mut writable = false;
-    let mut native_sources = false;
     while let Some(key) = args.next() {
-        if key == "--writable" && !writable {
-            writable = true;
-            continue;
-        }
-        if key == "--native-sources" && !native_sources {
-            native_sources = true;
-            continue;
-        }
-        if !["--fixture", "--web-root", "--port", "--import-qt"].contains(&key.as_str())
+        if !["--fixture", "--web-root", "--port"].contains(&key.as_str())
             || options.contains_key(&key)
         {
             return Err(format!("Unknown or duplicate argument: {key}").into());
@@ -38,16 +28,9 @@ fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .get(k)
             .ok_or_else(|| format!("Required argument: {k}"))
     };
-    let fixture = PathBuf::from(get("--fixture")?);
-    let web = PathBuf::from(get("--web-root")?);
-    let port = get("--port")?.parse::<u16>()?;
-    let pack = options.get("--import-qt").map(std::path::Path::new);
-    reader_local::http::serve_fixture_with_sources(
-        &fixture,
-        &web,
-        port,
-        writable,
-        pack,
-        native_sources,
+    reader_local::http::serve_fixture(
+        &PathBuf::from(get("--fixture")?),
+        &PathBuf::from(get("--web-root")?),
+        get("--port")?.parse::<u16>()?,
     )
 }

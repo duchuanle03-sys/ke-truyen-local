@@ -1,26 +1,22 @@
-﻿# Kệ Truyện Local
+# Kệ Truyện Local
 
-Ứng dụng đọc truyện cho một người trên máy Windows, chạy bằng Python và trình duyệt. Không cần đăng nhập hoặc mua premium trong ứng dụng này. Đây là dự án độc lập, chưa triển khai đầy đủ mọi chức năng của vBook.
+Ứng dụng đọc truyện cho một người trên máy Windows, viết bằng Rust, giao diện hiển thị trong trình duyệt. Không cần đăng nhập hoặc mua premium trong ứng dụng này. Đây là dự án độc lập, chưa triển khai đầy đủ mọi chức năng của vBook.
 
 ## Chạy ứng dụng
 
-Cần Python 3.10 trở lên với SQLite 3.35+ hỗ trợ FTS5/trigram, và trình duyệt để hiển thị app. Riêng nguồn Sáng Tác Việt cần **Node.js 20 trở lên** cho HTTP transport; không cần Chrome/Edge hỗ trợ nguồn. Phần Python và Node dùng thư viện chuẩn, không cần cài thêm gói.
+Nhấp đúp **`Kệ Truyện.exe`** trong thư mục dự án. App không cần cài Python, Node.js hay gói nào khác; SQLite (FTS5/trigram) đã nằm sẵn trong tệp exe. Lần chạy đầu tạo thư viện trống trong `user-data/`.
 
-Nhấp đúp `Start.cmd`, hoặc chạy trong thư mục dự án:
+App mở giao diện trong cửa sổ riêng của Chrome hoặc Edge (nếu không có thì dùng trình duyệt mặc định) tại `http://127.0.0.1:8765`. Máy chủ chạy nền, không có cửa sổ console: **đóng cửa sổ đọc không tắt máy chủ**. Để dừng, vào **Thiết lập → Máy chủ cục bộ → Tắt máy chủ**.
 
-```powershell
-python -X utf8 run.py
-```
+Nếu máy chủ của cùng thư viện đã chạy, mở lại `Kệ Truyện.exe` hoặc lối tắt truyện sẽ dùng máy chủ đó để mở giao diện. Nếu thư viện đang được máy chủ khác giữ hoặc cổng bị chương trình khác dùng, app thử lại khoảng 20 giây rồi báo lỗi; lỗi khác (ví dụ cơ sở dữ liệu có cấu trúc lạ) được báo ngay mà không sửa dữ liệu.
 
-Mở `http://127.0.0.1:8765` nếu trình duyệt không tự mở. Giữ cửa sổ máy chủ mở khi đọc; nhấn `Ctrl+C` hoặc vào **Thiết lập → Máy chủ cục bộ → Tắt máy chủ** để dừng. Nút này cũng dùng được khi máy chủ chạy bằng `pythonw.exe` từ lối tắt. Có thể đổi cổng bằng `--port 8768` hoặc tắt mở trình duyệt tự động bằng `--no-browser`.
-
-Nếu máy chủ của cùng thư viện đã chạy, mở lại `Start.cmd` sẽ dùng máy chủ đó để mở giao diện, kể cả khi máy chủ được khởi động nền từ lối tắt truyện.
+Tùy chọn dòng lệnh: `--port 8768` đổi cổng, `--no-browser` không mở cửa sổ, `--data-dir "D:\thu-vien"` dùng thư mục dữ liệu khác, `--book <mã>` mở thẳng một truyện.
 
 Khi tắt có kiểm soát, app từ chối yêu cầu mới bằng 503, lưu checkpoint và chuyển mọi tác vụ đang chờ/đang tải/chờ CAPTCHA sang **Tạm dừng** trong SQLite trước khi xác nhận nhận lệnh. Nếu có tác vụ tải, giao diện yêu cầu bạn đồng ý tạm dừng trước; hủy xác nhận giữ máy chủ hoạt động. Sau khi mở lại, chọn **Tiếp tục** để tải tiếp. Chỉ sự cố/kill/mất điện để lại tác vụ chưa tạm dừng mới được phục hồi tự động từ checkpoint như trước. Chương/tệp/ảnh đã lưu vẫn được giữ. Thao tác nhập thư viện/tệp/OCR, nhập/sửa từ điển, sửa/khôi phục chương, xóa vĩnh viễn và thu gọn SQLite đang chạy sẽ chặn nút tắt bằng thông báo 409 có tên thao tác. Không có bộ hẹn giờ tự tắt theo heartbeat/5 phút; hết hạn lease đọc của cache chương không tắt máy chủ.
 
 Yêu cầu tắt cần cookie riêng mỗi lần khởi động (`HttpOnly; SameSite=Strict; Path=/api/`), header khớp và kiểm tra Host/Origin/loại nội dung JSON. Token chỉ trao cho giao diện có cookie hợp lệ, không lưu vào từ điển/thư viện/log. Máy chủ ngừng nhận yêu cầu trước, chờ tối đa 2 giây cho công việc đang chạy tự kết thúc rồi hủy các kết nối HTTP/TLS/pipe còn chờ; mặc định một lượt dọn có hạn khoảng 15 giây. QT, inventory, checkpoint và khóa thư viện chỉ được đóng sau khi các request, worker và lease thực sự kết thúc. Nếu chưa thể hoàn tất, app báo dọn chưa xong, giữ tài nguyên còn dùng và tự thử lại; launcher trả mã lỗi thay vì báo thoát thành công. Giao diện chỉ xác nhận đã nhận lệnh tắt. Khóa `.server.lock` được giữ đến khi dọn xong; lối tắt chờ/thử khởi động lại tối đa khoảng 20 giây, tránh mở thêm writer khi cổng đã nhả mà worker cũ còn sống.
 
-Đóng cửa sổ console Windows có handler cố gắng lưu trạng thái tạm dừng ngay, nhưng OS có thể kết thúc tiến trình trước khi dọn xong; Task Manager/mất điện cũng không bảo đảm chạy handler. SQLite WAL, checkpoint tác vụ, lease hết hạn và hàng đợi dọn bền vững vẫn là cơ chế phục hồi sau sự cố. Không nên sao lưu hoặc mở thêm máy chủ cho cùng thư viện khi app báo dọn chưa hoàn tất. `reader.log` xoay vòng tối đa 2 MiB/tệp và 2 bản cũ; lỗi bảo trì lặp dùng backoff 0,25 → 1 → 5 → 30 giây, chỉ ghi lại traceback khi lỗi thay đổi và đặt lại khi có lượt thành công.
+Kết thúc tiến trình bằng Task Manager, tắt máy đột ngột hoặc mất điện không chạy được bước tắt có kiểm soát; SQLite WAL, checkpoint tác vụ, lease hết hạn và hàng đợi dọn bền vững là cơ chế phục hồi sau sự cố. Không nên sao lưu hoặc mở thêm máy chủ cho cùng thư viện khi app báo dọn chưa hoàn tất. Lỗi khởi động, cảnh báo bảo trì và sự cố của app được ghi vào `reader.log` cạnh `user-data/`; tệp xoay vòng khi vượt 2 MiB và giữ một bản cũ `reader.log.1`.
 
 Bản clone mới có thư viện trống. Dùng **Nhập file**, **Nhập thư viện**, hoặc **Khám phá** để thêm truyện.
 
@@ -36,7 +32,7 @@ Bản clone mới có thư viện trống. Dùng **Nhập file**, **Nhập thư 
 - Nhập tệp EPUB, PDF, TXT và các định dạng khác được liệt kê trong **Thiết lập**. PDF có OCR Windows để tìm kiếm/nghe và nút mở bản gốc; chất lượng phụ thuộc gói ngôn ngữ OCR đã cài.
 - EPUB nhận diện đường dẫn ảnh lệch chữ hoa/thường khi chỉ có một kết quả; ảnh thiếu không chặn phần chữ. Hỗ trợ SVG tĩnh đã lọc bỏ script, tài nguyên ngoài và hoạt ảnh. Nếu một chương UTF-8 chỉ hỏng một lượng byte rất nhỏ, app giữ phần chữ đọc được và báo vị trí lỗi trong kết quả nhập; byte không thể khôi phục hiển thị bằng `�`. Không sửa tệp gốc. Giới hạn nội dung được tạo là 256 Mi ký tự (gồm HTML trung gian, văn bản và ảnh nhúng), vẫn kiểm soát archive và nội dung lặp.
 - Chỉnh font, cỡ chữ, giãn dòng/đoạn, độ rộng, căn chữ, màu nền; cuộn dọc hoặc lật ngang. Có mục lục, tìm trong chương/toàn truyện, ghi chú, dấu trang và sửa nội dung.
-- Kệ sách lọc tên/tác giả, nguồn, nhóm, loại sách và sắp xếp/đảo chiều trong SQLite. Kệ và Thùng rác có **Trang trước/Trang sau**, mỗi trang 60 truyện; đổi bộ lọc bắt đầu lại trang đầu, tổng số truyện vẫn tính trên toàn bộ kết quả. Chỉ chuyển bản ghi của trang hiện tại sang Python/giao diện. Chỉ mục Unicode và nhóm cập nhật cùng thao tác ghi; lần nâng cấp đầu chỉ xây chỉ mục từ thông tin sách, không đọc nội dung chương. `GET /api/books` trả đối tượng `items`, `total`, `shelf_total`, `offset`, `limit`, `next_offset`; nhận các tham số `q`, `source`, `group`, `kind`, `sort`, `reverse`, `archived`, `trashed`, `offset`, `limit` (tối đa 200). Tìm chuỗi con vẫn xét khóa tên/tác giả trong SQLite, đếm chính xác vẫn xét các khóa phù hợp và trang rất sâu vẫn dùng OFFSET; không coi các thao tác này là thời gian hằng số.
+- Kệ sách lọc tên/tác giả, nguồn, nhóm, loại sách và sắp xếp/đảo chiều trong SQLite. Kệ và Thùng rác có **Trang trước/Trang sau**, mỗi trang 60 truyện; đổi bộ lọc bắt đầu lại trang đầu, tổng số truyện vẫn tính trên toàn bộ kết quả. Chỉ chuyển bản ghi của trang hiện tại sang máy chủ/giao diện. Chỉ mục Unicode và nhóm cập nhật cùng thao tác ghi; lần nâng cấp đầu chỉ xây chỉ mục từ thông tin sách, không đọc nội dung chương. `GET /api/books` trả đối tượng `items`, `total`, `shelf_total`, `offset`, `limit`, `next_offset`; nhận các tham số `q`, `source`, `group`, `kind`, `sort`, `reverse`, `archived`, `trashed`, `offset`, `limit` (tối đa 200). Tìm chuỗi con vẫn xét khóa tên/tác giả trong SQLite, đếm chính xác vẫn xét các khóa phù hợp và trang rất sâu vẫn dùng OFFSET; không coi các thao tác này là thời gian hằng số.
 - Thẻ sách trên trang hiện tại được tái sử dụng theo ID. Đổi kiểu lưới/danh sách hoặc cập nhật dữ liệu giữ nguyên các thẻ và ảnh bìa không đổi; chỉ cập nhật tên, tác giả, số chương, tiến độ khi cần. Đổi URL bìa chỉ thay phần bìa; proxy bìa có phiên bản theo URL để nhận diện thay đổi. **Làm mới** thử lại riêng bìa đã lỗi. Sắp xếp lại giữ thẻ và focus bàn phím; thẻ rời trang được giải phóng, không tích lũy DOM của toàn thư viện.
 - Mục lục dùng cuộn ảo, chỉ giữ các hàng gần vùng đang xem và tái sử dụng hàng khi cuộn. Tiêu đề/số chương được chuẩn hóa một lần trong bộ nhớ, cập nhật khi đọc lại hoặc sửa tiêu đề; gõ tìm kiếm không tạo lại toàn bộ danh sách. Mở mục lục tự đến chương hiện tại; có nhãn VIP/đã lưu và điều hướng bằng ↑/↓, Home/End, Page Up/Page Down, Enter. Hàng cao cố định, tiêu đề hiển thị tối đa hai dòng; toàn bộ tiêu đề vẫn có trong tooltip và nội dung cho trình đọc màn hình.
 - Tìm toàn truyện dùng [SQLite FTS5 với tokenizer trigram](https://www.sqlite.org/fts5.html#the_trigram_tokenizer), giữ cách tìm cụm từ/chuỗi con, không phân biệt hoa thường và vẫn phân biệt dấu tiếng Việt. Truy vấn từ ba ký tự sau casefold dùng chỉ mục; một/hai ký tự vẫn tìm được bằng cách xét bản chuẩn hóa của riêng truyện đó. Mỗi trang tối đa 100 kết quả, có **Xem thêm kết quả**. Tải/sửa/khôi phục nội dung tự ghi hàng đợi lập chỉ mục; chương đang thay đổi được loại khỏi kết quả đến khi cập nhật xong để tránh trả nội dung cũ. Thư viện có sẵn được lập chỉ mục nền có lưu tiến độ; giao diện báo phạm vi chưa sẵn sàng. Mỗi lượt xử lý tối đa 8 chương, khoảng 256 Ki ký tự; một chương riêng lẻ cực lớn vẫn được lập chỉ mục nguyên chương. Chỉ mục lưu thêm bản văn bản casefold, tốn thêm dung lượng đĩa; không sửa nội dung truyện gốc.
@@ -63,7 +59,7 @@ Bản clone mới có thư viện trống. Dùng **Nhập file**, **Nhập thư 
 
 Dữ liệu được tạo trong `user-data/`. Máy chủ chỉ lắng nghe tại địa chỉ loopback của máy đang chạy. Đọc tệp đã nhập và chương đã tải không cần Internet; tải nội dung mới và giọng TTS online cần mạng.
 
-Khi nhập từ điển ở chế độ thay thế, bản sao trước thay đổi được giữ trong `qt.sqlite3`. `backup_id` trong kết quả nhập dùng cho công cụ khôi phục thủ công `QtDictionary.restore_backup(backup_id)`; giao diện chưa có nút khôi phục này.
+Khi nhập từ điển ở chế độ thay thế, bản sao trước thay đổi được giữ trong `qt.sqlite3`. `backup_id` trong kết quả nhập đánh dấu bản sao đó; giao diện chưa có nút khôi phục.
 
 Phiên HTTP Sáng Tác Việt và CAPTCHA chỉ nằm trong bộ nhớ, không ghi đáp án, cookie hoặc mật khẩu vào log/thư viện. Khởi động lại app tạo phiên mới và website có thể yêu cầu xác minh lại. Các thư mục `.browser-stv/` từ bản cũ không còn được dùng; vẫn nên giữ riêng tư vì có thể chứa phiên đăng nhập cũ. Chương mới cần mạng; chương đã lưu đọc được khi website không truy cập được.
 
@@ -72,67 +68,30 @@ Phiên HTTP Sáng Tác Việt và CAPTCHA chỉ nằm trong bộ nhớ, không g
 Nhập bản xuất vBook hoặc gói từ điển bằng dòng lệnh:
 
 ```powershell
-python -X utf8 run.py --import-backup "C:\duong-dan\ban-xuat"
-python -X utf8 run.py --import-qt "C:\duong-dan\tu-dien.zip"
+& ".\Kệ Truyện.exe" --import-backup "C:\duong-dan\ban-xuat"
+& ".\Kệ Truyện.exe" --import-qt "C:\duong-dan\tu-dien.zip"
 ```
 
-Repo chỉ chứa mã nguồn, hướng dẫn và kiểm thử cùng mẫu trang công khai cần cho parser. `.gitignore` dùng danh sách cho phép để giữ dữ liệu cá nhân, bản xuất, log, ảnh chụp, tài liệu phân tích và file app gốc ngoài Git. **Clone repo không khôi phục thư viện cá nhân.**
+Repo chỉ chứa mã nguồn Rust, giao diện web, script PowerShell trong `windows/`, hướng dẫn và kiểm thử. `.gitignore` dùng danh sách cho phép để giữ dữ liệu cá nhân, bản xuất, log, ảnh chụp, tài liệu phân tích và file app gốc ngoài Git. **Clone repo không khôi phục thư viện cá nhân.**
 
-## Kiểm tra
+## Build và kiểm tra
+
+`Kệ Truyện.exe` không nằm trong Git. Sau khi clone hoặc sửa mã, build bằng Rust (MSVC toolchain) rồi chép tệp exe ra thư mục dự án; app tìm thư mục `web/` từ vị trí của exe:
 
 ```powershell
-python -X utf8 -m unittest discover -s tests -v
-node --check web/app.js
-node --check web/reader.js
-node --check web/captcha.js
-node --check stv_http_worker.mjs
+cargo build --release --manifest-path rust/Cargo.toml
+Copy-Item rust/target/release/reader_local.exe "Kệ Truyện.exe"
 ```
 
-Node.js cần khi dùng Sáng Tác Việt và kiểm tra JavaScript. Kiểm thử dùng dữ liệu tạm và phản hồi HTTP tổng hợp, không sửa thư viện thật hoặc giải CAPTCHA website. Kiểm thử DOM chỉ mở giao diện cục bộ trong trình duyệt kiểm thử; không dùng trình duyệt để tải nội dung nguồn. Kiểm thử tích hợp OCR phụ thuộc Windows và các thành phần ngôn ngữ đã cài.
-
-Benchmark cache chương: `python -X utf8 -m unittest discover -s tests -p test_chapter_cache_scale.py -v` tạo 100.000 bản ghi chương, 512 body đã lưu ở hai truyện chữ/tranh. Một lượt đo trên máy phát triển: chọn 8 LRU khoảng 3 ms, dọn một batch khoảng 19 ms; bỏ 172.200 byte body và 86.104 byte văn bản chuẩn hóa. Sau gộp nền, payload FTS giảm 426.130 byte. SQLite vật lý trước/sau batch đều 47.030.272 byte, tăng lên 47.099.904 byte trong gộp, rồi còn 46.514.176 byte sau thu gọn chủ động; freelist tương ứng 60/76/28/0 trang (4.096 byte/trang). SQLite đi kèm Python trên máy này thiếu `dbstat`, nên benchmark đo payload các block FTS riêng, không gọi đó là số trang vật lý của riêng FTS. Kết quả thực tế phụ thuộc độ lớn chương, nội dung chỉ mục và phần cứng; chưa đo trường hợp hàng trăm nghìn body rất lớn. Mỗi lần chạy in đầy đủ thời gian, dung lượng payload/normalized, page count, freelist, kích thước vật lý trước/sau dọn, sau gộp và sau compaction.
-
-Benchmark QT: `python -X utf8 -m unittest discover -s tests -p test_qt_scale.py -v` dùng 1.014.374 mục chung tổng hợp với độ dài 1–23 ký tự và các tiền tố chồng nhau. Fixture chỉ chứa thống kê gộp: số mục, độ dài từ, độ dài tiền tố chung của hai từ kề nhau khi sắp xếp, cùng số ký tự/số byte UTF-8/độ rộng Unicode của nghĩa đầu. Không chứa từ hoặc bản dịch cá nhân. Bộ sinh bảo toàn chính xác các histogram này, gán nhãn CJK ngẫu nhiên khác nhau cho các nhánh và sinh nghĩa công khai; tần suất từ trong truyện thực tế chưa được mô hình hóa. Đo riêng lấy snapshot, sửa/xóa và dịch 10.000/100.000 ký tự; không so trực tiếp với benchmark hai ký tự cũ.
-
-### So sánh các chỉ mục QT thử nghiệm
-
-Các prototype nằm riêng trong `tests/qt_index_benchmark.py`; ứng dụng vẫn dùng chỉ mục hiện tại trong `qt.py`. Chưa thêm dependency cho app, persistent compiled cache hay pre-warming. Để so sánh trie hiện tại, flat dictionary, MARISA và flat dictionary chia bucket, dùng Python Windows đang chạy app:
+Tắt máy chủ trước khi chép đè exe đang chạy. Có thể xóa `rust/target/` sau khi chép để tiết kiệm vài GB.
 
 ```powershell
-python -m venv .qa/qt-index-env
-.qa/qt-index-env/Scripts/python.exe -m pip install --only-binary=:all: --no-deps marisa-trie==1.4.1
-.qa/qt-index-env/Scripts/python.exe -X utf8 -m unittest discover -s tests -p test_qt_index_candidates.py -v
-.qa/qt-index-env/Scripts/python.exe -X utf8 tests/qt_index_benchmark.py --generate tests/fixtures/qt_index_profile.json --fixture .qa/qt-index-bench/fixture/qt.sqlite3 --output .qa/qt-index-bench/generated-profile.json
-.qa/qt-index-env/Scripts/python.exe -X utf8 tests/qt_index_benchmark.py --fixture .qa/qt-index-bench/fixture/qt.sqlite3 --output .qa/qt-index-bench/results.json --runs 3 --repeats 7
-.qa/qt-index-env/Scripts/python.exe -X utf8 tests/qt_index_benchmark.py --fixture .qa/qt-index-bench/fixture/qt.sqlite3 --output .qa/qt-index-bench/restore-results.json --phase restore --runs 3
+cargo test --manifest-path rust/Cargo.toml
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
-Bộ sinh từ chối ghi đè fixture đã có; dùng đường dẫn mới nếu chạy lại bước sinh. Mỗi candidate chạy tuần tự trong subprocess mới trên bản sao của cùng SQLite tổng hợp. Benchmark chỉ cho phép sửa fixture có marker riêng, không nhận từ điển đang dùng. Kết quả JSON ghi phiên bản Python/SQLite/native package, working-set RSS và private commit trước/sau dựng, peak RSS, thời gian dựng lạnh, acquisition, dịch thuần ở năm workload, add/update/delete chung/riêng, overlay, merge/restore, reader khi rebuild và thời gian editor chờ khóa. RSS bao gồm toàn tiến trình; peak là high-water mark của Windows đến thời điểm lấy mẫu, không phải riêng heap trie. “Lạnh” nghĩa chưa có snapshot trong tiến trình, không có nghĩa xóa cache đĩa của Windows. Dữ liệu fixture và kết quả trong `.qa/` không đưa lên Git.
-
-MARISA thử nghiệm dùng `Trie`, key IDs, blob UTF-8 cùng bảng offset 64-bit/length 32-bit; chỉ decode nghĩa khi khớp. Flat candidates dùng cùng bảng nghĩa để so sánh đầy đủ. Các prototype dùng CoW overlay và tombstone; mức overlay chỉ là các điểm đo, chưa phải ngưỡng rebuild được chọn. Kích thước serialized MARISA cộng đầy đủ blob và hai bảng số, không dùng riêng dung lượng trie để kết luận RAM. Chưa có định dạng cache bền vững hoặc benchmark mmap/warm startup.
-
-Kiểm tra đối chiếu dùng nguyên vòng dịch, SQL mutation và cơ chế snapshot của app, chỉ thay dispatch/build trong tiến trình kiểm thử. Corpus gồm match, miss, tiền tố có đuôi không khớp (có thể lùi về từ ngắn hơn), chữ Việt trộn chữ Hán và fallthrough đến Hán Việt. Mỗi lượt dịch dùng snapshot đã lấy trước; SHA-256 kết quả phải trùng giữa mọi candidate/lượt. Median/p95/max được ghi cùng số mẫu; với 7 mẫu, p95 theo nearest rank chính là mẫu lớn nhất. Reader trong phép thử rebuild được phát tối đa mỗi 100 ms, không phải tải đồng thời không giới hạn; vòng reader CPU chạy liên tục có thể làm iterator SQLite tranh GIL rất lâu.
-
-Merge đo 2.000 mục vào Names trên bộ một triệu mục. Phép restore trong `--phase all` chỉ khôi phục tier pronouns ban đầu rỗng, đo rebuild chứ không đại diện khôi phục nhiều dữ liệu. Dùng thêm `--phase restore` để thay Names bằng 2.000 mục rồi khôi phục đủ 183.769 mục gốc, kiểm tra số mục trả về. Mỗi lần thay/khôi phục trong phase này đo một mẫu, lấy median/tail qua ba subprocess độc lập. Bulk import/restore vẫn là API hiện có và dựng lại toàn phạm vi, nên thời gian còn gồm SQL/backups của các tier không thay đổi.
-
-Kết quả đo ngày 13/11/2026, Python 3.14.7 x64 / SQLite 3.50.4 trên Windows, 3 subprocess mỗi candidate và 7 mẫu mỗi workload (median của ba median theo process):
-
-- Trie hiện tại: RSS 562,2 MiB; dựng 6,09 s; match 10k/100k ký tự 5,12/47,03 ms; mixed 100k 57,28 ms; miss 100k 70,64 ms.
-- Flat + bảng nghĩa: RSS 211,7 MiB; dựng 5,73 s; match 19,38/207,13 ms; mixed 106,58 ms; miss 81,14 ms.
-- MARISA + bảng nghĩa: RSS 78,9 MiB; dựng 7,22 s; match 9,36/93,64 ms; mixed 77,66 ms; miss 84,22 ms.
-- Bucketed flat + bảng nghĩa: RSS 226,6 MiB; dựng 6,13 s; match 9,60/94,28 ms; mixed 81,67 ms; miss 83,05 ms.
-
-RSS sau các lượt thay snapshot lần lượt khoảng 618,6/238,6/95,3/257,0 MiB. Peak lúc dựng lần đầu khoảng 564,2/214,1/133,3/229,1 MiB; high-water đến sau các lượt merge/khôi phục tier rỗng là 1.176,8/475,6/261,0/505,7 MiB. Đây là số của toàn process trên fixture tổng hợp, chưa phải đo toàn app với thư viện/từ điển thật. Mọi workload giữa 12 subprocess cho cùng SHA-256 kết quả. Các mẫu match 100k chậm nhất lần lượt 54,9/231,0/192,0/156,9 ms, cho thấy biến động cần được giữ trong báo cáo.
-
-Lấy snapshot nóng khoảng 0,006 ms cho cả bốn candidate. Median add/update/delete chung: trie 1,00/0,82/0,73 ms; flat 0,80/0,72/0,63 ms; MARISA 0,75/0,50/0,54 ms; bucketed flat 0,74/0,53/0,63 ms. Các thao tác riêng truyện khoảng 0,5–0,75 ms. Merge 2.000 mục vào bộ lớn lần lượt 8,62/6,72/8,21/7,05 s; rebuild hiện vẫn dựng lại các tier khác trong cùng phạm vi. Overlay đã đo ở 16/128/512/2.048 mục; ước lượng object size ở mức cuối khoảng 335 KiB, chưa chọn ngưỡng rebuild production từ các probe này.
-
-MARISA serialized đầy đủ 36.953.276 byte (khoảng 35,2 MiB). Wheel `marisa-trie==1.4.1` cho `cp314-win_amd64` cài thành công trong venv dùng cùng Python của app, tải khoảng 173 kB và không biên dịch C++ trên máy này. Dependency vẫn chỉ phục vụ benchmark; không ảnh hưởng việc mở app hoặc đọc truyện bình thường.
-
-Phép khôi phục Names riêng cũng chạy 3 subprocess mỗi candidate, mỗi lượt xác nhận đủ 183.769 mục. Median restore theo thứ tự trie/flat/MARISA/bucketed: 8,18/6,22/7,98/6,61 s; mẫu chậm nhất 8,28/7,34/9,55/7,90 s. Peak process đến sau restore và rebuild đồng thời: 1.172,2/516,3/337,3/539,2 MiB.
-
-Reader 10k trong phép này tiếp tục đo qua cả publish và giải phóng snapshot cũ: median 6,25/10,91/7,98/8,15 ms, mẫu chậm nhất 440,8/25,0/30,2/34,8 ms. Editor chờ khóa rebuild trung vị 7,28/5,77/7,34/5,99 s. Đây là tải có khoảng cách 100 ms giữa các yêu cầu; chưa đo nhiều reader chạy CPU liên tục. Các mẫu concurrency cũ dừng ngay sau construction không được dùng cho các số này. MARISA cải thiện tail lúc thay index, dù traversal thông thường chậm hơn.
-
-Decision gate: MARISA giảm khoảng 86% RSS process ban đầu, nhưng match throughput nóng chậm gần 2 lần; cold build cũng chậm hơn. Hai phương án standard-library giảm RAM nhưng chưa giữ được tốc độ dịch. Vì chưa candidate compact nào đạt đồng thời hai mục tiêu, giai đoạn 1–2 giữ production backend hiện tại. Giai đoạn tích hợp cần cải thiện đường lookup hoặc chấp nhận rõ tradeoff RAM/tốc độ này. Persistent cache, mmap và pre-warming được để ở giai đoạn sau; chưa có số warm-start và chưa thêm revision trigger vào SQLite.
+Kiểm thử chỉ dùng thư mục tạm và phản hồi HTTP tổng hợp, không sửa thư viện thật hoặc giải CAPTCHA website. `rust/tests/fixtures/` giữ hai thư viện mẫu và các đáp án đã chốt từ bản Python cũ (bộ lọc HTML, ranh giới URL công khai, casefold Unicode, thông báo lỗi JSON) để Rust tiếp tục khớp hành vi cũ. Kiểm thử OCR và lối tắt cần Windows. Kiến trúc và các quyết định chính nằm trong [docs/architecture.md](docs/architecture.md).
 
 ## Giới hạn
 

@@ -188,58 +188,6 @@ fn library_held_by_another_server_is_refused() {
 }
 
 #[test]
-fn running_python_app_is_reused() {
-    let scratch = temp("python-reuse");
-    let data = scratch.join("user-data");
-    let port = free_port();
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let python = Server(
-        Command::new("python")
-            .current_dir(repo)
-            .args([
-                "-B",
-                "-X",
-                "utf8",
-                "run.py",
-                "--no-browser",
-                "--port",
-                &port.to_string(),
-                "--data-dir",
-            ])
-            .arg(&data)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-        port,
-    );
-    let started = Instant::now();
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "Python app did not start"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    let (output, elapsed) = finish(
-        &mut launcher(&[
-            "--data-dir",
-            data.to_str().unwrap(),
-            "--port",
-            &port.to_string(),
-        ]),
-        Duration::from_secs(30),
-    );
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(elapsed < Duration::from_secs(5), "reuse took {elapsed:?}");
-    assert_eq!(get(python.1, "/api/instance")["app"], "ke-truyen-local");
-}
-
-#[test]
 fn unsupported_library_is_reported_at_once() {
     let scratch = temp("unsupported");
     let data = scratch.join("user-data");

@@ -1,5 +1,5 @@
 //! Windows PDF/OCR and Desktop shortcut integration through the unchanged
-//! PowerShell helpers in `windows/` (references: `pdfocr.py`, `shortcuts.py`).
+//! PowerShell helpers in `windows/` for OCR and desktop shortcuts.
 
 use crate::{ApiError, documents::html_escape};
 use serde_json::{Map, Value, json};
@@ -446,12 +446,7 @@ pub(crate) fn create_shortcut(
     if library_text.contains('\0') {
         return Err(error("Tên truyện hoặc đường dẫn dữ liệu không hợp lệ."));
     }
-    let normcase = library_text.replace('/', "\\").to_lowercase();
-    let identity = format!(
-        "{:x}",
-        Sha256::digest(format!("{normcase}\0{book_id}").as_bytes())
-    )[..16]
-        .to_owned();
+    let identity = shortcut_identity(&library_text, book_id);
     let mut args = launcher.prefix.clone();
     args.extend([
         format!("--book={book_id}"),
@@ -531,8 +526,25 @@ pub(crate) fn create_shortcut(
     }
 }
 
+/// One shortcut per library and book; matches the names the Python app already created.
+fn shortcut_identity(library: &str, book_id: &str) -> String {
+    let normcase = library.replace('/', "\\").to_lowercase();
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{normcase}\0{book_id}").as_bytes())
+    )[..16]
+        .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shortcut_identity_matches_existing_python_shortcuts() {
+        assert_eq!(
+            super::shortcut_identity("C:/K\u{1ec7} Truy\u{1ec7}n/USER-Data", "book-1"),
+            "a7381f9a0c50c44a"
+        );
+    }
     use super::*;
 
     #[test]
@@ -561,8 +573,8 @@ mod tests {
         assert_eq!(safe_title(&"x".repeat(100)).len(), 80);
     }
 
-    /// Real COM shortcut and System.Drawing icon through the unchanged helper,
-    /// compared with the Python reference; both write into private temp desktops.
+    /// Real COM shortcut and System.Drawing icon through the helper, written into a private
+    /// temp desktop; the file name is the one the retired Python app gave the same title.
     #[cfg(windows)]
     #[test]
     fn shortcut_targets_rust_launcher() {
@@ -576,39 +588,9 @@ mod tests {
             .to_owned();
         let base = std::env::temp_dir().join(format!("reader-m6-shortcut-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        let (data, cover) = (base.join("data"), base.join("cover.png"));
+        let data = base.join("data");
         std::fs::create_dir_all(&data).unwrap();
-        std::fs::write(&cover, &png).unwrap();
         let title = "Truyện: thử/1 <b>";
-        let script = "import json,pathlib,sys;sys.path.insert(0,sys.argv[1]);import shortcuts;\
-            shortcuts.desktop_directory=lambda: pathlib.Path(sys.argv[2]);\
-            print(json.dumps(shortcuts.create_shortcut(book_id='book-1',title=sys.argv[3],\
-            cover_bytes=pathlib.Path(sys.argv[4]).read_bytes(),data_dir=sys.argv[5],port=8765)))";
-        let output = Command::new("python")
-            .args(["-B", "-X", "utf8", "-c", script])
-            .arg(&project)
-            .arg(base.join("desktop-python"))
-            .arg(title)
-            .arg(&cover)
-            .arg(&data)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let python: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let icon = std::fs::read(
-            data.join("shortcuts")
-                .read_dir()
-                .unwrap()
-                .next()
-                .unwrap()
-                .unwrap()
-                .path(),
-        )
-        .unwrap();
         let script_path = project.join("windows").join("shortcut.ps1");
         let launcher = launcher(&project).unwrap();
         let desktop = base.join("desktop-rust");
@@ -629,11 +611,14 @@ mod tests {
                 .unwrap()
                 .to_owned()
         };
-        assert_eq!(name(&rust), name(&python));
-        assert_eq!(
-            (rust["used_cover"].clone(), python["used_cover"].clone()),
-            (json!(true), json!(true))
-        );
+        let expected = crate::library::test_common::reference()["shortcut_file_name"]
+            .as_str()
+            .unwrap();
+        // The frozen name came from another data folder; its title part must still match.
+        let title_part = &expected[..expected.len() - "0123456789abcdef.lnk".len()];
+        let actual = name(&rust).into_string().unwrap();
+        assert!(actual.starts_with(title_part), "{actual}");
+        assert_eq!(rust["used_cover"], json!(true));
         // The Rust shortcut launches the running app directly (no pythonw/run.py).
         let link = std::fs::read(rust["path"].as_str().unwrap()).unwrap();
         let text = String::from_utf16_lossy(
@@ -658,7 +643,6 @@ mod tests {
             .filter_map(Result::ok)
             .collect::<Vec<_>>();
         assert_eq!(icons.len(), 1, "temporary folders must be removed");
-        assert_eq!(std::fs::read(icons[0].path()).unwrap(), icon);
         let again = create_shortcut(
             &script_path,
             &launcher,

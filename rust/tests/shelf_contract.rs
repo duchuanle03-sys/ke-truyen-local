@@ -3,11 +3,8 @@ use reader_local::{Library, ShelfQuery};
 use serde_json::Value;
 #[test]
 fn float_json_matches_python() {
-    let expected = common::python(
-        "import json;print(json.dumps([1e-7,1e-6,1e-5,1e-4,1e15,1e16,1e20,1e21,-0.0,1.2345678901234567e-12]),end='')",
-        &[],
-    );
-    let value: Value = serde_json::from_str(&expected).unwrap();
+    let expected = common::reference()["float_json"].as_str().unwrap();
+    let value: Value = serde_json::from_str(expected).unwrap();
     assert_eq!(
         String::from_utf8(reader_local::http::json_bytes(&value)).unwrap(),
         expected
@@ -20,13 +17,9 @@ fn html_tokenizer_matches_python_quoted_attributes() {
         "<p><script></p>secret</script></p>",
         "<p>A&amp;B &#65; &#x42;</p>",
     ] {
-        let expected = common::python(
-            "import json,sys;from server import public_content;print(json.dumps(public_content({'html':sys.argv[1]}),ensure_ascii=False),end='')",
-            &[markup],
-        );
         let mut actual = serde_json::json!({"html":markup});
         reader_local::http::public_content(&mut actual).unwrap();
-        assert_eq!(actual, serde_json::from_str::<Value>(&expected).unwrap());
+        assert_eq!(actual, common::reference()["tokenizer"][markup]);
     }
 }
 #[test]
@@ -41,17 +34,9 @@ fn svg_namespaces_entities_and_whitespace_match_python() {
             "<img src='data:image/svg+xml;base64,{}'>",
             base64::engine::general_purpose::STANDARD.encode(svg)
         );
-        let expected = common::python(
-            "import json,sys;from server import public_content;print(json.dumps(public_content({'html':sys.argv[1]}),ensure_ascii=False),end='')",
-            &[&markup],
-        );
         let mut actual = serde_json::json!({"html":markup});
         reader_local::http::public_content(&mut actual).unwrap();
-        assert_eq!(
-            actual,
-            serde_json::from_str::<Value>(&expected).unwrap(),
-            "{svg}"
-        );
+        assert_eq!(actual, common::reference()["svg"][svg], "{svg}");
     }
 }
 #[test]
@@ -133,17 +118,9 @@ fn public_html_urls_match_python_trust_boundary() {
         "https://[2001:4860:4860::8888]/a",
     ] {
         let markup = format!("<img src='{url}'>");
-        let expected = common::python(
-            "import json,sys;from server import public_content;print(json.dumps(public_content({'html':sys.argv[1]}),ensure_ascii=False),end='')",
-            &[&markup],
-        );
         let mut actual = serde_json::json!({"html":markup});
         reader_local::http::public_content(&mut actual).unwrap();
-        assert_eq!(
-            actual,
-            serde_json::from_str::<Value>(&expected).unwrap(),
-            "{url}"
-        );
+        assert_eq!(actual, common::reference()["trust_boundary"][url], "{url}");
     }
 }
 #[test]
@@ -177,7 +154,7 @@ fn malformed_metadata_errors_match_python() {
         .unwrap();
         db.execute("UPDATE books SET raw=?", [raw]).unwrap();
         drop(db);
-        let expected:Value=serde_json::from_str(&common::python("import json,sys;\ntry: json.loads(sys.argv[1])\nexcept ValueError as e: print(json.dumps(str(e)))",&[raw])).unwrap();
+        let expected = &common::reference()["malformed_metadata"][raw];
         let actual = Library::open_fixture(&fixture.db)
             .unwrap()
             .list_books(&ShelfQuery::from_uri("/api/books").unwrap())
@@ -188,7 +165,7 @@ fn malformed_metadata_errors_match_python() {
 }
 #[test]
 fn html_named_and_numeric_entities_match_python() {
-    let cases:Value=serde_json::from_str(&common::python("import json,html.entities;from server import public_content;cases=['<p>&'+key+'</p>' for key in html.entities.html5];cases+=['<p>&copy test &notit; &#x80;</p>'];cases+=['<p>&#'+str(n)+';|&#x'+format(n,'x')+';</p>' for n in [0,1,8,9,10,11,12,13,31,127,128,129,159,160,55296,57343,64976,65534,65535,1114111,1114112]];print(json.dumps([[s,public_content({'html':s})] for s in cases],ensure_ascii=True))",&[])).unwrap();
+    let cases = &common::reference()["entities"];
     for pair in cases.as_array().unwrap() {
         let markup = pair[0].as_str().unwrap();
         let mut actual = serde_json::json!({"html":markup});
@@ -209,34 +186,34 @@ fn raw_script_style_skip_entity_decoding() {
                     String::new()
                 }
             );
-            let expected:Value=serde_json::from_str(&common::python("import json,sys;from server import public_content;print(json.dumps(public_content({'html':sys.argv[1]})))",&[&markup])).unwrap();
+            let expected = &common::reference()["raw_text"][&markup];
             let mut actual = serde_json::json!({"html":markup});
             reader_local::http::public_content(&mut actual).unwrap();
-            assert_eq!(actual, expected);
+            assert_eq!(&actual, expected);
         }
     }
     let mut ordinary = serde_json::json!({"html":format!("<p>{entity}</p>")});
     let error = reader_local::http::public_content(&mut ordinary).unwrap_err();
     assert_eq!(error.status, 400);
-    let expected:Value=serde_json::from_str(&common::python("import json,sys;from server import public_content;\ntry: public_content({'html':sys.argv[1]})\nexcept ValueError as e: print(json.dumps(str(e)))",&[ordinary["html"].as_str().unwrap()])).unwrap();
+    let expected = &common::reference()["visible_entity_error"];
     assert_eq!(error.message, expected.as_str().unwrap());
 }
 #[test]
 fn shelf_matches_python_pages() {
     let fixture = common::Fixture::new("small");
     let library = Library::open_fixture(&fixture.db).unwrap();
-    let expected:Value=serde_json::from_str(&common::python("import json,sys;from library import Store;s=Store.__new__(Store);from pathlib import Path;s.path=Path(sys.argv[1]);s._database_gate=__import__('threading').RLock();s._database_users=0;s._compacting=False;print(json.dumps(s.list_books(limit=2),ensure_ascii=False))",&[fixture.db.to_str().unwrap()])).unwrap();
+    let expected = &common::reference()["shelf_page_limit_2"];
     let actual = serde_json::to_value(
         library
             .list_books(&ShelfQuery::from_uri("/api/books?limit=2").unwrap())
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(actual, expected);
+    assert_eq!(&actual, expected);
 }
 #[test]
 fn unicode_matches_python() {
-    let folds:Value=serde_json::from_str(&common::python("import json;print(json.dumps({str(i):chr(i).casefold() for i in range(0x110000) if not 0xd800<=i<=0xdfff and chr(i).casefold()!=chr(i)}))",&[])).unwrap();
+    let folds = &common::reference()["casefold"];
     let mut count = 0;
     for i in 0..=0x10ffff {
         if let Some(c) = char::from_u32(i) {

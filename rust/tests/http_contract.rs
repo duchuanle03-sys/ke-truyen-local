@@ -62,28 +62,3 @@ fn static_junction_escape_is_forbidden() {
     std::fs::remove_dir(&link).unwrap();
     assert!(outside.join("secret.txt").exists());
 }
-#[test]
-fn http_matches_reference() {
-    let output = std::process::Command::new("python")
-        .current_dir(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap(),
-        )
-        .args([
-            "-B",
-            "-X",
-            "utf8",
-            "rust/tests/support/capture_reference.py",
-            "--binary",
-            env!("CARGO_BIN_EXE_reader_local"),
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "stdout={}\nstderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}

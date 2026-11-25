@@ -2702,61 +2702,15 @@ impl tokio::io::AsyncWrite for IdleIo {
         std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
-pub fn serve(
-    library: Library,
-    web_root: &Path,
-    port: u16,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
-    run_server(library, web_root, listener)
-}
+/// Read-only fixture server for the regression tests (`--fixture`).
 pub fn serve_fixture(
     fixture: &Path,
     web_root: &Path,
     port: u16,
-    writable: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    serve_fixture_with_pack(fixture, web_root, port, writable, None)
-}
-
-pub fn serve_fixture_with_pack(
-    fixture: &Path,
-    web_root: &Path,
-    port: u16,
-    writable: bool,
-    pack: Option<&Path>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    serve_fixture_with_sources(fixture, web_root, port, writable, pack, false)
-}
-
-pub fn serve_fixture_with_sources(
-    fixture: &Path,
-    web_root: &Path,
-    port: u16,
-    writable: bool,
-    pack: Option<&Path>,
-    native_sources: bool,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if pack.is_some() && !writable {
-        return Err("--import-qt requires --writable".into());
-    }
-    if native_sources && !writable {
-        return Err("--native-sources requires --writable".into());
-    }
     checked_path(web_root)?;
     let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
-    let mut library = if writable {
-        Library::open_writable_fixture(fixture)?
-    } else {
-        Library::open_fixture(fixture)?
-    };
-    if native_sources {
-        library.sources.enable_native()?;
-    }
-    if let Some(pack) = pack {
-        crate::qt_pack::install(&library, pack)?;
-    }
-    run_server(library, web_root, listener)
+    run_server(Library::open_fixture(fixture)?, web_root, listener)
 }
 /// Serve an already opened library on a bound loopback listener (production launcher).
 pub(crate) fn serve_library(
@@ -3431,25 +3385,25 @@ mod tests {
         );
     }
     #[test]
-    fn file_identity_matches_python_fstat() {
+    fn file_identity_tracks_inode_size_and_times() {
         let path = std::env::temp_dir().join(format!("reader-m2-identity-{}", std::process::id()));
         std::fs::write(&path, b"image").unwrap();
-        let change = std::process::Command::new("python")
-            .args([
-                "-B",
-                "-c",
-                "import os,sys;os.utime(sys.argv[1],ns=(1700000000000000000,1700000000000000000))",
-            ])
-            .arg(&path)
-            .status()
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
             .unwrap();
-        assert!(change.success());
         let path = checked_path(&path).unwrap();
         let file = std::fs::File::open(&path).unwrap();
         let actual = file_identity(&path, &file.metadata().unwrap(), &file).unwrap();
-        let expected=std::process::Command::new("python").args(["-B","-X","utf8","-c","import os,sys;f=open(sys.argv[1],'rb');s=os.fstat(f.fileno());print(f'{sys.argv[1]}:{s.st_ino}:{s.st_size}:{s.st_mtime_ns}:{s.st_ctime_ns}')"]).arg(display_path(&path)).output().unwrap();
-        assert!(expected.status.success());
-        assert_eq!(actual, String::from_utf8(expected.stdout).unwrap().trim());
+        // Same layout as the retired reference's fstat key: path:inode:size:mtime_ns:ctime_ns.
+        let fields: Vec<&str> = actual.rsplitn(5, ':').collect();
+        assert_eq!(fields[4], display_path(&path));
+        assert!(fields[3].parse::<u64>().unwrap() > 0, "{actual}");
+        assert_eq!((fields[2], fields[1]), ("5", "1700000000000000000"));
+        assert!(fields[0].parse::<i128>().unwrap() > 0, "{actual}");
         drop(file);
         std::fs::remove_file(path).unwrap();
     }
