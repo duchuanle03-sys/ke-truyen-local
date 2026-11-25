@@ -1392,7 +1392,7 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
         || (pieces.len() == 6
             && pieces[..2] == ["api", "books"]
             && pieces[3] == "chapters"
-            && ["edit", "restore", "original"].contains(&pieces[5]))
+            && ["edit", "restore", "original", "prefetch"].contains(&pieces[5]))
 }
 
 fn critical_operation(parts: &hyper::http::request::Parts) -> Option<&'static str> {
@@ -2414,6 +2414,13 @@ fn respond_writable(
                                 chapter["url"].as_str().unwrap_or_default(),
                             )?
                         }
+                        (6, "POST") if pieces[3] == "chapters" && pieces[5] == "prefetch" => {
+                            library.prefetch_chapter(
+                                id,
+                                crate::library::integer(pieces[4])?,
+                                &|| stopping.load(std::sync::atomic::Ordering::Acquire),
+                            )?
+                        }
                         (6, "POST") if pieces[3] == "chapters" && pieces[5] == "edit" => library
                             .edit_chapter(id, crate::library::sqlite_integer(pieces[4])?, body)?,
                         (6, "POST") if pieces[3] == "chapters" && pieces[5] == "restore" => library
@@ -3384,6 +3391,10 @@ mod tests {
         assert!(json_route(&parts("POST", "/api/groups")));
         assert!(json_route(&parts("POST", "/api/groups/abc/rename")));
         assert!(!json_route(&parts("POST", "/api/groups/abc/other")));
+        assert!(json_route(&parts(
+            "POST",
+            "/api/books/b/chapters/3/prefetch"
+        )));
     }
     #[test]
     fn request_json_rejects_nonfinite_constants_with_reference_error() {

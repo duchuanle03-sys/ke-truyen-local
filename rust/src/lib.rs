@@ -16,6 +16,7 @@ mod imports;
 mod legacy_formats;
 mod lifecycle;
 mod platform;
+mod prefetch;
 mod qt_pack;
 mod reader;
 mod schema;

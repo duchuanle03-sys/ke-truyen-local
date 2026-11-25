@@ -101,6 +101,32 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     progressBar.style.width = `${clamp(((index + pos) / total) * 100, 0, 100)}%`;
     previousButton.disabled = index <= 0;
     nextButton.disabled = index >= chapters.length - 1;
+    maybePrefetch();
+  }
+
+  // Share of the current chapter already shown: the last visible page counts as read, and a
+  // text chapter that fits on screen is fully read.
+  function readFraction() {
+    if (book.kind === 'comic') {
+      const pages = content.querySelectorAll('.comic-page').length;
+      return prefs.mode === 'paged' ? (pages ? (imagePage + 1) / pages : 0) : position();
+    }
+    // Images still loading make a chapter look shorter than it is; use the strict measure.
+    if ([...content.querySelectorAll('img')].some((img) => !img.complete)) return position();
+    if (prefs.mode === 'paged') return (Math.round(scroller.scrollLeft / pageStep()) + 1) / Math.max(1, pageCount());
+    return scroller.scrollHeight <= scroller.clientHeight + 2 ? 1 : position();
+  }
+
+  // Past 80% of chapter N, ask the server once to fetch N+1 in the background. Keyed by book and
+  // chapter, so scrolling back and forth or repeated progress events never send it twice.
+  let prefetchKey = '';
+  function maybePrefetch() {
+    if (loading || !chapter || !['qq', 'full', 'hako', 'stv'].includes(book.source)) return;
+    const next = index + 1;
+    const key = `${book.id}\n${next}`;
+    if (next >= chapters.length || chapters[next]?.downloaded || chapters[next]?.is_vip === true || prefetchKey === key || readFraction() < 0.8) return;
+    prefetchKey = key;
+    api(`${path(`/chapters/${next}`)}/prefetch`, {}, { captcha: false }).catch(() => {});
   }
 
   function applyPrefs(preserve = true) {
@@ -131,6 +157,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     chapterTitle = el('h1'); content = el('div', { class: 'chapter-content' });
     sheet = el('article', { class: 'reading-sheet', 'aria-label': 'Nội dung chương' }, [chapterTitle, content]);
     scroller = el('div', { class: 'reader-scroll', tabindex: '0' }, [sheet]);
+    content.addEventListener('load', () => maybePrefetch(), true);
     scroller.addEventListener('scroll', () => {
       if (chapter && !loading && prefs.mode === 'paged' && book.kind !== 'comic') {
         const aligned = Math.round(scroller.scrollLeft / pageStep()) * pageStep();
@@ -258,6 +285,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
       if (token !== generation) return;
       restorePosition(pos);
       loading = false; dirty = true; root.dataset.state = 'reading';
+      maybePrefetch();
       lastReadable = record();
       await saveProgress();
       if (token === generation && continueSpeech) startSpeech();

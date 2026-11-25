@@ -39,6 +39,12 @@ app is `491c059`.
   checks. Sáng Tác Việt requests run one at a time, at least 10 s apart, and reader requests go
   ahead of background downloads. QQ, Truyện Full and Hako have no request spacing; only downloads
   are limited, to 2 workers.
+- **Next-chapter prefetch** (`prefetch.rs`). At 80% of chapter N the reader asks once for N+1.
+  The server runs it on that request's thread: one prefetch at a time and one waiting, for the
+  whole app. It skips chapters already saved or in use, and anything but the chapter after the
+  one last opened. Sáng Tác Việt prefetches use the background lane and are promoted when the
+  reader opens that chapter. Other sources wait 2 s between prefetches. The result is an
+  ordinary evictable cache entry; failures are silent and never retried.
 - **Paths.** Canonical paths are checked component by component; symlinks and reparse points are
   rejected for data and static files.
 

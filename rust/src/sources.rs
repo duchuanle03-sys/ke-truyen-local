@@ -506,7 +506,7 @@ impl Sources {
         &self,
         id: &str,
         link: &str,
-        background: bool,
+        background: &dyn Fn() -> bool,
         cancelled: impl Fn() -> bool,
     ) -> Result<Value, ApiError> {
         let url = canonical(id, link, None)?;
@@ -791,6 +791,7 @@ pub(crate) fn key(url: &str) -> &str {
 }
 
 impl crate::Library {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn fetch_source_chapter(
         &self,
         book: &str,
@@ -798,9 +799,10 @@ impl crate::Library {
         source: &str,
         url: &str,
         job: Option<&str>,
+        background: &dyn Fn() -> bool,
         cancelled: impl Fn() -> bool,
     ) -> Result<Value, ApiError> {
-        let result = self.sources.chapter(source, url, job.is_some(), cancelled);
+        let result = self.sources.chapter(source, url, background, cancelled);
         if let Err(error) = &result
             && error.code() == Some("vip_locked")
         {
@@ -845,6 +847,7 @@ impl crate::Library {
                     &task.source,
                     row["url"].as_str().unwrap_or_default(),
                     Some(&task.job_id),
+                    &|| true,
                     || control.cancelled(),
                 )?)
             };

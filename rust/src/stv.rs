@@ -261,6 +261,16 @@ impl Stv {
     }
 
     fn turn(&self, background: bool, cancelled: impl Fn() -> bool) -> Result<Turn<'_>, WireError> {
+        self.queued_turn(&|| background, cancelled)
+    }
+
+    /// Waits for the single request slot. `background` is re-read on every wake-up, so a
+    /// waiting background request that becomes interactive moves to the foreground lane.
+    fn queued_turn(
+        &self,
+        background: &dyn Fn() -> bool,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Turn<'_>, WireError> {
         let mut state = locked(&self.state)?;
         self.check_open()?;
         if state.waiters.iter().map(VecDeque::len).sum::<usize>() >= MAX_WAITERS {
@@ -269,11 +279,16 @@ impl Stv {
                 "Hàng đợi Sáng Tác Việt đang đầy; hãy thử lại sau.",
             ));
         }
-        let lane = usize::from(background);
+        let mut lane = usize::from(background());
         let id = state.sequence;
         state.sequence = state.sequence.wrapping_add(1);
         state.waiters[lane].push_back(id);
         loop {
+            if lane == 1 && !background() {
+                state.waiters[1].retain(|ticket| *ticket != id);
+                state.waiters[0].push_back(id);
+                lane = 0;
+            }
             let failure = if self.stop.is_cancelled() {
                 Some(closed())
             } else if cancelled() {
@@ -291,7 +306,7 @@ impl Stv {
             }
             if !state.active
                 && state.waiters[lane].front() == Some(&id)
-                && (!background || state.waiters[0].is_empty())
+                && (lane == 0 || state.waiters[0].is_empty())
             {
                 state.waiters[lane].pop_front();
                 state.active = true;
@@ -763,10 +778,10 @@ impl Stv {
     pub(crate) fn chapter(
         &self,
         url: &str,
-        background: bool,
+        background: &dyn Fn() -> bool,
         cancelled: impl Fn() -> bool,
     ) -> Result<Value, ApiError> {
-        let _turn = self.turn(background, &cancelled)?;
+        let _turn = self.queued_turn(background, &cancelled)?;
         let (host, book, cid) = parts(url, true)?;
         let cid = cid.ok_or_else(|| parse_error("Chương không có trong mục lục nguồn."))?;
         let tuple = (host.to_owned(), book.to_owned());
@@ -1254,7 +1269,7 @@ mod tests {
         let detail = stv.detail(BOOK).unwrap();
         assert_eq!(detail["name"], "Truyện thử");
         assert_eq!(detail["chapters"][0]["url"], CHAPTER);
-        let error = stv.chapter(CHAPTER, false, || false).unwrap_err();
+        let error = stv.chapter(CHAPTER, &|| false, || false).unwrap_err();
         assert_eq!(error.status, 409);
         let key = error.verification().unwrap().0.clone();
         let details = error.json();
@@ -1291,13 +1306,15 @@ mod tests {
             true
         );
         assert_eq!(
-            stv.chapter(CHAPTER, false, || false).unwrap_err().status,
+            stv.chapter(CHAPTER, &|| false, || false)
+                .unwrap_err()
+                .status,
             409
         );
         stv.complete_verification(&key);
         assert!(stv.state.lock().unwrap().pending.is_none());
         assert_eq!(
-            stv.chapter(CHAPTER, false, || false).unwrap(),
+            stv.chapter(CHAPTER, &|| false, || false).unwrap(),
             json!({
                 "html":"<p>Tiếng Việt.</p>","text":"Tiếng Việt.","images":[],"language":"vi","translation":"source",
             })
@@ -1353,6 +1370,33 @@ mod tests {
             assert!(Instant::now() < end);
             thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn promoted_background_request_moves_to_the_foreground_lane() {
+        let stv = Stv::fixture(fixture_fetcher(None).unwrap());
+        let active = stv.turn(false, || false).unwrap();
+        let (send, rx) = mpsc::channel();
+        let promoted = AtomicBool::new(false);
+        thread::scope(|scope| {
+            for (ticket, promotable) in [(0, false), (1, true)] {
+                let (queue, sender, promoted) = (&stv, send.clone(), &promoted);
+                scope.spawn(move || {
+                    let background = || !(promotable && promoted.load(Ordering::Acquire));
+                    let turn = queue.queued_turn(&background, || false).unwrap();
+                    sender.send(ticket).unwrap();
+                    drop(turn);
+                });
+                wait_count(&stv, ticket + 1);
+            }
+            promoted.store(true, Ordering::Release);
+            // The waiter notices within one poll; give it time to switch lanes.
+            thread::sleep(Duration::from_millis(250));
+            assert_eq!(stv.state.lock().unwrap().waiters[0].len(), 1);
+            drop(active);
+            assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 1);
+            assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+        });
     }
 
     #[test]

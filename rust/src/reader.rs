@@ -257,6 +257,73 @@ impl Library {
         }
         Ok(items.into())
     }
+    /// Fetches one online chapter in the background into the ordinary reader cache (an
+    /// evictable entry, never an offline copy). Runs on the calling request thread; see
+    /// `prefetch.rs` for the scheduling rules. Failures are reported quietly, never retried.
+    pub fn prefetch_chapter(
+        &self,
+        id: &str,
+        index: i64,
+        stopping: &dyn Fn() -> bool,
+    ) -> Result<Value, ApiError> {
+        let skipped = || Ok(json!({"prefetch":"skipped"}));
+        let book = self.get_book(id)?;
+        let source = book["source"].as_str().unwrap_or_default().to_owned();
+        if !self.sources.enabled() || !["qq", "full", "hako", "stv"].contains(&source.as_str()) {
+            return skipped();
+        }
+        if chapter_value(self.raw_chapter(id, index)?)?["downloaded"] == true {
+            return skipped();
+        }
+        let spacing = if source == "stv" {
+            std::time::Duration::ZERO
+        } else {
+            crate::prefetch::SPACING
+        };
+        let Some(turn) = self
+            .prefetch
+            .begin((id.to_owned(), index), &source, spacing, stopping)
+        else {
+            return skipped();
+        };
+        // A reader request may have fetched it while this prefetch waited, or a download or
+        // reader request may be fetching it right now (leases count requests using a chapter).
+        let item = chapter_value(self.raw_chapter(id, index)?)?;
+        if item["downloaded"] == true
+            || self
+                .chapter_leases
+                .lock()
+                .contains_key(&(id.to_owned(), index))
+        {
+            return skipped();
+        }
+        let _lease = self.chapter_leases.acquire((id.to_owned(), index));
+        let Ok(content) = self.fetch_source_chapter(
+            id,
+            index,
+            &source,
+            item["url"].as_str().unwrap_or_default(),
+            None,
+            &|| turn.background(),
+            || turn.cancelled() || stopping(),
+        ) else {
+            return Ok(json!({"prefetch":"failed"}));
+        };
+        // Like downloads, do not start new database work once shutdown has begun.
+        if stopping() {
+            return Ok(json!({"prefetch":"failed"}));
+        }
+        self.save_source_chapter(
+            id,
+            index,
+            item["revision"]
+                .as_i64()
+                .ok_or(rusqlite::Error::InvalidQuery)?,
+            Some(&content),
+            None,
+        )?;
+        Ok(json!({"prefetch":"done"}))
+    }
     pub fn chapter(
         &self,
         id: &str,
@@ -264,6 +331,8 @@ impl Library {
         reader: Option<&str>,
         sequence: i64,
     ) -> Result<Value, ApiError> {
+        // Take over or reuse a prefetch of this chapter; cancel ones that are no longer relevant.
+        self.prefetch.claim(id, index);
         let _lease = self.chapter_leases.acquire((id.to_owned(), index));
         let book = self.get_book(id)?;
         let mut item = chapter_value(self.raw_chapter(id, index)?)?;
@@ -277,6 +346,7 @@ impl Library {
                 book["source"].as_str().unwrap_or_default(),
                 item["url"].as_str().unwrap_or_default(),
                 None,
+                &|| false,
                 || false,
             )?;
             self.save_source_chapter(
@@ -686,6 +756,125 @@ pub(crate) mod tests {
         assert_eq!(library.groups().unwrap(), before, "adding a book");
         library.update_book("book", &json!({"groups":[]})).unwrap();
         assert_eq!(library.groups().unwrap(), before, "removing the last book");
+    }
+    const ONLINE_BOOK: &str = "https://truyenfull.live/truyen-a/";
+    /// A Truyện Full book with three chapters; the source serves chapters 1 and 2 only.
+    fn online() -> (common::Fixture, Library) {
+        let fixture = common::Fixture::new("empty");
+        let folder = fixture.db.parent().unwrap();
+        let marker = folder.join("m1-fixture.json");
+        let mut value: Value = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+        value["sealed"] = false.into();
+        std::fs::write(&marker, serde_json::to_vec(&value).unwrap()).unwrap();
+        let page = |n: i64| {
+            (
+                format!("{ONLINE_BOOK}chuong-{n}/"),
+                format!(
+                    "<html><body><div class=\"chapter-c\"><p>Chương {n} tải trước.</p></div></body></html>"
+                ),
+            )
+        };
+        let pages: serde_json::Map<String, Value> = [page(1), page(2)]
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+        std::fs::write(
+            folder.join("m5-sources.json"),
+            serde_json::to_vec(&json!({"format":"reader-local-m5-sources-1","pages":pages}))
+                .unwrap(),
+        )
+        .unwrap();
+        let library = Library::open_writable_fixture(&fixture.db).unwrap();
+        let db = library.write_connection().unwrap();
+        db.execute("INSERT INTO books(id,name,source,path,chapter_count,added_at,updated_at) VALUES('web','Truyện mạng','full',?,4,1,1)", [ONLINE_BOOK]).unwrap();
+        for n in 0..4 {
+            db.execute(
+                "INSERT INTO chapters(book_id,idx,title,url,text,downloaded) VALUES('web',?,?,?,?,?)",
+                params![n, format!("Chương {n}"), format!("{ONLINE_BOOK}chuong-{n}/"), if n == 0 { "Đã có." } else { "" }, n == 0],
+            )
+            .unwrap();
+        }
+        drop(db);
+        (fixture, library)
+    }
+    fn cache_kind(library: &Library, index: i64) -> Option<(String, i64)> {
+        library
+            .write_connection()
+            .unwrap()
+            .query_row(
+                "SELECT kind,offline FROM chapter_cache WHERE book_id='web' AND idx=?",
+                [index],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()
+    }
+    #[test]
+    fn prefetch_saves_the_next_chapter_as_an_ordinary_cache_entry() {
+        let (_fixture, library) = online();
+        assert_eq!(
+            library.prefetch_chapter("web", 1, &|| false).unwrap(),
+            json!({"prefetch":"done"})
+        );
+        assert_eq!(
+            cache_kind(&library, 1),
+            Some(("cache".into(), 0)),
+            "evictable, not offline"
+        );
+        let opened = library.chapter("web", 1, None, 0).unwrap();
+        assert!(
+            opened["html"]
+                .as_str()
+                .unwrap()
+                .contains("Chương 1 tải trước.")
+        );
+        assert_eq!(cache_kind(&library, 1), Some(("cache".into(), 0)));
+    }
+    #[test]
+    fn prefetch_skips_saved_chapters_and_offline_books() {
+        let (_fixture, library) = online();
+        let skipped = json!({"prefetch":"skipped"});
+        assert_eq!(
+            library.prefetch_chapter("web", 0, &|| false).unwrap(),
+            skipped
+        );
+        library
+            .write_connection()
+            .unwrap()
+            .execute("UPDATE books SET source='file' WHERE id='web'", [])
+            .unwrap();
+        assert_eq!(
+            library.prefetch_chapter("web", 1, &|| false).unwrap(),
+            skipped
+        );
+        assert_eq!(cache_kind(&library, 1), None);
+    }
+    #[test]
+    fn prefetch_skips_a_chapter_another_request_is_fetching() {
+        let (_fixture, library) = online();
+        let _download = library.chapter_leases.acquire(("web".into(), 1));
+        assert_eq!(
+            library.prefetch_chapter("web", 1, &|| false).unwrap(),
+            json!({"prefetch":"skipped"})
+        );
+        assert_eq!(cache_kind(&library, 1), None);
+    }
+    #[test]
+    fn a_failed_prefetch_is_quiet_frees_its_slot_and_the_reader_fetches_normally() {
+        let (_fixture, library) = online();
+        // Chapter 3 is not served by the source.
+        assert_eq!(
+            library.prefetch_chapter("web", 3, &|| false).unwrap(),
+            json!({"prefetch":"failed"})
+        );
+        assert_eq!(cache_kind(&library, 3), None);
+        assert_eq!(
+            library.prefetch_chapter("web", 2, &|| false).unwrap(),
+            json!({"prefetch":"done"})
+        );
+        assert!(
+            library.chapter("web", 3, None, 0).is_err(),
+            "foreground still tries the source"
+        );
     }
     #[test]
     fn renaming_a_group_keeps_its_id_and_books() {
