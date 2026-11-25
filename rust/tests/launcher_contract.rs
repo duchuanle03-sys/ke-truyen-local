@@ -11,14 +11,27 @@ use std::{
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-fn temp(name: &str) -> PathBuf {
+/// A scratch directory removed when the test ends (declared before servers, so dropped after them).
+struct Temp(PathBuf);
+impl Temp {
+    fn join(&self, part: &str) -> PathBuf {
+        self.0.join(part)
+    }
+}
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp(name: &str) -> Temp {
     let dir = std::env::temp_dir().join(format!(
         "reader-m7-launcher-{name}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    dir
+    Temp(dir)
 }
 
 fn free_port() -> u16 {
@@ -95,7 +108,8 @@ fn finish(command: &mut Command, limit: Duration) -> (Output, Duration) {
 
 #[test]
 fn first_run_creates_library_and_serves_shelf() {
-    let data = temp("first").join("user-data");
+    let scratch = temp("first");
+    let data = scratch.join("user-data");
     let server = start(&data, free_port());
     assert_eq!(get(server.1, "/api/books")["total"], 0);
     assert!(data.join("library.sqlite3").is_file());
@@ -103,7 +117,8 @@ fn first_run_creates_library_and_serves_shelf() {
 
 #[test]
 fn second_launch_reuses_running_instance() {
-    let data = temp("reuse").join("user-data");
+    let scratch = temp("reuse");
+    let data = scratch.join("user-data");
     let mut server = start(&data, free_port());
     let (output, elapsed) = finish(
         &mut launcher(&[
@@ -128,7 +143,8 @@ fn second_launch_reuses_running_instance() {
 
 #[test]
 fn unicode_data_path_is_recognised_for_reuse() {
-    let data = temp("unicode").join("truyện thử").join("user-data");
+    let scratch = temp("unicode");
+    let data = scratch.join("truyện thử").join("user-data");
     let server = start(&data, free_port());
     let (output, _) = finish(
         &mut launcher(&[
@@ -155,7 +171,8 @@ fn unicode_data_path_is_recognised_for_reuse() {
 
 #[test]
 fn library_held_by_another_server_is_refused() {
-    let data = temp("held").join("user-data");
+    let scratch = temp("held");
+    let data = scratch.join("user-data");
     let _owner = start(&data, free_port());
     let (output, _) = finish(
         &mut launcher(&[
@@ -174,7 +191,8 @@ fn library_held_by_another_server_is_refused() {
 fn foreign_port_is_not_reused() {
     let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = foreign.local_addr().unwrap().port();
-    let data = temp("foreign").join("user-data");
+    let scratch = temp("foreign");
+    let data = scratch.join("user-data");
     let (output, _) = finish(
         &mut launcher(&[
             "--data-dir",
@@ -190,7 +208,8 @@ fn foreign_port_is_not_reused() {
 
 #[test]
 fn book_argument_is_validated() {
-    let data = temp("book").join("user-data");
+    let scratch = temp("book");
+    let data = scratch.join("user-data");
     let long = "x".repeat(257);
     for book in ["", long.as_str(), "a\u{1}b"] {
         let (output, _) = finish(
