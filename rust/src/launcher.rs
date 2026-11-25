@@ -83,7 +83,8 @@ fn identity(path: &str) -> String {
 fn resolved(path: &Path) -> String {
     let full = std::fs::canonicalize(path)
         .unwrap_or_else(|_| std::path::absolute(path).unwrap_or_else(|_| path.to_owned()));
-    full.to_string_lossy().into_owned()
+    let text = full.to_string_lossy();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
 }
 
 /// True when a reader on `port` reports this same data directory.
