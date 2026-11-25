@@ -435,6 +435,15 @@ impl Library {
         if !root.is_dir() {
             return Err(ApiError::new(400, "Thư mục dữ liệu không hợp lệ."));
         }
+        let database = root.join("library.sqlite3");
+        if !database.exists() {
+            // First run: create the catalog before the shared open path validates it.
+            let _owner = crate::lifecycle::library_lock(&root)?;
+            let mut db = Connection::open(&database)?;
+            register_shelf_fold(&db)?;
+            db.pragma_update(None, "journal_mode", "WAL")?;
+            crate::schema::create(&mut db)?;
+        }
         Self::open_root(root, true)
     }
     fn open_root(root: PathBuf, writable: bool) -> Result<Self, ApiError> {
@@ -566,16 +575,7 @@ impl Library {
                 OpenFlags::SQLITE_OPEN_READ_ONLY
             }) | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        db.create_scalar_function(
-            "shelf_fold",
-            1,
-            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-            |ctx| {
-                #[cfg(test)]
-                SQL_FOLDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                Ok(casefold(&ctx.get::<String>(0)?))
-            },
-        )?;
+        register_shelf_fold(&db)?;
         db.pragma_update(None, "foreign_keys", true)?;
         db.pragma_update(None, "query_only", !writable)?;
         if writable {
@@ -932,6 +932,19 @@ fn json_error(s: &str, error: serde_json::Error) -> ApiError {
     )
 }
 
+/// Python `str.casefold`, required by the persisted shelf expression indexes.
+fn register_shelf_fold(db: &Connection) -> rusqlite::Result<()> {
+    db.create_scalar_function(
+        "shelf_fold",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            #[cfg(test)]
+            SQL_FOLDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(casefold(&ctx.get::<String>(0)?))
+        },
+    )
+}
 fn install_authorizer(db: &Connection) -> rusqlite::Result<()> {
     use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
     db.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
@@ -967,6 +980,55 @@ mod tests {
         // The cross-language owner lock keeps a second server off the same library.
         assert!(Library::open_production(&root).is_err());
     }
+    /// Catalog, singleton state rows and journal mode, read without opening a Python Store.
+    const DUMP: &str = "import json,sqlite3,sys\n\
+        c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)\n\
+        c.create_function('shelf_fold',1,str.casefold,deterministic=True)\n\
+        cat=c.execute('SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name').fetchall()\n\
+        state={t:c.execute('SELECT * FROM '+t).fetchall() for t in ('asset_index_state','chapter_cache_state','chapter_search_state','image_cache_state')}\n\
+        print(json.dumps({'catalog':cat,'state':state,'journal':c.execute('pragma journal_mode').fetchone()[0]}))";
+
+    fn fresh_dirs(name: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("reader-m7-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        base
+    }
+
+    #[test]
+    fn fresh_library_matches_python_catalog() {
+        let base = fresh_dirs("fresh");
+        let (ours, theirs) = (base.join("rust"), base.join("python"));
+        drop(Library::open_production(&ours).unwrap());
+        test_common::python(
+            "import sys;sys.path.insert(0,'.');from library import Store;Store(sys.argv[1])",
+            &[theirs.to_str().unwrap()],
+        );
+        let dump = |dir: &Path| {
+            test_common::python(DUMP, &[dir.join("library.sqlite3").to_str().unwrap()])
+        };
+        assert_eq!(dump(&ours), dump(&theirs));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn python_reopens_rust_created_library() {
+        let base = fresh_dirs("reopen");
+        let ours = base.join("rust");
+        drop(Library::open_production(&ours).unwrap());
+        let before = test_common::python(DUMP, &[ours.join("library.sqlite3").to_str().unwrap()]);
+        let shelf = test_common::python(
+            "import sys,json;sys.path.insert(0,'.');from library import Store;s=Store(sys.argv[1]);print(s.list_books()['total'])",
+            &[ours.to_str().unwrap()],
+        );
+        assert_eq!(shelf.trim(), "0");
+        let after = test_common::python(DUMP, &[ours.join("library.sqlite3").to_str().unwrap()]);
+        assert_eq!(
+            before, after,
+            "Python must accept the Rust catalog without migrating it"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn production_refuses_unknown_schema_without_writing() {
         let fixture = test_common::Fixture::new("empty");
