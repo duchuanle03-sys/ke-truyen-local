@@ -638,7 +638,9 @@ mod tests {
         let link = std::fs::read(rust["path"].as_str().unwrap()).unwrap();
         let text = String::from_utf16_lossy(
             &link
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect::<Vec<_>>(),
         );
