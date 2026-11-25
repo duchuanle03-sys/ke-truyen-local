@@ -11,7 +11,13 @@ use std::time::{Duration, Instant};
 
 /// Minimum gap between prefetches to the same QQ, Truyện Full or Hako source. Reader requests
 /// are never delayed by it; Sáng Tác Việt keeps its own 10 s pacing instead.
-pub(crate) const SPACING: Duration = Duration::from_secs(2);
+pub(crate) const SPACING: Duration = if cfg!(test) {
+    Duration::from_millis(20)
+} else {
+    Duration::from_secs(2)
+};
+/// How many of the next chapter's images (manga pages or illustrations) are prefetched.
+pub(crate) const IMAGES: usize = 10;
 const POLL: Duration = Duration::from_millis(100);
 
 pub(crate) type Key = (String, i64);
@@ -24,6 +30,8 @@ enum Phase {
     Spacing,
     /// Fetching from the source.
     Fetching,
+    /// The chapter is saved; fetching its first images. Readers never wait for this phase.
+    Images,
 }
 
 struct Slot {
@@ -66,6 +74,45 @@ impl Fetching<'_> {
     /// True once the reader moved to an unrelated chapter or book.
     pub(crate) fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+impl Fetching<'_> {
+    /// Marks the chapter as saved: a reader opening it no longer waits, and stops the images.
+    pub(crate) fn start_images(&self) {
+        let mut state = self.owner.lock();
+        if let Some(slot) = state
+            .active
+            .as_mut()
+            .filter(|slot| slot.ticket == self.ticket)
+        {
+            slot.phase = Phase::Images;
+        }
+        self.owner.changed.notify_all();
+    }
+
+    /// Waits out the per-source gap before another background request and records it.
+    /// Returns false, without waiting further, once cancelled or stopping.
+    pub(crate) fn pace(
+        &self,
+        source: &str,
+        spacing: Duration,
+        stopping: &dyn Fn() -> bool,
+    ) -> bool {
+        let mut state = self.owner.lock();
+        loop {
+            if stopping() || self.cancelled() {
+                return false;
+            }
+            let now = Instant::now();
+            match state.sent.get(source).map(|sent| *sent + spacing) {
+                Some(due) if due > now => state = self.owner.wait(state, (due - now).min(POLL)),
+                _ => {
+                    state.sent.insert(source.to_owned(), now);
+                    return true;
+                }
+            }
+        }
     }
 }
 
@@ -127,7 +174,7 @@ impl Prefetch {
         if let Some(active) = state
             .active
             .as_ref()
-            .filter(|slot| slot.phase == Phase::Spacing)
+            .filter(|slot| matches!(slot.phase, Phase::Spacing | Phase::Images))
         {
             active.cancelled.store(true, Ordering::Release);
         }
@@ -219,12 +266,13 @@ impl Prefetch {
             }
         }
         self.changed.notify_all();
+        // Wait only until the chapter is saved; its image phase is never waited for.
         if let Some(ticket) = awaited {
-            while state
-                .active
-                .as_ref()
-                .is_some_and(|slot| slot.ticket == ticket)
-            {
+            while let Some(slot) = state.active.as_ref().filter(|slot| slot.ticket == ticket) {
+                if slot.phase == Phase::Images {
+                    slot.cancelled.store(true, Ordering::Release);
+                    break;
+                }
                 state = self.wait(state, POLL);
             }
         }
@@ -274,6 +322,68 @@ mod tests {
                 .begin(key("b", 7), "stv", Duration::ZERO, &never)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn opening_the_chapter_while_its_images_load_never_waits_and_stops_them() {
+        let prefetch = Prefetch::default();
+        let running = prefetch
+            .begin(key("b", 2), "qq", Duration::ZERO, &never)
+            .unwrap();
+        running.start_images();
+        let started = Instant::now();
+        prefetch.claim("b", 2);
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "the chapter is already saved"
+        );
+        assert!(
+            running.cancelled(),
+            "the reader loads the remaining images itself"
+        );
+    }
+
+    #[test]
+    fn a_reader_waiting_for_the_chapter_is_released_when_it_is_saved() {
+        let prefetch = Prefetch::default();
+        let running = prefetch
+            .begin(key("b", 2), "qq", Duration::ZERO, &never)
+            .unwrap();
+        let (send, rx) = mpsc::channel();
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                prefetch.claim("b", 2);
+                send.send(()).unwrap();
+            });
+            settle();
+            assert!(rx.try_recv().is_err(), "waits while the chapter is fetched");
+            running.start_images();
+            rx.recv_timeout(Duration::from_millis(500))
+                .expect("not held through the images");
+            assert!(running.cancelled(), "the reader loads the images itself");
+        });
+    }
+
+    #[test]
+    fn image_requests_keep_the_per_source_gap_and_stop_when_cancelled() {
+        let prefetch = Prefetch::default();
+        let gap = Duration::from_millis(300);
+        let running = prefetch.begin(key("b", 2), "qq", gap, &never).unwrap();
+        running.start_images();
+        let started = Instant::now();
+        assert!(running.pace("qq", gap, &never));
+        assert!(
+            started.elapsed() >= Duration::from_millis(250),
+            "gap after the chapter request"
+        );
+        let started = Instant::now();
+        assert!(running.pace("qq", gap, &never));
+        assert!(
+            started.elapsed() >= Duration::from_millis(250),
+            "gap between images"
+        );
+        prefetch.claim("other", 0);
+        assert!(!running.pace("qq", gap, &never), "cancelled while waiting");
     }
 
     #[test]

@@ -45,6 +45,9 @@ app is `491c059`.
   one last opened. Sáng Tác Việt prefetches use the background lane and are promoted when the
   reader opens that chapter. Other sources wait 2 s between prefetches. The result is an
   ordinary evictable cache entry; failures are silent and never retried.
+  After the chapter is saved, its first 10 images are fetched as ordinary image-cache entries.
+  They are found in the saved content (manga pages or embedded illustrations), and each is
+  spaced 2 s apart. Opening the chapter never waits for this phase; it stops the rest.
 - **Paths.** Canonical paths are checked component by component; symlinks and reparse points are
   rejected for data and static files.
 

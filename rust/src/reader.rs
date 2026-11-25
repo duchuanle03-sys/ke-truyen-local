@@ -297,7 +297,7 @@ impl Library {
         {
             return skipped();
         }
-        let _lease = self.chapter_leases.acquire((id.to_owned(), index));
+        let lease = self.chapter_leases.acquire((id.to_owned(), index));
         let Ok(content) = self.fetch_source_chapter(
             id,
             index,
@@ -322,6 +322,47 @@ impl Library {
             Some(&content),
             None,
         )?;
+        // Then the first images of the saved chapter, whatever the book's kind: manga pages and
+        // illustrations embedded in text, collected exactly as downloads collect them.
+        // The chapter is saved: release it for eviction and compaction during the image phase.
+        drop(lease);
+        turn.start_images();
+        // From here on nothing can fail the saved chapter; an unreadable image list is skipped.
+        let Ok(stored) = self.raw_chapter(id, index).and_then(chapter_value) else {
+            return Ok(json!({"prefetch":"done"}));
+        };
+        let referer = book["path"].as_str().unwrap_or_default();
+        let mut urls = Vec::new();
+        for image in stored["images"].as_array().into_iter().flatten() {
+            urls.extend(
+                crate::http::asset_image_urls(image.as_str().unwrap_or_default(), referer)
+                    .unwrap_or_default(),
+            );
+        }
+        for field in ["html", "original_html"] {
+            if let Some(markup) = stored[field].as_str() {
+                urls.extend(crate::http::asset_markup_urls(markup, referer).unwrap_or_default());
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        urls.retain(|url| seen.insert(url.clone()));
+        for url in urls.into_iter().take(crate::prefetch::IMAGES) {
+            use sha2::Digest;
+            let name = format!(
+                "{:x}",
+                sha2::Sha256::digest(crate::http::relative_remote(&url, "").as_bytes())
+            );
+            let path = self.root().join("images").join(name);
+            // Already cached, or being fetched or served by another request right now.
+            if path.exists() || self.asset_leases.lock().contains_key(&path) {
+                continue;
+            }
+            if !turn.pace(&source, crate::prefetch::SPACING, stopping) {
+                break;
+            }
+            // An evictable cache entry within the image budget; a failure is skipped, never retried.
+            let _ = self.save_source_image(&url, referer, None);
+        }
         Ok(json!({"prefetch":"done"}))
     }
     pub fn chapter(
@@ -770,7 +811,14 @@ pub(crate) mod tests {
             (
                 format!("{ONLINE_BOOK}chuong-{n}/"),
                 format!(
-                    "<html><body><div class=\"chapter-c\"><p>Chương {n} tải trước.</p></div></body></html>"
+                    "<html><body><div class=\"chapter-c\"><p>Chương {n} tải trước.</p>{}</div></body></html>",
+                    if n == 2 {
+                        (0..12)
+                            .map(|k| format!("<img src=\"{}\">", illustration(k)))
+                            .collect::<String>()
+                    } else {
+                        String::new()
+                    }
                 ),
             )
         };
@@ -778,10 +826,15 @@ pub(crate) mod tests {
             .into_iter()
             .map(|(k, v)| (k, v.into()))
             .collect();
+        // Chapter 2 is an illustrated chapter: 12 embedded images, all served by the source.
+        let images: serde_json::Map<String, Value> =
+            (0..12).map(|k| (illustration(k), PNG.into())).collect();
         std::fs::write(
             folder.join("m5-sources.json"),
-            serde_json::to_vec(&json!({"format":"reader-local-m5-sources-1","pages":pages}))
-                .unwrap(),
+            serde_json::to_vec(
+                &json!({"format":"reader-local-m5-sources-1","pages":pages,"images":images}),
+            )
+            .unwrap(),
         )
         .unwrap();
         let library = Library::open_writable_fixture(&fixture.db).unwrap();
@@ -796,6 +849,68 @@ pub(crate) mod tests {
         }
         drop(db);
         (fixture, library)
+    }
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    fn illustration(k: usize) -> String {
+        format!("https://i.hako.vip/illusts/page-{k}.png")
+    }
+    fn cached_image(library: &Library, url: &str) -> bool {
+        use sha2::Digest;
+        let name = format!("{:x}", sha2::Sha256::digest(url.as_bytes()));
+        library.root().join("images").join(name).exists()
+    }
+    #[test]
+    fn prefetch_warms_only_the_first_ten_images_as_ordinary_cache() {
+        let (_fixture, library) = online();
+        assert_eq!(
+            library.prefetch_chapter("web", 2, &|| false).unwrap(),
+            json!({"prefetch":"done"})
+        );
+        let cached: Vec<bool> = (0..12)
+            .map(|k| cached_image(&library, &illustration(k)))
+            .collect();
+        assert_eq!(
+            cached,
+            [vec![true; 10], vec![false; 2]].concat(),
+            "first ten, in reading order"
+        );
+        let db = library.write_connection().unwrap();
+        let (rows, protected): (i64, i64) = db
+            .query_row(
+                "SELECT count(*),coalesce(sum(protected),0) FROM image_cache",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let pins: i64 = db
+            .query_row("SELECT count(*) FROM image_pins", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            (rows, protected, pins),
+            (10, 0, 0),
+            "evictable, never pinned offline"
+        );
+    }
+    #[test]
+    fn opening_the_chapter_stops_its_image_prefetch() {
+        let (_fixture, library) = online();
+        library.prefetch.claim("web", 1);
+        std::thread::scope(|scope| {
+            let prefetch = scope.spawn(|| library.prefetch_chapter("web", 2, &|| false).unwrap());
+            // Open it once it is saved, while its images are still being fetched.
+            while chapter_value(library.raw_chapter("web", 2).unwrap()).unwrap()["downloaded"]
+                != true
+            {}
+            library.chapter("web", 2, None, 0).unwrap();
+            prefetch.join().unwrap();
+        });
+        let cached = (0..12)
+            .filter(|k| cached_image(&library, &illustration(*k)))
+            .count();
+        assert!(
+            cached < 10,
+            "the reader took over; {cached} images were prefetched"
+        );
     }
     fn cache_kind(library: &Library, index: i64) -> Option<(String, i64)> {
         library
