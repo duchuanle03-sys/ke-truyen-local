@@ -426,6 +426,35 @@ impl Library {
                 "Writable mode requires an unsealed synthetic fixture",
             ));
         }
+        Self::open_root(root, writable)
+    }
+    /// Open a real data directory (no fixture marker) for serving.
+    pub fn open_production(root: &Path) -> Result<Self, ApiError> {
+        std::fs::create_dir_all(root)?;
+        let root = checked_path(root)?;
+        if !root.is_dir() {
+            return Err(ApiError::new(400, "Thư mục dữ liệu không hợp lệ."));
+        }
+        let database = root.join("library.sqlite3");
+        {
+            let _owner = crate::lifecycle::library_lock(&root)?;
+            // First run, or a first run that was interrupted before its catalog committed.
+            let empty = !database.exists() || {
+                let db = Connection::open(&database)?;
+                db.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+                    r.get::<_, i64>(0)
+                })? == 0
+            };
+            if empty {
+                let mut db = Connection::open(&database)?;
+                register_shelf_fold(&db)?;
+                db.pragma_update(None, "journal_mode", "WAL")?;
+                crate::schema::create(&mut db)?;
+            }
+        }
+        Self::open_root(root, true)
+    }
+    fn open_root(root: PathBuf, writable: bool) -> Result<Self, ApiError> {
         let path = checked_path(&root.join("library.sqlite3"))?;
         if path.parent() != Some(root.as_path()) {
             return Err(ApiError::new(400, "Fixture database escapes root"));
@@ -554,16 +583,7 @@ impl Library {
                 OpenFlags::SQLITE_OPEN_READ_ONLY
             }) | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        db.create_scalar_function(
-            "shelf_fold",
-            1,
-            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-            |ctx| {
-                #[cfg(test)]
-                SQL_FOLDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                Ok(casefold(&ctx.get::<String>(0)?))
-            },
-        )?;
+        register_shelf_fold(&db)?;
         db.pragma_update(None, "foreign_keys", true)?;
         db.pragma_update(None, "query_only", !writable)?;
         if writable {
@@ -920,6 +940,19 @@ fn json_error(s: &str, error: serde_json::Error) -> ApiError {
     )
 }
 
+/// Python `str.casefold`, required by the persisted shelf expression indexes.
+fn register_shelf_fold(db: &Connection) -> rusqlite::Result<()> {
+    db.create_scalar_function(
+        "shelf_fold",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            #[cfg(test)]
+            SQL_FOLDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(casefold(&ctx.get::<String>(0)?))
+        },
+    )
+}
 fn install_authorizer(db: &Connection) -> rusqlite::Result<()> {
     use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
     db.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
@@ -937,6 +970,108 @@ fn install_authorizer(db: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn production_opens_python_library_without_marker() {
+        let fixture = test_common::Fixture::new("empty");
+        let root = fixture.db.parent().unwrap().to_owned();
+        std::fs::remove_file(root.join("m1-fixture.json")).unwrap();
+        let library = Library::open_production(&root).unwrap();
+        assert!(library.writable());
+        let db = library.write_connection().unwrap();
+        db.execute(
+            "INSERT INTO books(id,name,added_at,updated_at) VALUES('real','Truyện',1,1)",
+            [],
+        )
+        .unwrap();
+        drop(db);
+        assert_eq!(library.get_book("real").unwrap()["name"], "Truyện");
+        // The cross-language owner lock keeps a second server off the same library.
+        assert!(Library::open_production(&root).is_err());
+    }
+    /// Catalog, singleton state rows and journal mode, read without opening a Python Store.
+    const DUMP: &str = "import json,sqlite3,sys\n\
+        c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)\n\
+        c.create_function('shelf_fold',1,str.casefold,deterministic=True)\n\
+        cat=c.execute('SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name').fetchall()\n\
+        state={t:c.execute('SELECT * FROM '+t).fetchall() for t in ('asset_index_state','chapter_cache_state','chapter_search_state','image_cache_state')}\n\
+        print(json.dumps({'catalog':cat,'state':state,'journal':c.execute('pragma journal_mode').fetchone()[0]}))";
+
+    fn fresh_dirs(name: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("reader-m7-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        base
+    }
+
+    #[test]
+    fn fresh_library_matches_python_catalog() {
+        let base = fresh_dirs("fresh");
+        let (ours, theirs) = (base.join("rust"), base.join("python"));
+        drop(Library::open_production(&ours).unwrap());
+        test_common::python(
+            "import sys;sys.path.insert(0,'.');from library import Store;Store(sys.argv[1])",
+            &[theirs.to_str().unwrap()],
+        );
+        let dump = |dir: &Path| {
+            test_common::python(DUMP, &[dir.join("library.sqlite3").to_str().unwrap()])
+        };
+        assert_eq!(dump(&ours), dump(&theirs));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn interrupted_first_run_leaves_a_recoverable_empty_database() {
+        let base = fresh_dirs("empty-db");
+        let root = base.join("user-data");
+        std::fs::create_dir_all(&root).unwrap();
+        // An interrupted first run can leave a database file with no catalog.
+        drop(Connection::open(root.join("library.sqlite3")).unwrap());
+        let library = Library::open_production(&root).expect("empty database must be initialised");
+        assert_eq!(
+            library
+                .list_books(&ShelfQuery::from_uri("/api/books").unwrap())
+                .unwrap()
+                .total,
+            0
+        );
+        drop(library);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn python_reopens_rust_created_library() {
+        let base = fresh_dirs("reopen");
+        let ours = base.join("rust");
+        drop(Library::open_production(&ours).unwrap());
+        let before = test_common::python(DUMP, &[ours.join("library.sqlite3").to_str().unwrap()]);
+        let shelf = test_common::python(
+            "import sys,json;sys.path.insert(0,'.');from library import Store;s=Store(sys.argv[1]);print(s.list_books()['total'])",
+            &[ours.to_str().unwrap()],
+        );
+        assert_eq!(shelf.trim(), "0");
+        let after = test_common::python(DUMP, &[ours.join("library.sqlite3").to_str().unwrap()]);
+        assert_eq!(
+            before, after,
+            "Python must accept the Rust catalog without migrating it"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn production_refuses_unknown_schema_without_writing() {
+        let fixture = test_common::Fixture::new("empty");
+        let root = fixture.db.parent().unwrap().to_owned();
+        std::fs::remove_file(root.join("m1-fixture.json")).unwrap();
+        Connection::open(&fixture.db)
+            .unwrap()
+            .execute_batch("CREATE TABLE unknown_shape(v TEXT)")
+            .unwrap();
+        let before = std::fs::read(&fixture.db).unwrap();
+        let error = Library::open_production(&root)
+            .err()
+            .expect("unknown schema must be refused");
+        assert_eq!(error.status, 400);
+        assert_eq!(std::fs::read(&fixture.db).unwrap(), before);
+    }
     #[test]
     fn pooled_connections_are_reset_before_reuse() {
         let (_fixture, library) = crate::reader::tests::writable();

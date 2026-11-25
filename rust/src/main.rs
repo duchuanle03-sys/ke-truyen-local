@@ -1,5 +1,11 @@
+// A double-clicked app has no console window; inherited pipes still carry output.
+#![windows_subsystem = "windows"]
 use std::{collections::HashMap, path::PathBuf};
 fn main() {
+    // Fixture mode serves the regression harness; everything else is the production app.
+    if !std::env::args().any(|arg| arg == "--fixture") {
+        std::process::exit(reader_local::launcher::run(std::env::args().skip(1)));
+    }
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);

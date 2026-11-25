@@ -408,23 +408,13 @@ pub(crate) struct Launcher {
     pub working_directory: PathBuf,
 }
 
-/// shortcut: shortcuts target the Python launcher until M7 ships the Rust launcher; switch this one function then.
+/// Book shortcuts start this app directly; it reuses a running instance of the same library.
 pub(crate) fn launcher(project: &Path) -> Result<Launcher, ApiError> {
-    let missing = || error("Không tìm thấy pythonw.exe cạnh Python đang chạy.");
-    let pythonw = match crate::documents::which("pythonw") {
-        Value::String(found) => PathBuf::from(found),
-        _ => match crate::documents::which("python") {
-            Value::String(found) => PathBuf::from(found).with_file_name("pythonw.exe"),
-            _ => return Err(missing()),
-        },
-    };
-    if !pythonw.is_file() {
-        return Err(missing());
-    }
-    let pythonw = PathBuf::from(resolved(&pythonw));
+    let exe = std::env::current_exe()
+        .map_err(|e| error(format!("Không xác định được đường dẫn ứng dụng: {e}")))?;
     Ok(Launcher {
-        target: pythonw,
-        prefix: vec![project.join("run.py").to_string_lossy().into_owned()],
+        target: PathBuf::from(resolved(&exe)),
+        prefix: Vec::new(),
         working_directory: project.to_owned(),
     })
 }
@@ -575,7 +565,7 @@ mod tests {
     /// compared with the Python reference; both write into private temp desktops.
     #[cfg(windows)]
     #[test]
-    fn shortcut_helper_matches_python_reference() {
+    fn shortcut_targets_rust_launcher() {
         use base64::Engine;
         let png = base64::engine::general_purpose::STANDARD
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
@@ -644,18 +634,23 @@ mod tests {
             (rust["used_cover"].clone(), python["used_cover"].clone()),
             (json!(true), json!(true))
         );
-        // Shell links embed the target's last-access times; everything else
-        // (ID list, target, arguments, working directory, icon) must be identical.
-        let (ours, theirs) = (
-            std::fs::read(rust["path"].as_str().unwrap()).unwrap(),
-            std::fs::read(python["path"].as_str().unwrap()).unwrap(),
+        // The Rust shortcut launches the running app directly (no pythonw/run.py).
+        let link = std::fs::read(rust["path"].as_str().unwrap()).unwrap();
+        let text = String::from_utf16_lossy(
+            &link
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
         );
-        assert_eq!(ours.len(), theirs.len(), "shell link layout differs");
-        let changed = ours.iter().zip(&theirs).filter(|(a, b)| a != b).count();
+        let exe = std::env::current_exe().unwrap();
         assert!(
-            changed <= 32,
-            "{changed} shell link bytes differ beyond timestamps"
+            text.contains(&*exe.to_string_lossy()),
+            "target must be the running app"
         );
+        assert!(text.contains("--book=book-1") && text.contains("--port=8765"));
+        assert!(!text.contains("pythonw") && !text.contains("run.py"));
         let icons = data
             .join("shortcuts")
             .read_dir()
