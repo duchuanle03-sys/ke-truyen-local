@@ -1,6 +1,7 @@
 pub mod casefold;
 pub mod downloads;
 pub mod http;
+pub mod launcher;
 pub mod library;
 pub mod qt;
 pub use library::{ApiError, Library, ShelfPage, ShelfQuery};

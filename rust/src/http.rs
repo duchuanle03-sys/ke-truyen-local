@@ -2758,6 +2758,15 @@ pub fn serve_fixture_with_sources(
     }
     run_server(library, web_root, listener)
 }
+/// Serve an already opened library on a bound loopback listener (production launcher).
+pub(crate) fn serve_library(
+    library: Library,
+    web_root: &Path,
+    listener: std::net::TcpListener,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    checked_path(web_root)?;
+    run_server(library, web_root, listener)
+}
 fn run_server(
     library: Library,
     web_root: &Path,
