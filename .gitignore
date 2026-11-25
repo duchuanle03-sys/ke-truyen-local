@@ -38,12 +38,7 @@
 !/tests/fixtures/source_*.json
 !/tests/fixtures/qt_index_profile.json
 # Rust rewrite agent configuration and sources
-!/.codex/
-!/.codex/config.toml
-!/.codex/agents/
-!/.codex/agents/*.toml
 !/RUST_REWRITE_POLICY.md
-!/FIRST_CODEX_PROMPT.md
 !/rust/
 !/rust/Cargo.toml
 !/rust/Cargo.lock
