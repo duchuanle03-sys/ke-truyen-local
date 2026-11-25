@@ -1,0 +1,9 @@
+# M6 documents, backup import and Windows integration
+
+- Port the document importers (TXT/HTML/XHTML/Markdown, EPUB, DOCX/ODT/FODT, FB2/FBZ, ZIP/CBZ) and the legacy RTF/HWPX/HWPML importers. Output must match the Python reference exactly for well-formed files. Recovery from malformed markup and rare codec edge cases may differ, but every resource limit stays strict. (User decision, 2026-11-25.)
+- Keep uploads content-addressed under `files/`. Reject unsupported names before writing, so they never become managed files. Queue every new upload for asset collection before writing it, and clean it up when the import fails.
+- Import vBook backups (folder or ZIP) by parsing outside the write lock. Commit in batches of about 2,000 rows instead of the reference's single transaction. A failing book aborts the import, earlier batches stay committed, and rerunning is idempotent. (User decision.)
+- Run PDF/OCR and Desktop shortcuts through the unchanged `windows/pdfocr.ps1` and `windows/shortcut.ps1`. Shortcuts keep the Python launcher target until M7 switches the one `platform::launcher` function. (User decision.)
+- Add `/api/import/file`, `/api/import/backup`, `/api/books/{id}/shortcut`, `/api/books/{id}/file` and the document/OCR/sources fields of `/api/capabilities`. Apply the existing loopback guards, JSON-route list and the "nhập thư viện/tệp/OCR" critical operation.
+- Team: the main session implements and verifies, and one independent read-only reviewer reviews, with a scoped fix round. (User decision, replacing the three-agent default.)
+- Gates: a Python/Rust HTTP differential over a synthetic corpus, including bombs, traversal, deep nesting, truncated and stalled uploads, reimport progress/trash, a mid-import crash and real Windows OCR. Also a real COM shortcut compared with Python in a private temporary desktop, the unchanged Python suites, fmt/clippy/tests, and a release benchmark on a 10,000-book library.

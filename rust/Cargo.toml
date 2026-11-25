@@ -26,6 +26,8 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 brotli = "8"
 scraper = { version = "0.25", default-features = false }
 url = "2.5"
+encoding_rs = "0.8"
+fancy-regex = "0.14"
 
 [dev-dependencies]
 rcgen = "0.14"

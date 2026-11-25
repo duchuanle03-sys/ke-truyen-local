@@ -393,6 +393,35 @@ impl Library {
         Ok(processed)
     }
 
+    /// Queue one managed upload and settle it now (reference `Store.cleanup_file`).
+    pub(crate) fn cleanup_file(&self, name: &str) -> Result<bool, ApiError> {
+        let mut db = self.write_connection()?;
+        db.execute(
+            "INSERT INTO asset_gc_candidates(kind,name) VALUES('files',?)
+            ON CONFLICT(kind,name) DO UPDATE SET generation=generation+1,retry_at=0,evict=0",
+            [name],
+        )?;
+        let row = db
+            .query_row(
+                "SELECT id,kind,name,generation,evict FROM asset_gc_candidates WHERE kind='files' AND name=?",
+                [name],
+                |r| {
+                    Ok(Candidate {
+                        id: r.get(0)?,
+                        kind: r.get(1)?,
+                        name: r.get(2)?,
+                        generation: r.get(3)?,
+                        evict: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+        match row {
+            Some(row) => self.cleanup_candidate(&mut db, &row),
+            None => Ok(true),
+        }
+    }
+
     fn cleanup_candidate(&self, db: &mut Connection, row: &Candidate) -> Result<bool, ApiError> {
         let Some((name, old_stage)) = managed_name(&row.kind, &row.name) else {
             remove_candidate(db, row)?;
