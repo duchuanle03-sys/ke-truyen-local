@@ -891,6 +891,126 @@ pub(crate) mod tests {
             "evictable, never pinned offline"
         );
     }
+    fn downloads(library: &Library) -> usize {
+        library
+            .sources
+            .image_fetches
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+    fn slow_images(library: &Library, ms: u64) {
+        *library.sources.image_delay.lock().unwrap() = std::time::Duration::from_millis(ms);
+    }
+    #[test]
+    fn overlapping_requests_for_one_image_download_it_once() {
+        let (_fixture, library) = online();
+        slow_images(&library, 300);
+        let url = illustration(0);
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| library.save_source_image(&url, ONLINE_BOOK, None));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let second = scope.spawn(|| library.save_source_image(&url, ONLINE_BOOK, None));
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert!(first.is_ok() && second.is_ok());
+        assert_eq!(
+            downloads(&library),
+            1,
+            "the second request reused the first download"
+        );
+        assert!(cached_image(&library, &url));
+    }
+    #[test]
+    fn a_reader_request_during_a_prefetch_image_download_reuses_it() {
+        let (_fixture, library) = online();
+        library.prefetch.claim("web", 1);
+        slow_images(&library, 150);
+        std::thread::scope(|scope| {
+            let prefetch = scope.spawn(|| library.prefetch_chapter("web", 2, &|| false).unwrap());
+            // The prefetch is downloading the chapter's first image; the reader asks for it too.
+            while downloads(&library) == 0 {
+                std::thread::yield_now();
+            }
+            library
+                .save_source_image(&illustration(0), ONLINE_BOOK, None)
+                .unwrap();
+            assert!(cached_image(&library, &illustration(0)));
+            prefetch.join().unwrap();
+        });
+        assert_eq!(
+            downloads(&library),
+            10,
+            "ten prefetched images, none downloaded twice"
+        );
+    }
+    #[test]
+    fn with_the_image_cache_full_waiters_get_the_shared_bytes() {
+        let (_fixture, library) = online();
+        library
+            .write_connection()
+            .unwrap()
+            .execute("UPDATE image_cache_state SET max_bytes=1 WHERE id=1", [])
+            .unwrap();
+        slow_images(&library, 300);
+        let url = illustration(0);
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| library.save_source_image(&url, ONLINE_BOOK, None));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let second = scope.spawn(|| library.save_source_image(&url, ONLINE_BOOK, None));
+            (
+                first.join().unwrap().unwrap(),
+                second.join().unwrap().unwrap(),
+            )
+        });
+        assert!(
+            first.is_some() && first == second,
+            "both get the image bytes"
+        );
+        assert!(!cached_image(&library, &url), "not kept: over the budget");
+        assert_eq!(downloads(&library), 1);
+    }
+    #[test]
+    fn a_failed_shared_download_is_retried_by_the_waiting_request() {
+        let (_fixture, library) = online();
+        slow_images(&library, 200);
+        let missing = "https://i.hako.vip/illusts/missing.png";
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| library.save_source_image(missing, ONLINE_BOOK, None));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let second = scope.spawn(|| library.save_source_image(missing, ONLINE_BOOK, None));
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert!(first.is_err() && second.is_err());
+        assert_eq!(
+            downloads(&library),
+            2,
+            "the waiter tried again instead of inheriting the failure"
+        );
+    }
+    #[test]
+    fn after_a_failed_shared_download_waiters_retry_in_parallel() {
+        let (_fixture, library) = online();
+        slow_images(&library, 300);
+        let missing = "https://i.hako.vip/illusts/missing.png";
+        let started = std::time::Instant::now();
+        std::thread::scope(|scope| {
+            let leader = scope.spawn(|| library.save_source_image(missing, ONLINE_BOOK, None));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let waiters: Vec<_> = (0..2)
+                .map(|_| scope.spawn(|| library.save_source_image(missing, ONLINE_BOOK, None)))
+                .collect();
+            assert!(leader.join().unwrap().is_err());
+            for waiter in waiters {
+                assert!(waiter.join().unwrap().is_err());
+            }
+        });
+        assert_eq!(downloads(&library), 3, "one retry per waiter");
+        // One failed download, then both retries at once: about 600 ms, not 900 ms in turn.
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(800),
+            "{:?}",
+            started.elapsed()
+        );
+    }
     #[test]
     fn opening_the_chapter_stops_its_image_prefetch() {
         let (_fixture, library) = online();

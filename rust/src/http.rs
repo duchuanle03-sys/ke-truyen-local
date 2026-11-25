@@ -1925,10 +1925,11 @@ fn shortcut_cover(library: &Library, book: &Value) -> Vec<u8> {
             .sources
             .enabled()
             .then(|| {
+                // `Ok(None)` means the image is on disk (possibly saved by a concurrent download).
                 library
                     .save_source_image(&url, referer, None)
                     .ok()
-                    .flatten()
+                    .and_then(|bytes| bytes.or_else(|| std::fs::read(&candidate).ok()))
             })
             .flatten()
     };

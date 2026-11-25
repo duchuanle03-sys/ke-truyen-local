@@ -166,6 +166,16 @@ pub(crate) struct Sources {
     pub(crate) stv: Option<Arc<Stv>>,
     #[serde(skip)]
     native: Option<PublicFetch>,
+    /// One network download per image at a time (keyed by cache name); see `save_source_image`.
+    #[serde(skip)]
+    image_flights: crate::lifecycle::Flights<String, Arc<Vec<u8>>>,
+    /// Test-only: network image downloads made through the fixture, and a delay for each.
+    #[cfg(test)]
+    #[serde(skip)]
+    pub(crate) image_fetches: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    #[serde(skip)]
+    pub(crate) image_delay: std::sync::Mutex<std::time::Duration>,
 }
 
 impl Sources {
@@ -270,6 +280,13 @@ impl Sources {
             return Err(failure(
                 "Chỉ chấp nhận URL HTTP(S) công khai, không kèm tài khoản hoặc cổng riêng",
             ));
+        }
+        #[cfg(test)]
+        {
+            self.image_fetches
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let delay = *self.image_delay.lock().unwrap();
+            std::thread::sleep(delay);
         }
         let Some(data) = self.images.get(&url) else {
             return self
@@ -1168,6 +1185,28 @@ impl crate::Library {
                 "Chỉ chấp nhận URL HTTP(S) công khai, không kèm tài khoản hoặc cổng riêng",
             ));
         }
+        // Single-flight: a caller arriving while another request downloads this image waits for
+        // that download and reuses its result. Background pacing happens before a download
+        // starts, so a reader that joins one never inherits it.
+        let leader = match self.sources.image_flights.join(name.clone()) {
+            crate::lifecycle::Joined::Lead(leader) => Some(leader),
+            crate::lifecycle::Joined::Follow(bytes) => {
+                if path.exists() {
+                    return Ok(None);
+                }
+                // Bytes the other download did not keep serve a reader; a download job must store
+                // its own (protected) copy.
+                if let Some(bytes) = bytes.filter(|_| owner.is_none()) {
+                    return Ok(Some(bytes.as_ref().clone()));
+                }
+                // That download failed or was not kept: download once here, as before.
+                None
+            }
+        };
+        // Saved between the check above and joining.
+        if path.exists() {
+            return Ok(None);
+        }
         let body = self.sources.image(&url, referer)?;
         if crate::http::image_kind(&body) == "application/octet-stream" {
             return Err(ApiError::new(
@@ -1215,6 +1254,10 @@ impl crate::Library {
                     tx.execute("UPDATE image_cache_state SET trim_to=CASE WHEN trim_to<0 THEN ? ELSE min(trim_to,?) END WHERE id=1",[target,target])?;
                 }
                 tx.commit()?;
+                // Not kept (cache budget full): hand the bytes to anyone waiting on this download.
+                if let Some(leader) = &leader {
+                    leader.publish(Arc::new(body.clone()));
+                }
                 return Ok(Some(body));
             }
             tx.execute("INSERT INTO image_cache(name,size,last_used) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET size=excluded.size,last_used=excluded.last_used",params![name,size,crate::reader::now()])?;
