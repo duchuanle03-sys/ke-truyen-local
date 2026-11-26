@@ -200,7 +200,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     nextButton = button('Chương sau ›', () => loadChapter(index + 1), true);
     selectionTip = el('div', { class: 'reader-selection-tip', hidden: true }, [button('Ghi chú', () => editNote()), button('Nghe đoạn chọn', () => { startSpeech(lastSelection); selectionTip.hidden = true; }), button('Từ điển', () => { selectionTip.hidden = true; openDictionary(book); })]);
     speechBar = el('div', { class: 'tts-transport', hidden: true }, [icon('Ⅱ', 'Tạm dừng hoặc tiếp tục nghe', togglePause), el('span', { class: 'speech-bar-label', text: 'Đang đọc…' }), icon('■', 'Dừng đọc', stopSpeech), icon('⚙', 'Thiết lập giọng đọc', voiceDialog)]);
-    root.replaceChildren(el('header', { class: 'reader-header' }, [el('button', { class: 'reader-back', onclick: close }, [el('span', { text: '‹', 'aria-hidden': 'true' }), 'Về kệ']), el('p', { class: 'reader-book-title', text: book.name }), el('div', { class: 'reader-tools' }, [icon('☰', 'Mục lục', tocDialog), icon('⌕', 'Tìm trong nội dung', searchDialog), icon('☆', 'Ghi chú và dấu trang', notesDialog), icon('♫', 'Nghe truyện', voiceDialog), icon('QT', 'QT và từ điển', qtDialog), icon('Aa', 'Cách đọc và giao diện', settingsDialog), icon('⋯', 'Công cụ đọc', toolsDialog, 'reader-optional')])]), scroller, el('div', { class: 'reader-progress-track' }, [progressBar]), el('footer', { class: 'reader-footer' }, [previousButton, status, nextButton]), selectionTip, speechBar);
+    root.replaceChildren(el('header', { class: 'reader-header' }, [el('button', { class: 'reader-back', onclick: close }, [el('span', { text: '‹', 'aria-hidden': 'true' }), book.archived ? 'Đóng' : 'Về kệ']), el('p', { class: 'reader-book-title', text: book.name }), el('div', { class: 'reader-tools' }, [icon('☰', 'Mục lục', tocDialog), icon('⌕', 'Tìm trong nội dung', searchDialog), icon('☆', 'Ghi chú và dấu trang', notesDialog), icon('♫', 'Nghe truyện', voiceDialog), icon('QT', 'QT và từ điển', qtDialog), icon('Aa', 'Cách đọc và giao diện', settingsDialog), icon('⋯', 'Công cụ đọc', toolsDialog, 'reader-optional')])]), scroller, el('div', { class: 'reader-progress-track' }, [progressBar]), el('footer', { class: 'reader-footer' }, [previousButton, status, nextButton]), selectionTip, speechBar);
     applyPrefs(false);
   }
 
@@ -228,7 +228,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
       if (token !== generation) return;
       chapters = Array.isArray(result) ? result : result.chapters || [];
       tocEntries = chapters.map(tocEntry);
-      if (!chapters.length) throw new Error('Truyện chưa có mục lục. Hãy kiểm tra trang nguồn; sách vẫn được giữ trên kệ.');
+      if (!chapters.length) throw new Error(book.archived ? 'Truyện chưa có mục lục. Hãy kiểm tra trang nguồn.' : 'Truyện chưa có mục lục. Hãy kiểm tra trang nguồn; sách vẫn được giữ trên kệ.');
       await loadChapter(clamp(index, 0, chapters.length - 1), initialPosition, false);
     } catch (error) { if (token === generation) showReadError(error, () => open(selected, index, initialPosition)); }
     scroller.focus({ preventScroll: true });

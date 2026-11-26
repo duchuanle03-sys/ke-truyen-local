@@ -16,6 +16,7 @@
       <nav>
         <button data-nav="library" class="nav-item active"><span aria-hidden="true">▤</span> Kệ sách <span id="nav-count" class="nav-count"></span></button>
         <button data-nav="discover" class="nav-item"><span aria-hidden="true">⌕</span> Khám phá</button>
+        <button data-nav="history" class="nav-item"><span aria-hidden="true">◷</span> Lịch sử</button>
         <button data-nav="dictionary" class="nav-item"><span aria-hidden="true">Aa</span> Từ điển</button>
         <button data-nav="settings" class="nav-item"><span aria-hidden="true">⚙</span> Thiết lập</button>
       </nav>
@@ -33,10 +34,11 @@
         <p class="library-footnote">Nội dung chương được lấy từ nguồn khi mở và lưu lại trên máy. Sách chưa tải vẫn được giữ trên kệ.</p>
       </section>
       <section id="discover-view" class="view" hidden>
-        <header class="page-header"><div><h1>Khám phá</h1><p>Chọn nguồn, tìm truyện rồi thêm vào kệ.</p></div></header>
+        <header class="page-header"><div><h1>Khám phá</h1><p>Chọn nguồn, tìm truyện rồi đọc, tải xuống hoặc thêm vào kệ.</p></div></header>
         <form id="source-search-form" class="discovery-search"><label>Nguồn truyện<select id="source-select"><option value="">Đang lấy nguồn…</option></select></label><label class="grow">Tên truyện hoặc tác giả<input id="source-query" type="search" placeholder="Bạn muốn đọc gì hôm nay?" required></label><button class="button primary" type="submit">Tìm truyện</button></form>
         <div id="source-status" class="results-line" role="status">Kết quả lấy trực tiếp từ nguồn bạn chọn.</div><div id="source-results" class="source-results"></div><button id="source-next" class="button" hidden>Xem trang tiếp</button>
       </section>
+      <section id="history-view" class="view" hidden><header class="page-header"><div><h1>Lịch sử</h1><p>Truyện đọc ngoài kệ trong 30 ngày qua.</p></div></header><div id="history-list" class="saved-list"></div></section>
       <section id="dictionary-view" class="view" hidden><header class="page-header"><div><h1>Từ điển</h1><p>Quản lý dữ liệu QT cục bộ và nghĩa riêng theo truyện.</p></div></header><div id="dictionary-page"></div></section>
       <section id="settings-view" class="view" hidden><header class="page-header"><div><h1>Thiết lập</h1><p>Trạng thái công cụ và dữ liệu trên máy của bạn.</p></div></header><div id="settings-page"></div></section>
     </main>

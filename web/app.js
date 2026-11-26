@@ -112,7 +112,7 @@ function saveSettings(patch) {
     catch (error) { notify(`Chưa lưu được thiết lập: ${error.message}`, true); }
   }, 350);
 }
-const reader = createReader({ api, el, notify, showDialog, getSettings: () => state.settings.reader || {}, saveSettings: (value) => saveSettings({ reader: value }), openDictionary: (book) => openDictionary(book), onClose: () => loadLibrary(state.offset) });
+const reader = createReader({ api, el, notify, showDialog, getSettings: () => state.settings.reader || {}, saveSettings: (value) => saveSettings({ reader: value }), openDictionary: (book) => openDictionary(book), onClose: () => (state.activeView === 'library' ? loadLibrary(state.offset) : navigate(state.activeView)) });
 
 function safeMedia(value) {
   if (!value) return '';
@@ -253,6 +253,7 @@ async function navigate(view) {
     if (button.dataset.nav === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
   }
   if (view === 'library') await loadLibrary();
+  if (view === 'history') renderHistory();
   if (view === 'dictionary') renderDictionary($('dictionary-page'));
   if (view === 'settings') renderSettings();
 }
@@ -351,21 +352,59 @@ async function bookDetail(initial, fromSource = false) {
   dialog.body.replaceChildren(el('div', { class: 'book-detail' }, [cover(book), metadata]));
   const status = el('p', { class: 'inline-error', hidden: true, role: 'alert' }); dialog.body.append(status);
   if (fromSource) {
-    dialog.actions.replaceChildren(el('button', { class: 'button primary', text: 'Thêm vào kệ và đọc', onclick: async (event) => {
-      event.currentTarget.disabled = true; status.hidden = true;
-      try { const added = await api(`/api/sources/${encodeURIComponent(selectedSource)}/add`, { url: book.path || book.url || initial.path || initial.url }); dialog.close(); await loadLibrary(); reader.open(added.book || added); }
-      catch (error) { status.textContent = error.message; status.hidden = false; event.target.disabled = false; }
-    } }));
+    // Reading and downloading from Khám phá keep the novel off the shelf; adding it is a separate choice.
+    const url = book.path || book.url || initial.path || initial.url;
+    const library = book.library || null;
+    const chapters = Array.isArray(book.chapters) ? book.chapters : [];
+    const add = async (shelf) => {
+      const request = () => api(`/api/sources/${encodeURIComponent(selectedSource)}/add`, { url, shelf });
+      let added;
+      try { added = await request(); }
+      catch (error) {
+        // A concurrent change to the record: reading the source once more settles it.
+        if (error.http_status !== 400 || !/đã thay đổi/.test(error.message)) throw error;
+        added = await request();
+      }
+      return added.book || added;
+    };
+    const showError = (error) => { status.className = 'inline-error'; status.textContent = error.message; status.hidden = false; };
+    const facts = [];
+    if (library?.trashed) facts.push('Truyện đang ở Thùng rác — khôi phục để đọc');
+    else if (library && (library.chapter_index || library.position)) facts.push(`Đọc tiếp chương ${library.chapter_index + 1}`);
+    if (library?.downloaded) facts.push(`Đã tải ${library.downloaded} chương`);
+    if (facts.length) metadata.append(el('p', { class: 'detail-library', text: facts.join(' · ') }));
+    const detailNodes = [...dialog.body.childNodes];
+    const showDetail = () => dialog.body.replaceChildren(...detailNodes);
+    const showToc = () => {
+      const list = el('ol', { class: 'toc-list' });
+      const openChapter = async (index) => {
+        list.inert = true; status.hidden = true;
+        try {
+          const record = await add(false);
+          dialog.close();
+          reader.open(record, index, index === library?.chapter_index ? library.position : 0);
+        } catch (error) { list.inert = false; showError(error); }
+      };
+      chapters.forEach((chapter, index) => list.append(el('li', {}, [el('button', { class: `toc-chapter${index === library?.chapter_index ? ' current' : ''}`, text: chapter.title || `Chương ${index + 1}`, onclick: () => openChapter(index) })])));
+      const jump = el('input', { type: 'number', min: 1, max: chapters.length, placeholder: 'Đến chương…', 'aria-label': 'Đến chương' });
+      jump.onchange = () => { const target = list.children[Number(jump.value) - 1]; if (target) { target.scrollIntoView({ block: 'center' }); target.querySelector('button').focus(); } };
+      dialog.body.replaceChildren(el('div', { class: 'toc-head' }, [el('button', { class: 'text-button', text: '← Giới thiệu', onclick: showDetail }), el('strong', { text: `${chapters.length} chương` }), jump]), list, status);
+      list.children[library?.chapter_index ?? -1]?.scrollIntoView({ block: 'center' });
+    };
+    const shelfButton = el('button', { class: 'button primary', text: library?.on_shelf ? 'Đã có trên kệ' : 'Thêm vào kệ', disabled: Boolean(library?.on_shelf), onclick: async () => {
+      shelfButton.disabled = true; status.hidden = true;
+      try { await add(true); shelfButton.textContent = 'Đã có trên kệ'; notify('Đã thêm vào kệ.'); refreshShelfCount(); }
+      catch (error) { showError(error); shelfButton.disabled = false; }
+    } });
+    const buttons = [
+      el('button', { class: 'button', text: 'Tải xuống', onclick: () => downloadDialog({ name: book.name, chapter_count: chapters.length }, () => add(false)) }),
+      el('button', { class: 'button', text: 'Mục lục', onclick: showToc }),
+      shelfButton,
+    ];
+    if (library?.trashed) for (const button of buttons) button.disabled = true;
+    dialog.actions.replaceChildren(...buttons);
   } else {
-    const downloadCount = el('input', { type: 'number', value: Math.min(20, book.chapter_count || 20), min: 1, max: Math.max(1, book.chapter_count || 100), 'aria-label': 'Số chương tải từ chương đang đọc' });
-    const download = el('div', { class: 'download-row' }, [el('label', { text: 'Tải từ chương đang đọc' }, [downloadCount]), el('button', { class: 'button', text: 'Tải để đọc offline', onclick: async (event) => {
-      if (!downloadCount.checkValidity()) { downloadCount.reportValidity(); return; }
-      event.currentTarget.disabled = true;
-      try { const job = await api(`/api/books/${encodeURIComponent(book.id)}/download`, { start: book.chapter_index || 0, count: Number(downloadCount.value) }); status.className = 'inline-info'; status.textContent = `Đã tạo yêu cầu tải ${job.count || downloadCount.value} chương. Xem kết quả trong Thiết lập → Tải nội dung.`; status.hidden = false; }
-      catch (error) { status.className = 'inline-error'; status.textContent = error.message; status.hidden = false; }
-      finally { event.target.disabled = false; }
-    } })]);
-    dialog.body.append(download);
+    dialog.body.append(el('div', { class: 'download-row' }, [el('button', { class: 'button', text: 'Tải xuống', onclick: () => downloadDialog(book, async () => book) })]));
     const shortcut = el('button', { class: 'button', text: 'Thêm lối tắt', onclick: async (event) => {
       const button = event.currentTarget;
       button.disabled = true; button.textContent = 'Đang tạo…'; status.hidden = true;
@@ -380,6 +419,100 @@ async function bookDetail(initial, fromSource = false) {
     } });
     dialog.actions.replaceChildren(el('button', { class: 'button danger', text: 'Xóa khỏi kệ', onclick: () => confirmTrash(book) }), el('button', { class: 'button', text: 'Sửa thông tin', onclick: () => editBook(book) }), shortcut, el('button', { class: 'button primary', text: percent(book) ? `Đọc tiếp · ${percent(book)}%` : 'Bắt đầu đọc', onclick: () => { dialog.close(); reader.open(book); } }));
   }
+}
+
+// Task 7 (Tải xuống) refreshes its job list here.
+function downloadsChanged() {}
+
+async function refreshShelfCount() {
+  try { $('nav-count').textContent = (await api('/api/books?limit=1')).shelf_total || ''; } catch { /* the next shelf load shows it */ }
+}
+
+// resolve() returns the library record to download, creating an off-shelf one only on confirm.
+function downloadDialog(book, resolve) {
+  const total = Number(book.chapter_count) || 0;
+  const all = el('input', { type: 'radio', name: 'download-scope', checked: true });
+  const range = el('input', { type: 'radio', name: 'download-scope' });
+  const from = el('input', { type: 'number', min: 1, max: total, value: 1, 'aria-label': 'Từ chương' });
+  const to = el('input', { type: 'number', min: 1, max: total, value: total, 'aria-label': 'Đến chương' });
+  const status = el('p', { class: 'inline-error', role: 'alert', hidden: true });
+  const start = el('button', { class: 'button primary', text: 'Bắt đầu tải' });
+  const chosen = () => {
+    if (all.checked) return total > 0 ? { start: 0, count: -1 } : null;
+    const a = Number(from.value), b = Number(to.value);
+    return from.value !== '' && to.value !== '' && Number.isInteger(a) && Number.isInteger(b) && a >= 1 && a <= b && b <= total ? { start: a - 1, count: b - a + 1 } : null;
+  };
+  const update = () => { start.disabled = !chosen(); };
+  for (const input of [from, to]) input.addEventListener('focus', () => { range.checked = true; update(); });
+  for (const input of [all, range, from, to]) input.addEventListener('input', update);
+  const dialog = showDialog(`Tải xuống · ${book.name || 'truyện'}`, [
+    el('label', { class: 'download-choice' }, [all, el('span', { text: `Toàn bộ (${total} chương)` })]),
+    el('label', { class: 'download-choice' }, [range, el('span', { text: 'Từ chương' }), from, el('span', { text: 'đến' }), to]),
+    status,
+  ], [el('button', { class: 'button', text: 'Hủy', onclick: () => dialog.close() }), start]);
+  start.onclick = async () => {
+    const body = chosen();
+    if (!body) return;
+    start.disabled = true; status.hidden = true;
+    try {
+      const record = await resolve();
+      await api(`/api/books/${encodeURIComponent(record.id)}/download`, body);
+      dialog.body.replaceChildren(el('p', { class: 'inline-info', text: 'Đã tạo yêu cầu tải. Xem tiến độ trong Tải xuống.' }));
+      dialog.actions.replaceChildren(el('button', { class: 'button primary', text: 'Đóng', onclick: () => dialog.close() }));
+      downloadsChanged();
+    } catch (error) { status.textContent = error.message; status.hidden = false; update(); }
+  };
+  update();
+}
+
+// Opens a saved record; a History row may outlive its record (cleaned after 31 days).
+async function openSaved(book, refresh) {
+  let fresh;
+  try { fresh = await api(`/api/books/${encodeURIComponent(book.id)}`); }
+  catch (error) {
+    if (error.http_status !== 404) { notify(error.message, true); return; }
+    const status = el('p', { class: 'inline-error', role: 'alert', hidden: true });
+    const reopen = el('button', { class: 'button primary', text: 'Mở lại từ nguồn', onclick: async () => {
+      reopen.disabled = true; status.hidden = true;
+      try {
+        const added = await api(`/api/sources/${encodeURIComponent(book.source)}/add`, { url: book.path, shelf: false });
+        dialog.close();
+        reader.open(added.book || added, book.chapter_index || 0, book.position || 0);
+      } catch (problem) { status.textContent = problem.message; status.hidden = false; reopen.disabled = false; }
+    } });
+    const dialog = showDialog('Mục lịch sử đã hết hạn', [el('p', { text: 'Mục lịch sử này đã hết hạn và dữ liệu tạm đã được dọn.' }), status], [el('button', { class: 'button', text: 'Đóng', onclick: () => dialog.close() }), reopen]);
+    refresh?.();
+    return;
+  }
+  reader.open(fresh);
+}
+
+async function putOnShelf(book, refresh) {
+  try { await api(`/api/books/${encodeURIComponent(book.id)}/update`, { archived: false }); notify('Đã thêm vào kệ.'); refreshShelfCount(); }
+  catch (error) { notify(error.message, true); }
+  refresh();
+}
+
+async function renderHistory(offset = 0) {
+  const target = $('history-list');
+  target.replaceChildren(el('p', { class: 'muted', text: 'Đang mở lịch sử…' }));
+  const since = Math.floor(Date.now() / 1000) - 30 * 86400;
+  let page;
+  try { page = await api(`/api/books?${new URLSearchParams({ archived: '1', read_since: since, sort: 'recent', offset, limit: 60 })}`); }
+  catch (error) { target.replaceChildren(el('p', { class: 'inline-error', text: error.message })); return; }
+  const refresh = () => renderHistory(offset);
+  const rows = page.items.map((book) => el('article', { class: 'saved-row' }, [cover(book), el('div', { class: 'saved-info' }, [
+    el('h3', { text: book.name || 'Chưa có tên' }),
+    el('p', { class: 'muted', text: `${sourceName(book.source)} · Chương ${(Number(book.chapter_index) || 0) + 1}/${book.chapter_count || '?'} · Đọc lần cuối ${new Date(book.read_at * 1000).toLocaleDateString('vi-VN')}` }),
+  ]), el('div', { class: 'header-actions' }, [
+    el('button', { class: 'button', text: 'Thêm vào kệ', onclick: () => putOnShelf(book, refresh) }),
+    el('button', { class: 'button primary', text: 'Đọc tiếp', onclick: () => openSaved(book, refresh) }),
+  ])]));
+  if (!rows.length) rows.push(el('p', { class: 'muted', text: 'Chưa có truyện nào được đọc ngoài kệ.' }));
+  const pages = el('div', { class: 'header-actions' });
+  if (offset) pages.append(el('button', { class: 'button', text: 'Trang trước', onclick: () => renderHistory(Math.max(0, offset - 60)) }));
+  if (page.next_offset != null) pages.append(el('button', { class: 'button', text: 'Trang sau', onclick: () => renderHistory(page.next_offset) }));
+  target.replaceChildren(...rows, pages);
 }
 
 async function refreshShelf() {
