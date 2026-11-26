@@ -847,7 +847,7 @@ pub(crate) mod tests {
     }
     const ONLINE_BOOK: &str = "https://truyenfull.live/truyen-a/";
     /// A Truyện Full book with three chapters; the source serves chapters 1 and 2 only.
-    fn online() -> (common::Fixture, Library) {
+    pub(crate) fn online() -> (common::Fixture, Library) {
         let fixture = common::Fixture::new("empty");
         let folder = fixture.db.parent().unwrap();
         let marker = folder.join("m1-fixture.json");
@@ -2127,18 +2127,6 @@ pub(crate) mod tests {
             .progress("gone", &json!({"index":0,"position":0.1}))
             .unwrap_err();
         assert_eq!(error.status, 404);
-    }
-    #[test]
-    fn failed_detail_creates_no_record() {
-        let (_fixture, library) = online();
-        let count = book_count(&library);
-        assert!(
-            library
-                .sources
-                .detail("full", "https://truyenfull.live/khong-co/")
-                .is_err()
-        );
-        assert_eq!(book_count(&library), count);
     }
     #[test]
     fn renaming_a_group_keeps_its_id_and_books() {

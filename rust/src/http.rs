@@ -3460,6 +3460,45 @@ mod tests {
         );
     }
     #[test]
+    fn a_failed_detail_fetch_on_add_creates_no_record() {
+        let (_fixture, library) = crate::reader::tests::online();
+        let books = || -> i64 {
+            library
+                .reader_connection()
+                .unwrap()
+                .query_row("SELECT count(*) FROM books", [], |r| r.get(0))
+                .unwrap()
+        };
+        let before = books();
+        for body in [
+            json!({"url":"https://truyenfull.live/khong-co/","shelf":false}),
+            json!({"url":"https://truyenfull.live/khong-co/"}),
+        ] {
+            let (parts, _) = hyper::Request::builder()
+                .method("POST")
+                .uri("/api/sources/full/add")
+                .header("Host", "127.0.0.1:1234")
+                .body(())
+                .unwrap()
+                .into_parts();
+            let response = respond_writable(
+                &library,
+                Path::new("."),
+                "token",
+                1234,
+                parts,
+                Some(body.clone()),
+                None,
+                &std::sync::Mutex::new(()),
+                &crate::lifecycle::ShutdownAck::new(Arc::new(tokio::sync::Notify::new())),
+                &std::sync::atomic::AtomicBool::new(false),
+                None,
+            );
+            assert!(response.status().as_u16() >= 400, "{body}");
+            assert_eq!(books(), before, "{body}");
+        }
+    }
+    #[test]
     fn group_writes_take_json_bodies() {
         let parts = |method: &str, uri: &str| {
             hyper::Request::builder()
