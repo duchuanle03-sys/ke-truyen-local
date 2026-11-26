@@ -1477,6 +1477,21 @@ pub(crate) mod tests {
         let result = library.clear_book_downloads("web", true).unwrap();
         assert_eq!(result["cleared"], 2, "{result}");
         assert_eq!(
+            result["kept"], 0,
+            "chapter 3 was edited, not downloaded: {result}"
+        );
+        // A chapter downloaded and then edited stays downloaded, and is reported as kept.
+        exec(
+            &library,
+            "UPDATE chapter_cache SET offline=1 WHERE book_id='web' AND idx=3",
+        );
+        let again = library.clear_book_downloads("web", true).unwrap();
+        assert_eq!(
+            (&again["cleared"], &again["kept"]),
+            (&json!(0), &json!(1)),
+            "{again}"
+        );
+        assert_eq!(
             result["freed_bytes"], 0,
             "files are deleted later, in the background"
         );

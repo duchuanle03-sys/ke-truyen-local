@@ -357,10 +357,17 @@ impl Library {
                 [],
             )?;
         }
+        // Still downloaded after clearing: edited chapters, which are kept.
+        let kept: i64 = tx.query_row(
+            &format!("SELECT count(*) FROM chapter_cache k WHERE k.book_id=? AND {DOWNLOADED}"),
+            [book],
+            |r| r.get(0),
+        )?;
         tx.commit()?;
         drop(leases);
         Ok(serde_json::json!({
             "cleared": targets.len(),
+            "kept": kept,
             "freed_bytes": 0,
             "pending_file_bytes": pending,
             "sqlite_reusable_bytes": targets.iter().map(|(_, bytes, _)| bytes).sum::<i64>(),

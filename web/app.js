@@ -531,7 +531,10 @@ async function clearDownloads(book, refresh) {
     try { result = await send(true); } catch (problem) { notify(problem.message, true); return; }
   }
   // Nothing is freed on disk yet: say what is waiting for deletion and what SQLite reuses.
-  const parts = [`Đã xóa ${result.cleared} chương.`];
+  const parts = [];
+  if (result.cleared) parts.push(`Đã xóa ${result.cleared} chương.`);
+  if (result.kept) parts.push(result.cleared ? `Giữ ${result.kept} chương đã sửa.` : `Không xóa chương nào: ${result.kept} chương đã tải đều đã được sửa nên được giữ.`);
+  if (!result.cleared && !result.kept) parts.push('Không còn chương đã tải để xóa.');
   if (result.pending_file_bytes) parts.push(`Khoảng ${formatBytes(result.pending_file_bytes)} ảnh đang chờ xóa khỏi ổ đĩa trong nền.`);
   if (result.sqlite_reusable_bytes) parts.push(`${formatBytes(result.sqlite_reusable_bytes)} trong tệp thư viện được để SQLite dùng lại; tệp chỉ nhỏ lại khi bấm Thu gọn trong Thiết lập.`);
   notify(parts.join(' '));
