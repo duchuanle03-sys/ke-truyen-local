@@ -5,7 +5,9 @@ use crate::{
 };
 use hyper::{
     HeaderMap, Method,
-    header::{ACCEPT, ACCEPT_ENCODING, COOKIE, HeaderValue, LOCATION, REFERER, USER_AGENT},
+    header::{
+        ACCEPT, ACCEPT_ENCODING, COOKIE, HeaderValue, LOCATION, REFERER, SET_COOKIE, USER_AGENT,
+    },
 };
 use std::{
     collections::HashMap,
@@ -156,6 +158,20 @@ impl PublicFetch {
                 },
                 &self.stop,
             )?;
+            if url.starts_with("https://truyenqqko.com/") {
+                let mut cookie = self
+                    .qq_cookie
+                    .lock()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                if let Some(next) = merged_qq_cookie(
+                    cookie.as_ref().and_then(|c| c.to_str().ok()),
+                    &result.headers,
+                )
+                .and_then(|c| HeaderValue::from_str(&c).ok())
+                {
+                    *cookie = Some(next);
+                }
+            }
             if (200..300).contains(&result.status) {
                 return Ok(result);
             }
@@ -184,13 +200,34 @@ impl PublicFetch {
         static QQ_COOKIE: LazyLock<regex::Regex> = LazyLock::new(|| {
             regex::Regex::new(r#"document\.cookie\s*=\s*["']([A-Za-z0-9_-]+=[A-Za-z0-9._~%+/-]*)(?:;[^\r\n]*?)?["']"#).unwrap()
         });
+        let qq = url.starts_with("https://truyenqqko.com/");
+        let sent = self
+            .qq_cookie
+            .lock()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?
+            .clone();
         let mut text = decode(self.get(
             url,
             "",
             limit,
             "text/html,application/json;q=0.9,image/*;q=0.8",
         )?)?;
-        if url.starts_with("https://truyenqqko.com/")
+        // QQ search answers with an empty page until the request carries the `visit-read` cookie.
+        if qq
+            && text.trim().is_empty()
+            && *self
+                .qq_cookie
+                .lock()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?
+                != sent
+        {
+            text = decode(self.get(
+                url,
+                "",
+                limit,
+                "text/html,application/json;q=0.9,image/*;q=0.8",
+            )?)?;
+        } else if qq
             && text.chars().take(5_000).count() < 5_000
             && let Some(cookie) = QQ_COOKIE
                 .captures(&text)
@@ -240,6 +277,24 @@ impl PublicFetch {
     }
 }
 
+/// The QQ cookie header with `visit-read` taken from this reply, or `None` if the reply sets none.
+fn merged_qq_cookie(existing: Option<&str>, headers: &HeaderMap) -> Option<String> {
+    let visit = headers
+        .get_all(SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok()?.split(';').next())
+        .filter_map(|pair| pair.trim().strip_prefix("visit-read="))
+        .rfind(|value| !value.is_empty() && *value != "deleted")?;
+    let pair = format!("visit-read={visit}");
+    let mut pairs: Vec<&str> = existing
+        .unwrap_or_default()
+        .split("; ")
+        .filter(|p| !p.is_empty() && !p.starts_with("visit-read="))
+        .collect();
+    pairs.push(&pair);
+    Some(pairs.join("; "))
+}
+
 fn checked_redirect(base: &str, location: &str) -> Result<String, ApiError> {
     let url = relative_remote(location, base);
     if url.is_empty() || (base.starts_with("https:") && !url.starts_with("https:")) {
@@ -283,6 +338,27 @@ fn decode(response: crate::stv::WireResponse) -> Result<String, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qq_visit_cookie_is_remembered_from_set_cookie_and_merged() {
+        let mut headers = HeaderMap::new();
+        for value in [
+            "QiQiSessionNew3=abc; path=/; domain=truyenqqko.com",
+            "visit-read=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0; path=/truyen-tranh",
+            "visit-read=6b07f271ac835-6b07f271ac836; Max-Age=642816000; path=/; domain=truyenqqko.com",
+        ] {
+            headers.append(hyper::header::SET_COOKIE, HeaderValue::from_static(value));
+        }
+        assert_eq!(
+            merged_qq_cookie(None, &headers).as_deref(),
+            Some("visit-read=6b07f271ac835-6b07f271ac836")
+        );
+        assert_eq!(
+            merged_qq_cookie(Some("_ac=1; visit-read=old"), &headers).as_deref(),
+            Some("_ac=1; visit-read=6b07f271ac835-6b07f271ac836")
+        );
+        assert_eq!(merged_qq_cookie(Some("_ac=1"), &HeaderMap::new()), None);
+    }
 
     #[test]
     fn redirects_preserve_signed_spelling_and_reject_unsafe_targets() {
