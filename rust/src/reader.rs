@@ -1658,7 +1658,7 @@ pub(crate) mod tests {
         stale_off_shelf(library, "web");
         exec(
             library,
-            "UPDATE books SET chapter_index=2,position=0.4 WHERE id='web';
+            "UPDATE books SET chapter_index=2,position=0.4,progress=0.6 WHERE id='web';
              UPDATE chapters SET text='nội dung cũ',downloaded=1 WHERE book_id='web' AND idx=1;
              UPDATE chapter_cache SET kind='cache',offline=0 WHERE book_id='web' AND idx=1;
              INSERT INTO chapter_search_docs(book_id,idx,scope,literal_check,text) VALUES('web',1,'s',0,'nội dung cũ');",
@@ -1701,6 +1701,10 @@ pub(crate) mod tests {
             (&json!(1), &json!(0.4), &json!(3), &json!(true)),
             "progress follows chapter 2 to its new place: {book}"
         );
+        assert!(
+            (book["progress"].as_f64().unwrap() - 1.4 / 3.0).abs() < 1e-9,
+            "{book}"
+        );
         for (sql, what) in [
             (
                 "SELECT count(*) FROM chapters WHERE book_id='web' AND (text!='' OR html!='')",
@@ -1726,8 +1730,8 @@ pub(crate) mod tests {
             .add_source_book(source_order(&[3, 1, 0]), false)
             .unwrap();
         assert_eq!(
-            (&book["chapter_index"], &book["position"]),
-            (&json!(0), &json!(0.0)),
+            (&book["chapter_index"], &book["position"], &book["progress"]),
+            (&json!(0), &json!(0.0), &json!(0.0)),
             "{book}"
         );
     }
@@ -1742,6 +1746,17 @@ pub(crate) mod tests {
         );
         let error = library
             .add_source_book(source_order(&[3, 2, 1]), false)
+            .unwrap_err();
+        assert_eq!(error.status, 400);
+        assert_eq!(urls(&library), before);
+    }
+    #[test]
+    fn an_empty_source_list_never_replaces_the_chapters() {
+        let (_fixture, library) = online();
+        reorderable(&library);
+        let before = urls(&library);
+        let error = library
+            .add_source_book(source_order(&[]), false)
             .unwrap_err();
         assert_eq!(error.status, 400);
         assert_eq!(urls(&library), before);

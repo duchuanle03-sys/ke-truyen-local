@@ -3494,7 +3494,13 @@ mod tests {
                 &std::sync::atomic::AtomicBool::new(false),
                 None,
             );
-            assert!(response.status().as_u16() >= 400, "{body}");
+            let error: Value =
+                serde_json::from_slice(response.body().bytes.as_ref().unwrap()).unwrap();
+            assert_eq!(
+                (response.status().as_u16(), &error["code"]),
+                (503, &json!("network_error")),
+                "the source itself is unavailable, not a guard refusal: {error}"
+            );
             assert_eq!(books(), before, "{body}");
         }
     }

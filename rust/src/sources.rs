@@ -1097,7 +1097,8 @@ impl crate::Library {
         // then sees the new list. Deleting the rows also drops their cache, search and asset rows.
         let reorder = if reordered {
             let leases = self.chapter_leases.lock();
-            if leases.keys().any(|(book, _)| *book == id)
+            if chapters.is_empty()
+                || leases.keys().any(|(book, _)| *book == id)
                 || !crate::chapters::replaceable(&tx, &id)?
             {
                 return Err(refused());
@@ -1144,8 +1145,13 @@ impl crate::Library {
                 })
                 .unwrap_or((0, 0.0));
             tx.execute(
-                "UPDATE books SET chapter_index=?,position=? WHERE id=?",
-                params![index, position, id],
+                "UPDATE books SET chapter_index=?,position=?,progress=? WHERE id=?",
+                params![
+                    index,
+                    position,
+                    (index as f64 + position) / chapters.len() as f64,
+                    id
+                ],
             )?;
         }
         tx.commit()?;
