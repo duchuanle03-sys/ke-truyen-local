@@ -635,16 +635,35 @@ function shutdownPanel() {
   const control = el('button', { class: 'button', id: 'server-shutdown', text: 'Tắt máy chủ', onclick: async () => {
     control.disabled = true;
     const send = pause => api('/api/shutdown', { pause_downloads: pause }, { headers: { 'X-Shutdown-Token': shutdownToken }, captcha: false });
+    // Opened before the shutdown request: the server answers it only once shutting down has finished.
+    const waiting = new AbortController();
+    let finished = null;
     try {
       if (!shutdownToken) { await api('/api/settings'); if (!shutdownToken) throw Error('Hãy tải lại giao diện để nhận phiên máy chủ hiện tại.'); }
+      finished = fetch('/api/shutdown/wait', { headers: { 'X-Shutdown-Token': shutdownToken }, cache: 'no-store', signal: waiting.signal })
+        .then((response) => (response.ok ? response.json() : null));
+      finished.catch(() => {});
       try { await send(false); }
       catch (error) {
         if (error.code !== 'active_downloads') throw error;
-        if (!confirm(`Có ${error.active_downloads} tác vụ tải. Tạm dừng các tác vụ tải đang chạy và tắt máy chủ?`)) { control.disabled = false; return; }
+        if (!confirm(`Có ${error.active_downloads} tác vụ tải. Tạm dừng các tác vụ tải đang chạy và tắt máy chủ?`)) { waiting.abort(); control.disabled = false; return; }
         await send(true);
       }
-      status.textContent = 'Đã nhận lệnh tắt. Máy chủ đang hoàn tất yêu cầu và dọn tài nguyên. Nếu quá lâu, kiểm tra reader.log. Mở lại Start.cmd hoặc lối tắt để khởi động sau khi máy chủ cũ kết thúc.';
-    } catch (error) { status.textContent = error.message; notify(error.message, true); control.disabled = false; }
+    } catch (error) { waiting.abort(); status.textContent = error.message; notify(error.message, true); control.disabled = false; return; }
+    status.textContent = 'Đang lưu dữ liệu và tắt máy chủ…';
+    const slow = setTimeout(() => { status.textContent = 'Máy chủ vẫn đang hoàn tất… Nếu quá lâu, xem reader.log.'; }, 60000);
+    const result = await finished.catch(() => null);
+    clearTimeout(slow);
+    if (result?.finished && result.checkpoint === 'complete') {
+      status.textContent = 'Máy chủ đã tắt an toàn. Đang đóng cửa sổ…';
+      window.close();
+      setTimeout(() => { status.textContent = 'Máy chủ đã tắt an toàn. Bạn có thể đóng cửa sổ này.'; }, 300);
+    } else if (result?.finished) {
+      status.textContent = 'Máy chủ đã tắt an toàn và mọi thay đổi đã được lưu. Riêng bước gộp nhật ký ghi của SQLite chưa xong; việc này không làm mất dữ liệu và sẽ tự hoàn tất ở lần mở sau.';
+      control.replaceWith(el('button', { class: 'button', text: 'Đóng cửa sổ', onclick: () => window.close() }));
+    } else {
+      status.textContent = 'Máy chủ đã dừng nhưng chưa xác nhận đã tắt xong. Hãy xem reader.log trước khi mở lại.';
+    }
   } });
   return el('section', { class: 'settings-section', id: 'server-settings' }, [el('h2', { text: 'Máy chủ cục bộ' }), status, control]);
 }

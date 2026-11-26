@@ -755,6 +755,40 @@ impl Library {
             let _ = db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         }
     }
+    /// The last step of a shutdown: copy the whole WAL into the database and empty it.
+    /// Bounded by attempts *and* by total time (each attempt may also wait on busy_timeout), so
+    /// readers that never let go only cost a few seconds. `false` is not data loss: committed
+    /// transactions stay in the WAL and SQLite applies them at the next open.
+    pub fn final_checkpoint(&self) -> bool {
+        const ATTEMPTS: u32 = 5;
+        const BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
+        let deadline = std::time::Instant::now() + BUDGET;
+        let remaining = || deadline.saturating_duration_since(std::time::Instant::now());
+        for attempt in 1..=ATTEMPTS {
+            let wait = remaining().min(std::time::Duration::from_secs(1));
+            let result = self.write_connection().and_then(|db| {
+                db.busy_timeout(wait)?;
+                Ok(db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })?)
+            });
+            let reason = match result {
+                Ok((0, log, done)) if log == done => return true,
+                Ok((busy, log, done)) => format!("busy={busy}, log={log}, checkpointed={done}"),
+                Err(error) => error.message,
+            };
+            eprintln!("final checkpoint attempt {attempt}: {reason}");
+            if attempt == ATTEMPTS || remaining().is_zero() {
+                break;
+            }
+            std::thread::sleep(remaining().min(std::time::Duration::from_secs(1)));
+        }
+        false
+    }
     pub fn checkpoint(&self) -> Result<(), ApiError> {
         let db = self.write_connection()?;
         db.busy_timeout(std::time::Duration::from_secs(1))?;
