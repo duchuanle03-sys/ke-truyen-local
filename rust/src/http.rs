@@ -1389,6 +1389,9 @@ fn json_route(parts: &hyper::http::request::Parts) -> bool {
                 "progress", "update", "trash", "restore", "download", "shortcut",
             ]
             .contains(&pieces[3]))
+        || pieces.len() == 5
+            && pieces[..2] == ["api", "books"]
+            && pieces[3..] == ["downloads", "clear"]
         || (pieces.len() == 6
             && pieces[..2] == ["api", "books"]
             && pieces[3] == "chapters"
@@ -2166,6 +2169,14 @@ fn respond_writable(
                 }
                 jobs()?.list(offset)?
             }
+            ("/api/downloads", "GET") => {
+                let (offset, overflow) =
+                    crate::library::parse_integer(query.get("offset").map_or("0", String::as_str))?;
+                if overflow && offset > 0 {
+                    return Err(rusqlite::Error::InvalidQuery.into());
+                }
+                library.downloaded_books(offset)?
+            }
             ("/api/readers", "POST") => library.reader(body)?,
             ("/api/cache/chapters", "GET") => library.chapter_cache_stats()?,
             ("/api/cache/chapters", "POST") => {
@@ -2373,6 +2384,9 @@ fn respond_writable(
                         }
                         (4, "POST") if pieces[3] == "progress" => library.progress(id, body)?,
                         (4, "POST") if pieces[3] == "update" => library.update_book(id, body)?,
+                        (5, "POST") if pieces[3] == "downloads" && pieces[4] == "clear" => {
+                            library.clear_book_downloads(id, body["confirmed"] == true)?
+                        }
                         (4, "POST") if pieces[3] == "trash" => {
                             if let Some(downloads) = downloads {
                                 downloads.trash_book(id)?

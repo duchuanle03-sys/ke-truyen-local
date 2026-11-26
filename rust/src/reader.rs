@@ -1338,6 +1338,201 @@ pub(crate) mod tests {
         assert_eq!(error.status, 404);
         assert!(library.notes(Some("missing")).unwrap()[0].is_null());
     }
+    // ---- Downloads section: the downloaded list and deleting a book's downloads ----
+    /// `web` gets chapter 1 offline (images 0 and 1, both pinned), chapter 2 legacy and an edited,
+    /// downloaded chapter 3; shelf book `keep` has an offline chapter that also pins image 1.
+    fn downloaded_fixture() -> (common::Fixture, Library) {
+        let (fixture, library) = online();
+        for k in 0..2 {
+            library
+                .save_source_image(&illustration(k), ONLINE_BOOK, None)
+                .unwrap();
+        }
+        let (zero, one) = (illustration(0), illustration(1));
+        let (n0, n1) = (image_name(&zero), image_name(&one));
+        exec(&library, &format!(
+            "UPDATE chapters SET downloaded=0 WHERE book_id='web' AND idx=0;
+             UPDATE chapters SET html='<p>1</p>',images='[\"{zero}\",\"{one}\"]',downloaded=1 WHERE book_id='web' AND idx=1;
+             UPDATE chapter_cache SET kind='protected',offline=1 WHERE book_id='web' AND idx=1;
+             UPDATE chapters SET text='2',downloaded=1 WHERE book_id='web' AND idx=2;
+             UPDATE chapters SET html='<p>Đã sửa</p>',original_html='<p>gốc</p>',downloaded=1 WHERE book_id='web' AND idx=3;
+             INSERT INTO books(id,name,source,path,chapter_count,added_at,updated_at) VALUES('keep','Giữ','full','https://truyenfull.live/giu/',1,1,1);
+             INSERT INTO chapters(book_id,idx,title,url,html,images,downloaded) VALUES('keep',0,'C','https://truyenfull.live/giu/c/','','[\"{one}\"]',1);
+             UPDATE chapter_cache SET kind='protected',offline=1 WHERE book_id='keep';"
+        ));
+        drain(|s| library.index_assets(s));
+        exec(
+            &library,
+            &format!(
+                "INSERT OR IGNORE INTO image_pins VALUES('web',1,'{n0}'),('web',1,'{n1}'),('keep',0,'{n1}')"
+            ),
+        );
+        (fixture, library)
+    }
+    #[test]
+    fn downloaded_books_lists_shelf_and_off_shelf_downloads_with_counts() {
+        let (_fixture, library) = downloaded_fixture();
+        exec(&library, "UPDATE books SET archived=1 WHERE id='web';
+            INSERT INTO books(id,name,source,path,chapter_count,added_at,updated_at) VALUES('tmp','Tạm','full','https://truyenfull.live/tam/',1,1,1);
+            INSERT INTO chapters(book_id,idx,title,url,text,downloaded) VALUES('tmp',0,'C','https://truyenfull.live/tam/c/','x',1);
+            UPDATE chapter_cache SET kind='cache' WHERE book_id='tmp';
+            INSERT INTO books(id,name,source,path,chapter_count,trashed_at,added_at,updated_at) VALUES('bin','Rác','full','https://truyenfull.live/rac/',1,5,1,1);
+            INSERT INTO chapters(book_id,idx,title,url,text,downloaded) VALUES('bin',0,'C','https://truyenfull.live/rac/c/','x',1);");
+        let page = library.downloaded_books(0).unwrap();
+        let mut found: Vec<(String, i64)> = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| {
+                (
+                    b["id"].as_str().unwrap().to_owned(),
+                    b["downloaded_count"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [("keep".to_owned(), 1), ("web".to_owned(), 2)],
+            "{page}"
+        );
+    }
+    #[test]
+    fn clearing_a_books_downloads_frees_their_content_and_image_files() {
+        let (_fixture, library) = downloaded_fixture();
+        let size = |name: &str| {
+            count(
+                &library,
+                &format!("SELECT coalesce(sum(size),0) FROM image_cache WHERE name='{name}'"),
+            )
+        };
+        let (n0, n1) = (image_name(&illustration(0)), image_name(&illustration(1)));
+        let private = size(&n0);
+        assert!(private > 0);
+        let refused = library.clear_book_downloads("web", false).unwrap_err();
+        assert_eq!(refused.status, 400);
+        assert_eq!(
+            count(
+                &library,
+                "SELECT count(*) FROM chapters WHERE book_id='web' AND downloaded=1"
+            ),
+            3
+        );
+        let result = library.clear_book_downloads("web", true).unwrap();
+        assert_eq!(result["cleared"], 2, "{result}");
+        assert_eq!(
+            result["freed_bytes"], 0,
+            "files are deleted later, in the background"
+        );
+        assert_eq!(
+            result["pending_file_bytes"], private,
+            "only the image no other book uses"
+        );
+        assert!(result["sqlite_reusable_bytes"].as_i64().unwrap() > 0);
+        for idx in [1, 2] {
+            let row = chapter_value(library.raw_chapter("web", idx).unwrap()).unwrap();
+            assert_eq!(
+                (
+                    row["html"].as_str(),
+                    row["text"].as_str(),
+                    row["downloaded"].as_bool()
+                ),
+                (Some(""), Some(""), Some(false)),
+                "{idx}"
+            );
+            assert_eq!(
+                count(
+                    &library,
+                    &format!(
+                        "SELECT count(*) FROM chapter_cache WHERE book_id='web' AND idx={idx}"
+                    )
+                ),
+                0
+            );
+        }
+        assert_eq!(cache_kind(&library, 3).unwrap().0, "protected");
+        drain(|s| library.index_assets(s));
+        drain(|s| library.cleanup_assets(s));
+        assert!(
+            !cached_image(&library, &illustration(0)),
+            "the private image file is gone"
+        );
+        assert_eq!(
+            count(
+                &library,
+                &format!("SELECT count(*) FROM image_cache WHERE name='{n0}'")
+            ),
+            0
+        );
+        assert!(
+            cached_image(&library, &illustration(1)),
+            "the shared image stays"
+        );
+        assert!(
+            count(
+                &library,
+                &format!("SELECT pin_count FROM image_cache WHERE name='{n1}'")
+            ) > 0
+        );
+        assert_eq!(
+            count(
+                &library,
+                "SELECT count(*) FROM chapter_cache WHERE book_id='keep' AND offline=1"
+            ),
+            1
+        );
+        assert_eq!(
+            count(&library, "SELECT count(*) FROM pragma_foreign_key_check"),
+            0
+        );
+    }
+    #[test]
+    fn clearing_downloads_is_refused_while_in_use() {
+        let (_fixture, library) = downloaded_fixture();
+        let downloaded = "SELECT count(*) FROM chapters WHERE book_id='web' AND downloaded=1";
+        let lease = library.chapter_leases.acquire(("web".into(), 1));
+        assert_eq!(
+            library
+                .clear_book_downloads("web", true)
+                .unwrap_err()
+                .status,
+            400
+        );
+        drop(lease);
+        exec(
+            &library,
+            &format!(
+                "INSERT INTO chapter_readers(id,book_id,idx,sequence,expires) VALUES('r','web',0,1,{})",
+                now() + 60.0
+            ),
+        );
+        assert_eq!(
+            library
+                .clear_book_downloads("web", true)
+                .unwrap_err()
+                .status,
+            400
+        );
+        exec(
+            &library,
+            "DELETE FROM chapter_readers; INSERT INTO download_jobs(id,book_id,status,data,created_at,updated_at) VALUES('j','web','running','{}',1,1)",
+        );
+        assert_eq!(
+            library
+                .clear_book_downloads("web", true)
+                .unwrap_err()
+                .status,
+            400
+        );
+        assert_eq!(count(&library, downloaded), 3);
+        assert_eq!(
+            library
+                .clear_book_downloads("missing", true)
+                .unwrap_err()
+                .status,
+            404
+        );
+    }
     // ---- Off-shelf clean-up (History GC) ----
     use crate::chapters::{Rule, candidate_sql, next_candidate};
     use std::sync::atomic::{AtomicBool, Ordering};

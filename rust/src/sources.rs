@@ -878,6 +878,7 @@ impl crate::Library {
         let result = (|| {
             let book = &task.book_id;
             let index = task.index;
+            control.images(0, 0);
             let _lease = self.chapter_leases.acquire((book.clone(), index));
             let row = crate::reader::chapter_value(self.raw_chapter(book, index)?)?;
             let info = self.get_book(book)?;
@@ -925,13 +926,16 @@ impl crate::Library {
                     assets.extend(crate::http::asset_markup_urls(markup, referer)?);
                 }
             }
-            for image in assets {
+            let total = u32::try_from(assets.len()).unwrap_or(u32::MAX);
+            control.images(0, total);
+            for (done, image) in (1..).zip(assets) {
                 if control.stopping() {
                     return Err(
                         ApiError::new(400, "Yêu cầu tải đã dừng.").with_code("request_cancelled")
                     );
                 }
                 self.save_source_image(&image, referer, Some((book, index, &task.job_id)))?;
+                control.images(done, total);
             }
             Ok::<_, ApiError>(())
         })();

@@ -394,3 +394,44 @@ fn late_chapter_completion_cannot_restore_deleted_job() {
     assert_ne!(history["jobs"][0]["id"], job["id"]);
     assert!(calls.try_recv().is_err());
 }
+
+#[test]
+fn active_comic_job_reports_images_in_the_current_chapter() {
+    let fixture = fixture(&[("book", "qq", 1)]);
+    let (entered, calls) = mpsc::channel();
+    let downloads = Downloads::open(open(&fixture), move |_, control| {
+        control.images(3, 40);
+        let (done, release) = mpsc::channel();
+        entered.send(done).unwrap();
+        release.recv_timeout(LIMIT).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let job = downloads.start("book", 0, -1).unwrap();
+    let release = calls.recv_timeout(LIMIT).unwrap();
+    let listed = downloads.list(0).unwrap()["jobs"][0].clone();
+    assert_eq!(listed["image_done"], 3, "{listed}");
+    assert_eq!(listed["image_total"], 40);
+    release.send(()).unwrap();
+    until(|| saved(&fixture, &job).0 == "completed");
+    let done = downloads.list(0).unwrap()["jobs"][0].clone();
+    assert!(done["image_total"].as_i64().unwrap_or(0) == 0, "{done}");
+}
+
+#[test]
+fn a_full_novel_download_covers_every_chapter() {
+    let fixture = fixture(&[("book", "full", 5)]);
+    let downloads = Downloads::open(open(&fixture), |_, _| Ok(())).unwrap();
+    assert_eq!(downloads.start("book", 0, -1).unwrap()["total"], 5);
+}
+
+#[test]
+fn a_bad_range_is_refused() {
+    let fixture = fixture(&[("book", "full", 5)]);
+    let downloads = Downloads::offline(open(&fixture));
+    for (start, count) in [(0, 0), (5, 1), (-1, 2)] {
+        let error = downloads.start("book", start, count).unwrap_err();
+        assert_eq!(error.status, 400, "{start},{count}");
+        assert_eq!(error.message, "Khoảng chương không hợp lệ.");
+    }
+}

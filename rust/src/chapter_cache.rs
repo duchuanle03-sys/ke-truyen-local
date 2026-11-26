@@ -210,19 +210,7 @@ impl Library {
                 [id], |r| r.get(0),
             )?;
             if eligible && (clearing || excess > 0) {
-                db.execute(
-                    "UPDATE chapters SET html='',text='',images='[]',original_html=NULL,original_text=NULL,downloaded=0,
-                     raw=json_remove(raw,'$.html','$.text','$.images','$.original_html','$.original_text') WHERE book_id=? AND idx=?",
-                    params![book,idx],
-                )?;
-                db.execute(
-                    "DELETE FROM chapter_search_docs WHERE book_id=? AND idx=?",
-                    params![book, idx],
-                )?;
-                db.execute(
-                    "DELETE FROM chapter_search_pending WHERE book_id=? AND idx=?",
-                    params![book, idx],
-                )?;
+                clear_chapter_body(db, &book, idx)?;
                 removed += 1;
                 excess -= 1;
                 bytes += size;
@@ -238,6 +226,146 @@ impl Library {
             )?;
         }
         Ok(removed)
+    }
+}
+
+/// Empties one chapter's stored body, as cache eviction does. Its images lose their references
+/// through the asset triggers, so the asset GC deletes files no other book still needs.
+fn clear_chapter_body(db: &Connection, book: &str, idx: i64) -> rusqlite::Result<()> {
+    db.execute(
+        "UPDATE chapters SET html='',text='',images='[]',original_html=NULL,original_text=NULL,downloaded=0,
+         raw=json_remove(raw,'$.html','$.text','$.images','$.original_html','$.original_text') WHERE book_id=? AND idx=?",
+        params![book, idx],
+    )?;
+    db.execute(
+        "DELETE FROM chapter_search_docs WHERE book_id=? AND idx=?",
+        params![book, idx],
+    )?;
+    db.execute(
+        "DELETE FROM chapter_search_pending WHERE book_id=? AND idx=?",
+        params![book, idx],
+    )?;
+    Ok(())
+}
+
+const DOWNLOADED: &str = "(k.offline=1 OR k.kind='legacy')";
+
+impl Library {
+    /// Novels with downloaded chapters, on the shelf or not (the Tải xuống list).
+    pub(crate) fn downloaded_books(&self, offset: i64) -> Result<Value, ApiError> {
+        const PAGE: i64 = 60;
+        let db = self.reader_connection()?;
+        let mut items = rows(
+            &db,
+            &format!(
+                "SELECT b.*,(SELECT count(*) FROM chapter_cache k WHERE k.book_id=b.id AND {DOWNLOADED}) AS downloaded_count
+                 FROM books b WHERE (b.trashed_at>0)=0
+                 AND EXISTS(SELECT 1 FROM chapter_cache k WHERE k.book_id=b.id AND {DOWNLOADED})
+                 ORDER BY b.read_at DESC,b.id LIMIT ? OFFSET ?"
+            ),
+            params![PAGE + 1, offset.max(0)],
+        )?;
+        let more = items.len() as i64 > PAGE;
+        items.truncate(PAGE as usize);
+        let items = items
+            .into_iter()
+            .map(|row| {
+                let count = row["downloaded_count"].clone();
+                crate::reader::book_value(row).map(|mut book| {
+                    book["downloaded_count"] = count;
+                    book
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(serde_json::json!({"items":items,"next_offset":more.then_some(offset.max(0) + PAGE)}))
+    }
+
+    /// Deletes a novel's downloaded chapters to free space. Edited chapters are kept.
+    /// Nothing is freed on disk yet when this returns: image files go in the background asset
+    /// GC, and the chapter text frees pages SQLite reuses (the file shrinks only on "Thu gọn").
+    pub(crate) fn clear_book_downloads(
+        &self,
+        book: &str,
+        confirmed: bool,
+    ) -> Result<Value, ApiError> {
+        let mut db = self.write_connection()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let leases = self.chapter_leases.lock();
+        let check = |sql: &str| tx.query_row(sql, params![book, now()], |r| r.get::<_, bool>(0));
+        if !check("SELECT EXISTS(SELECT 1 FROM books WHERE id=?1) AND ?2=?2")? {
+            return Err(ApiError::new(404, "Không tìm thấy truyện."));
+        }
+        if check(
+            "SELECT EXISTS(SELECT 1 FROM download_jobs WHERE book_id=?1 AND status IN ('queued','running','paused','verification_required')) AND ?2=?2",
+        )? {
+            return Err(ApiError::new(
+                400,
+                "Hãy hủy hoặc chờ tác vụ tải của truyện này xong rồi thử lại.",
+            )
+            .with_code("download_active"));
+        }
+        if leases.keys().any(|(id, _)| id == book)
+            || check(
+                "SELECT EXISTS(SELECT 1 FROM chapter_readers WHERE book_id=?1 AND expires>?2)",
+            )?
+        {
+            return Err(
+                ApiError::new(400, "Hãy đóng trình đọc truyện này rồi thử lại.")
+                    .with_code("book_in_use"),
+            );
+        }
+        let targets = tx
+            .prepare(&format!(
+                "SELECT c.idx,k.bytes,k.kind='legacy' FROM chapter_cache k JOIN chapters c ON c.book_id=k.book_id AND c.idx=k.idx
+                 JOIN books b ON b.id=c.book_id WHERE k.book_id=? AND {DOWNLOADED} AND b.source IN {ONLINE}
+                 AND c.original_html IS NULL AND c.original_text IS NULL ORDER BY c.idx"
+            ))?
+            .query_map([book], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, bool>(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !confirmed && targets.iter().any(|(_, _, legacy)| *legacy) {
+            return Err(ApiError::new(
+                400,
+                "Cần xác nhận: chương tải từ app cũ có thể là bản ngoại tuyến duy nhất; sau khi xóa cần mạng để đọc lại.",
+            )
+            .with_code("legacy_confirmation"));
+        }
+        let list = targets
+            .iter()
+            .map(|(idx, _, _)| idx.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        // Image files that only these chapters use: they will be deleted, but not yet.
+        let pending: i64 = tx.query_row(
+            &format!(
+                "SELECT coalesce(sum(i.size),0) FROM image_cache i WHERE i.legacy=0
+                 AND i.name IN (SELECT name FROM asset_refs WHERE book_id=?1 AND kind='images' AND idx IN ({list}))
+                 AND NOT EXISTS(SELECT 1 FROM asset_refs r WHERE r.kind='images' AND r.name=i.name AND NOT (r.book_id=?1 AND r.idx IN ({list})))
+                 AND NOT EXISTS(SELECT 1 FROM image_pins p WHERE p.name=i.name AND NOT (p.book_id=?1 AND p.idx IN ({list})))"
+            ),
+            [book],
+            |r| r.get(0),
+        )?;
+        for (idx, _, _) in &targets {
+            clear_chapter_body(&tx, book, *idx)?;
+            tx.execute(
+                "DELETE FROM image_pins WHERE book_id=? AND idx=?",
+                params![book, idx],
+            )?;
+        }
+        if !targets.is_empty() {
+            tx.execute(
+                "UPDATE chapter_cache_state SET fts_merge=1 WHERE id=1 AND fts_merge=0",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        drop(leases);
+        Ok(serde_json::json!({
+            "cleared": targets.len(),
+            "freed_bytes": 0,
+            "pending_file_bytes": pending,
+            "sqlite_reusable_bytes": targets.iter().map(|(_, bytes, _)| bytes).sum::<i64>(),
+        }))
     }
 }
 

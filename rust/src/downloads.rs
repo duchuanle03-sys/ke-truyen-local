@@ -6,7 +6,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc, Condvar, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -29,6 +29,7 @@ pub struct ChapterTask {
 pub struct DownloadControl {
     interrupted: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
+    images: Arc<AtomicU64>,
 }
 
 impl DownloadControl {
@@ -38,6 +39,12 @@ impl DownloadControl {
 
     pub fn stopping(&self) -> bool {
         self.stopping.load(Ordering::Acquire)
+    }
+
+    /// Images saved so far in the chapter being downloaded; shown live, never stored.
+    pub fn images(&self, done: u32, total: u32) {
+        self.images
+            .store(u64::from(done) << 32 | u64::from(total), Ordering::Release);
     }
 }
 
@@ -147,6 +154,9 @@ impl Job {
         if let Some(state) = state {
             if let Some(active) = state.active.get(&self.id) {
                 value["completed"] = json!(active.completed);
+                let images = active.images.load(Ordering::Acquire);
+                value["image_done"] = json!(images >> 32);
+                value["image_total"] = json!(images & u64::from(u32::MAX));
             }
             if let Some((_, source)) = state.sources.iter().find(|(id, _)| id == &self.id) {
                 value["source"] = json!(source);
@@ -176,6 +186,7 @@ struct Active {
     source: String,
     completed: i64,
     interrupted: Arc<AtomicBool>,
+    images: Arc<AtomicU64>,
 }
 
 struct Verification {
@@ -612,6 +623,7 @@ impl Scheduler {
             return Err(internal());
         }
         let interrupted = Arc::<AtomicBool>::default();
+        let images = Arc::<AtomicU64>::default();
         state.active.insert(
             job.id.clone(),
             Active {
@@ -619,6 +631,7 @@ impl Scheduler {
                 source: source.clone(),
                 completed: job.data.completed,
                 interrupted: interrupted.clone(),
+                images: images.clone(),
             },
         );
         state.sources.retain(|(id, _)| id != &job.id);
@@ -637,6 +650,7 @@ impl Scheduler {
             DownloadControl {
                 interrupted,
                 stopping: self.stopping.clone(),
+                images,
             },
         )))
     }
