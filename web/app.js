@@ -909,13 +909,15 @@ function shutdownPanel() {
   const control = el('button', { class: 'button', id: 'server-shutdown', text: 'Tắt máy chủ', onclick: async () => {
     control.disabled = true;
     const send = pause => api('/api/shutdown', { pause_downloads: pause }, { headers: { 'X-Shutdown-Token': shutdownToken }, captcha: false });
-    // Opened before the shutdown request: the server answers it only once shutting down has finished.
+    // Its headers arrive at once, so the answer channel is open before the shutdown is asked for;
+    // the body comes when the shutdown has an outcome.
     const waiting = new AbortController();
     let finished = null;
     try {
       if (!shutdownToken) { await api('/api/settings'); if (!shutdownToken) throw Error('Hãy tải lại giao diện để nhận phiên máy chủ hiện tại.'); }
-      finished = fetch('/api/shutdown/wait', { headers: { 'X-Shutdown-Token': shutdownToken }, cache: 'no-store', signal: waiting.signal })
-        .then((response) => (response.ok ? response.json() : null));
+      const opened = await fetch('/api/shutdown/wait', { headers: { 'X-Shutdown-Token': shutdownToken }, cache: 'no-store', signal: waiting.signal });
+      if (!opened.ok) throw Error('Hãy tải lại giao diện để nhận phiên máy chủ hiện tại.');
+      finished = opened.json();
       finished.catch(() => {});
       try { await send(false); }
       catch (error) {
@@ -932,6 +934,8 @@ function shutdownPanel() {
       status.textContent = 'Máy chủ đã tắt an toàn. Đang đóng cửa sổ…';
       window.close();
       setTimeout(() => { status.textContent = 'Máy chủ đã tắt an toàn. Bạn có thể đóng cửa sổ này.'; }, 300);
+    } else if (result?.busy) {
+      status.textContent = 'Một tác vụ vẫn chưa dừng sau 30 giây. Máy chủ chờ tác vụ đó xong rồi mới lưu nốt và tự tắt; các thay đổi đã lưu vẫn an toàn. Hãy đợi máy chủ tắt hẳn trước khi mở lại ứng dụng.';
     } else if (result?.finished) {
       status.textContent = 'Máy chủ đã tắt an toàn và mọi thay đổi đã được lưu. Riêng bước gộp nhật ký ghi của SQLite chưa xong; việc này không làm mất dữ liệu và sẽ tự hoàn tất ở lần mở sau.';
       control.replaceWith(el('button', { class: 'button', text: 'Đóng cửa sổ', onclick: () => window.close() }));

@@ -1210,6 +1210,15 @@ struct ServiceBody {
     asset: Option<Arc<crate::lifecycle::Lease<std::path::PathBuf>>>,
 }
 impl ServiceBody {
+    /// One chunk that `task` produces later; sent chunked, since its length isn't known yet.
+    fn later(task: ReadTask) -> Self {
+        Self {
+            bytes: None,
+            pending: Some(task),
+            remaining: 1,
+            ..Self::bytes(Vec::new())
+        }
+    }
     fn bytes(bytes: Vec<u8>) -> Self {
         let remaining = bytes.len() as u64;
         Self {
@@ -1288,7 +1297,11 @@ impl hyper::body::Body for ServiceBody {
                 self.pending = None;
                 match result {
                     Ok(Ok(bytes)) => {
-                        self.remaining -= bytes.len() as u64;
+                        self.remaining = if self.file.is_some() {
+                            self.remaining - bytes.len() as u64
+                        } else {
+                            0
+                        };
                         Poll::Ready(Some(Ok(hyper::body::Frame::data(bytes.into()))))
                     }
                     Ok(Err(e)) => {
@@ -1307,6 +1320,9 @@ impl hyper::body::Body for ServiceBody {
         self.remaining == 0
     }
     fn size_hint(&self) -> hyper::body::SizeHint {
+        if self.file.is_none() && self.pending.is_some() {
+            return hyper::body::SizeHint::default();
+        }
         hyper::body::SizeHint::with_exact(self.remaining)
     }
 }
@@ -2769,6 +2785,9 @@ pub(crate) fn serve_library(
     checked_path(web_root)?;
     run_server(library, web_root, listener)
 }
+/// How long shutdown waits for running requests before it reports them; tests use 1 s.
+const DRAIN_LIMIT: std::time::Duration =
+    std::time::Duration::from_secs(if cfg!(test) { 1 } else { 30 });
 fn run_server(
     library: Library,
     web_root: &Path,
@@ -2816,8 +2835,8 @@ fn run_server(
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let shutdown_busy = Arc::new(std::sync::Mutex::new(()));
         let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        // Some(complete) once the shutdown has finished; answers /api/shutdown/wait.
-        let (finished, finished_watch) = tokio::sync::watch::channel(None::<bool>);
+        // The shutdown outcome for /api/shutdown/wait: busy (a request outlived DRAIN_LIMIT) or finished.
+        let (finished, finished_watch) = tokio::sync::watch::channel(None::<Value>);
         let maintenance_stop = Arc::new(tokio::sync::Notify::new());
         let maintenance = library.writable().then(|| {
             let library = library.clone();
@@ -2937,12 +2956,17 @@ fn run_server(
                                 if !authorized {
                                     return Ok(error_response(ApiError::new(403, "Cần mở giao diện của phiên máy chủ này để tắt ứng dụng.")));
                                 }
-                                let _waiting = Busy::enter(&busy_service);
-                                let complete = finished.wait_for(Option::is_some).await.ok().and_then(|done| *done);
-                                return Ok(match complete {
-                                    Some(complete) => api_response(200, json!({"finished":true,"checkpoint":if complete {"complete"} else {"incomplete"}}), false, vec![("Connection".into(), "close".into())]),
-                                    None => error_response(ApiError::new(503, "Máy chủ dừng trước khi xác nhận hoàn tất.")),
-                                });
+                                // Headers go out at once, so the window knows the answer channel is open before it
+                                // asks for the shutdown; the body follows when the shutdown has an outcome.
+                                let waiting = Busy::enter(&busy_service);
+                                let mut response = api_response(200, json!({}), false, vec![("Connection".into(), "close".into())]);
+                                response.headers_mut().remove("Content-Length");
+                                *response.body_mut() = ServiceBody::later(tokio::spawn(async move {
+                                    let _waiting = waiting;
+                                    let answer = finished.wait_for(Option::is_some).await.ok().and_then(|done| done.clone());
+                                    Ok(json_bytes(&answer.unwrap_or_else(|| json!({"finished":false}))))
+                                }));
+                                return Ok(response);
                             }
                             if stopping.load(std::sync::atomic::Ordering::Acquire) { return Ok::<_,std::convert::Infallible>(error_response(ApiError::new(503,"Máy chủ đang tắt; hãy mở lại ứng dụng sau khi hoàn tất."))); }
                             let work_permit = work_permits
@@ -3008,12 +3032,17 @@ fn run_server(
         maintenance_stop.notify_one();
         if let Some(maintenance) = maintenance { maintenance.await?; }
         // Blocking work retains its admission and library lock after a disconnected request is cancelled.
-        // New requests already get 503 before any database work, so wait for the rest, but not forever.
-        if tokio::time::timeout(std::time::Duration::from_secs(30), async { while work_permits.available_permits()!=64 { tokio::time::sleep(std::time::Duration::from_millis(50)).await; } }).await.is_err() {
-            eprintln!("shutdown: requests still running after 30 s; finishing anyway");
+        // New requests already get 503 before any database work. A request still running after the
+        // limit is reported, then waited for: the runtime could not exit before it ends anyway, and the
+        // checkpoint and the library lock belong after it.
+        let drained = || async { while work_permits.available_permits()!=64 { tokio::time::sleep(std::time::Duration::from_millis(50)).await; } };
+        if tokio::time::timeout(DRAIN_LIMIT, drained()).await.is_err() {
+            eprintln!("shutdown: a request is still running after {} s; waiting for it", DRAIN_LIMIT.as_secs());
+            let _ = finished.send(Some(json!({"finished":false,"busy":true})));
+            drained().await;
         }
         let complete = if library.writable() { let owner=library.clone(); tokio::task::spawn_blocking(move||owner.final_checkpoint()).await? } else { true };
-        let _ = finished.send(Some(complete));
+        let _ = finished.send(Some(json!({"finished":true,"checkpoint":if complete {"complete"} else {"incomplete"}})));
         if tokio::time::timeout(std::time::Duration::from_secs(2), async { while connections.join_next().await.is_some() {} }).await.is_err() { connections.abort_all(); while connections.join_next().await.is_some() {} }
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
@@ -3519,16 +3548,53 @@ mod tests {
         stream.read_to_string(&mut out).unwrap();
         out
     }
-    fn body(response: &str) -> Value {
-        serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap_or_default())
-            .unwrap_or_default()
-    }
     fn wait_request(port: u16, token: Option<&str>) -> String {
         let header = token.map_or(String::new(), |t| format!("X-Shutdown-Token: {t}\r\n"));
         format!(
             "GET /api/shutdown/wait HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: ke_truyen_session={}\r\n{header}Connection: close\r\n\r\n",
             token.unwrap_or("x")
         )
+    }
+    /// Sends the wait request and returns once its headers arrived, so the answer channel is open
+    /// before the shutdown starts.
+    fn open_wait(port: u16, token: &str) -> std::net::TcpStream {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
+        stream
+            .write_all(wait_request(port, Some(token)).as_bytes())
+            .unwrap();
+        let (mut head, mut byte) = (Vec::new(), [0u8]);
+        while !head.ends_with(b"\r\n\r\n") {
+            stream
+                .read_exact(&mut byte)
+                .expect("the wait headers arrive at once");
+            head.push(byte[0]);
+        }
+        assert!(
+            head.starts_with(b"HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
+        stream
+    }
+    /// Reads the rest of a chunked wait answer.
+    fn wait_answer(mut stream: std::net::TcpStream) -> Value {
+        use std::io::Read;
+        let mut rest = String::new();
+        stream.read_to_string(&mut rest).unwrap();
+        let mut data = String::new();
+        while let Some((size, tail)) = rest.split_once("\r\n") {
+            let size = usize::from_str_radix(size, 16).unwrap();
+            if size == 0 {
+                break;
+            }
+            data.push_str(&tail[..size]);
+            rest = tail[size + 2..].to_owned();
+        }
+        serde_json::from_str(&data).unwrap()
     }
     /// Serves `library`, then returns its port, its session token and the server thread.
     fn serve_for_test(
@@ -3580,19 +3646,11 @@ mod tests {
         let wal = std::path::PathBuf::from(format!("{}-wal", fixture.db.display()));
         let (port, token, server) = serve_for_test(library);
         assert!(raw_http(port, &wait_request(port, None)).starts_with("HTTP/1.1 403"));
-        let waiter = std::thread::spawn({
-            let token = token.clone();
-            move || raw_http(port, &wait_request(port, Some(&token)))
-        });
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        let waiter = open_wait(port, &token);
         assert!(shut_down(port, &token).starts_with("HTTP/1.1 200"));
-        let finished = waiter.join().unwrap();
+        let finished = wait_answer(waiter);
         let wal_size = std::fs::metadata(&wal).map_or(0, |m| m.len());
-        assert!(finished.starts_with("HTTP/1.1 200"), "{finished}");
-        assert_eq!(
-            body(&finished),
-            json!({"finished":true,"checkpoint":"complete"})
-        );
+        assert_eq!(finished, json!({"finished":true,"checkpoint":"complete"}));
         assert_eq!(wal_size, 0, "the WAL was emptied before the answer");
         server.join().unwrap().unwrap();
     }
@@ -3625,23 +3683,53 @@ mod tests {
         );
     }
     #[test]
+    fn shutdown_reports_a_stuck_request_and_finishes_after_it_ends() {
+        use std::io::{Read, Write};
+        let (fixture, library) = crate::reader::tests::writable();
+        let (port, token, server) = serve_for_test(library);
+        // Admission is taken before the body is read, so a held-back body keeps the request running.
+        let payload = r#"{"drain-test":1}"#;
+        let mut stuck = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stuck.write_all(format!("POST /api/settings HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: ke_truyen_session={token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", payload.len(), &payload[..1]).as_bytes()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200)); // the request is admitted before shutdown
+        let waiter = open_wait(port, &token);
+        let started = std::time::Instant::now();
+        assert!(shut_down(port, &token).starts_with("HTTP/1.1 200"));
+        let answer = wait_answer(waiter);
+        assert!(started.elapsed() >= DRAIN_LIMIT, "{:?}", started.elapsed());
+        assert_eq!(answer, json!({"finished":false,"busy":true}));
+        // Past the 2 s that open connections get before they are cut.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        assert!(
+            !server.is_finished(),
+            "the server waits for the request instead of exiting"
+        );
+        stuck.write_all(&payload.as_bytes()[1..]).unwrap();
+        let mut reply = String::new();
+        stuck.read_to_string(&mut reply).unwrap();
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        server.join().unwrap().unwrap();
+        let saved: String = rusqlite::Connection::open(&fixture.db)
+            .unwrap()
+            .query_row(
+                "SELECT value FROM settings WHERE key='drain-test'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, "1");
+    }
+    #[test]
     fn shutdown_finishes_and_reports_an_incomplete_checkpoint() {
         let (fixture, library) = crate::reader::tests::writable();
         let reader = blocking_reader(&fixture.db);
         let (port, token, server) = serve_for_test(library);
-        let waiter = std::thread::spawn({
-            let token = token.clone();
-            move || raw_http(port, &wait_request(port, Some(&token)))
-        });
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        let waiter = open_wait(port, &token);
         let started = std::time::Instant::now();
         assert!(shut_down(port, &token).starts_with("HTTP/1.1 200"));
-        let finished = waiter.join().unwrap();
+        let finished = wait_answer(waiter);
         assert!(started.elapsed() < std::time::Duration::from_secs(15));
-        assert_eq!(
-            body(&finished),
-            json!({"finished":true,"checkpoint":"incomplete"})
-        );
+        assert_eq!(finished, json!({"finished":true,"checkpoint":"incomplete"}));
         server.join().unwrap().unwrap();
         drop(reader);
     }

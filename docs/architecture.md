@@ -79,8 +79,12 @@ app is `491c059`.
   - The reply reports freed, pending-file and SQLite-reusable bytes separately.
 - **Shutdown ends with a bounded checkpoint.**
   - `final_checkpoint` tries `wal_checkpoint(TRUNCATE)` at most 5 times within 8 s.
-  - `/api/shutdown/wait` then answers `complete` or `incomplete`, and the window closes only on
-    `complete`.
+  - `/api/shutdown/wait` sends its headers at once, and the window asks for the shutdown only after
+    they arrive, so the answer can't be lost when the listener closes. The body then says
+    `complete` or `incomplete`, and the window closes only on `complete`.
+  - A request still running after 30 s is reported as `busy` and then waited for, without a limit
+    and without killing it: the runtime can't exit before blocking work ends anyway. The checkpoint
+    runs after it, and the library lock is released last. The window stays open and says so.
   - `incomplete` is not data loss: committed transactions stay in the WAL and are applied at the
     next open.
 
