@@ -425,11 +425,12 @@ async function bookDetail(initial, fromSource = false) {
 
 // ---- Tải xuống: job progress polled every 2 s only while it can change and is visible ----
 const jobStatuses = { queued: 'Đang chờ', running: 'Đang tải', paused: 'Tạm dừng', verification_required: 'Chờ xác minh CAPTCHA', completed: 'Hoàn tất', failed: 'Lỗi', cancelled: 'Đã hủy' };
-const poller = { timer: 0, generation: 0, inFlight: false, pending: false, offset: 0, active: new Set() };
+const poller = { timer: 0, generation: 0, inFlight: false, pending: false, failed: false, offset: 0, active: new Set() };
+// The one rule for polling: it runs only while this is true, checked again whenever the timer fires.
 const pollable = () => state.activeView === 'downloads' && $('reader').hidden && document.visibilityState === 'visible';
 function schedulePoll() {
   clearTimeout(poller.timer);
-  if (pollable() && !poller.inFlight && poller.active.size) poller.timer = setTimeout(pollJobs, 2000);
+  if (pollable() && !poller.inFlight && (poller.active.size || poller.failed)) poller.timer = setTimeout(() => { if (pollable()) pollJobs(); }, 2000);
 }
 function stopPolling() { clearTimeout(poller.timer); poller.generation++; poller.pending = false; }
 // An immediate refresh that never overlaps one already in flight.
@@ -448,11 +449,13 @@ async function pollJobs() {
       const active = new Set(jobs.filter((job) => ['queued', 'running'].includes(job.status)).map((job) => job.id));
       const ended = [...poller.active].some((id) => !active.has(id));
       poller.active = active;
+      poller.failed = false;
       renderJobs(jobs, page.next_offset);
       if (ended) renderDownloaded();
     }
   } catch (error) {
-    if (generation === poller.generation) { poller.active = new Set(); $('download-jobs').replaceChildren(el('p', { class: 'inline-error', text: error.message })); }
+    // A failed request is retried on the same 2 s cadence.
+    if (generation === poller.generation) { poller.failed = true; $('download-jobs').replaceChildren(el('p', { class: 'inline-error', text: error.message })); }
   } finally {
     poller.inFlight = false;
     if (poller.pending && pollable()) { poller.pending = false; pollJobs(); } else { poller.pending = false; schedulePoll(); }
@@ -551,7 +554,7 @@ async function renderDownloaded(offset = 0) {
     const info = el('div', { class: 'saved-info' }, [el('h3', {}, [book.name || 'Chưa có tên', el('span', { class: `saved-badge${book.archived ? ' off' : ''}`, text: book.archived ? 'Ngoài kệ' : 'Trên kệ' })]), el('p', { class: 'muted', text: `${sourceName(book.source)} · Đã tải ${book.downloaded_count}/${book.chapter_count || '?'} chương` })]);
     const actions = [el('button', { class: 'button danger', text: 'Xóa nội dung đã tải', onclick: () => clearDownloads(book, refresh) })];
     if (book.archived) actions.push(el('button', { class: 'button', text: 'Thêm vào kệ', onclick: () => putOnShelf(book, refresh) }));
-    actions.push(el('button', { class: 'button primary', text: 'Đọc', onclick: () => { stopPolling(); openSaved(book, refresh); } }));
+    actions.push(el('button', { class: 'button primary', text: 'Đọc', onclick: () => openSaved(book, refresh) }));
     return el('article', { class: 'saved-row' }, [cover(book), info, el('div', { class: 'header-actions' }, actions)]);
   });
   if (!rows.length) rows.push(el('p', { class: 'muted', text: 'Chưa có truyện nào được tải để đọc offline.' }));
@@ -614,26 +617,37 @@ async function openSaved(book, refresh) {
   let fresh;
   try { fresh = await api(`/api/books/${encodeURIComponent(book.id)}`); }
   catch (error) {
-    if (error.http_status !== 404) { notify(error.message, true); return; }
-    const status = el('p', { class: 'inline-error', role: 'alert', hidden: true });
-    const reopen = el('button', { class: 'button primary', text: 'Mở lại từ nguồn', onclick: async () => {
-      reopen.disabled = true; status.hidden = true;
-      try {
-        const added = await api(`/api/sources/${encodeURIComponent(book.source)}/add`, { url: book.path, shelf: false });
-        dialog.close();
-        reader.open(added.book || added, book.chapter_index || 0, book.position || 0);
-      } catch (problem) { status.textContent = problem.message; status.hidden = false; reopen.disabled = false; }
-    } });
-    const dialog = showDialog('Mục lịch sử đã hết hạn', [el('p', { text: 'Mục lịch sử này đã hết hạn và dữ liệu tạm đã được dọn.' }), status], [el('button', { class: 'button', text: 'Đóng', onclick: () => dialog.close() }), reopen]);
-    refresh?.();
+    if (error.http_status === 404) expiredEntry(book, refresh, false); else notify(error.message, true);
     return;
   }
   reader.open(fresh);
 }
 
+// A row whose record was cleaned up: fetch it again from its source (the add route finds or
+// creates the one record for that address) and carry the row's reading position over.
+function expiredEntry(book, refresh, toShelf) {
+  const status = el('p', { class: 'inline-error', role: 'alert', hidden: true });
+  const again = el('button', { class: 'button primary', text: toShelf ? 'Thêm lại từ nguồn' : 'Mở lại từ nguồn', onclick: async () => {
+    again.disabled = true; status.hidden = true;
+    try {
+      const added = await api(`/api/sources/${encodeURIComponent(book.source)}/add`, { url: book.path, shelf: toShelf });
+      const fresh = added.book || added;
+      dialog.close();
+      if (!toShelf) { reader.open(fresh, book.chapter_index || 0, book.position || 0); return; }
+      if (book.chapter_index || book.position) await api(`/api/books/${encodeURIComponent(fresh.id)}/progress`, { index: book.chapter_index || 0, position: book.position || 0 }).catch(() => {});
+      notify('Đã thêm vào kệ.'); refreshShelfCount(); refresh?.();
+    } catch (problem) { status.textContent = problem.message; status.hidden = false; again.disabled = false; }
+  } });
+  const dialog = showDialog('Mục lịch sử đã hết hạn', [el('p', { text: 'Mục lịch sử này đã hết hạn và dữ liệu tạm đã được dọn.' }), status], [el('button', { class: 'button', text: 'Đóng', onclick: () => dialog.close() }), again]);
+  refresh?.();
+}
+
 async function putOnShelf(book, refresh) {
   try { await api(`/api/books/${encodeURIComponent(book.id)}/update`, { archived: false }); notify('Đã thêm vào kệ.'); refreshShelfCount(); }
-  catch (error) { notify(error.message, true); }
+  catch (error) {
+    if (error.http_status === 404) { expiredEntry(book, refresh, true); return; }
+    notify(error.message, true);
+  }
   refresh();
 }
 
