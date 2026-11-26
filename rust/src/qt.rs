@@ -209,6 +209,27 @@ impl QtDictionary {
         Ok(result)
     }
 
+    /// Book ids with entries of their own. Each step seeks the next (kind, scope) pair on the
+    /// primary key, so the cost follows the number of scopes, not the number of entries.
+    pub(crate) fn book_scopes(&self) -> Result<Vec<String>, ApiError> {
+        let db = self.reader()?;
+        let mut next = db.prepare(
+            "SELECT kind,scope FROM entries WHERE (kind,scope)>(?1,?2) ORDER BY kind,scope LIMIT 1",
+        )?;
+        let (mut kind, mut scope) = (String::new(), String::new());
+        let mut books = std::collections::BTreeSet::new();
+        while let Some(pair) = next
+            .query_row(params![kind, scope], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+        {
+            (kind, scope) = pair;
+            if scope != "*" {
+                books.insert(scope.clone());
+            }
+        }
+        Ok(books.into_iter().collect())
+    }
+
     pub fn status(&self) -> Result<Value, ApiError> {
         let db = self.reader()?;
         let counts = rows(

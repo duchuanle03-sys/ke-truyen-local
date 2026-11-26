@@ -16,12 +16,13 @@ pub(crate) enum Rule {
     OffShelf,
 }
 
-/// Which books `rule` may delete. `?1` is the cutoff, `?2` the current time.
+/// Which books `rule` may delete. `?1` is the cutoff, `?2` the current time, `?3` a JSON array
+/// of book ids whose own QT dictionary entries keep them off-shelf.
 fn predicate(rule: Rule) -> String {
     match rule {
         Rule::Trash => format!(
             "(b.trashed_at>0)=1 AND b.trashed_at<=?1 AND ?2=?2
-             AND NOT EXISTS(SELECT 1 FROM download_jobs WHERE book_id=b.id AND {ACTIVE_JOB})"
+             AND NOT EXISTS(SELECT 1 FROM download_jobs WHERE book_id=b.id AND {ACTIVE_JOB}) AND ?3=?3"
         ),
         // Saved content is read from `chapters` itself, so a library whose chapter-cache
         // inventory is still being built never looks empty.
@@ -33,7 +34,8 @@ fn predicate(rule: Rule) -> String {
                  SELECT 1 FROM chapter_cache k WHERE k.book_id=c.book_id AND k.idx=c.idx AND k.kind='cache' AND k.offline=0))))
              AND NOT EXISTS(SELECT 1 FROM notes WHERE book_id=b.id)
              AND NOT EXISTS(SELECT 1 FROM download_jobs WHERE book_id=b.id AND {ACTIVE_JOB})
-             AND NOT EXISTS(SELECT 1 FROM chapter_readers WHERE book_id=b.id AND expires>?2)"
+             AND NOT EXISTS(SELECT 1 FROM chapter_readers WHERE book_id=b.id AND expires>?2)
+             AND b.id NOT IN (SELECT value FROM json_each(?3))"
         ),
     }
 }
@@ -61,12 +63,15 @@ pub(crate) fn candidate_sql(rule: Rule) -> String {
 pub(crate) fn next_candidate(
     db: &Connection,
     now: f64,
+    dictionary_books: &str,
 ) -> Result<Option<(String, Rule)>, ApiError> {
     for rule in [Rule::Trash, Rule::OffShelf] {
         if let Some(id) = db
-            .query_row(&candidate_sql(rule), params![cutoff(rule, now), now], |r| {
-                r.get::<_, String>(0)
-            })
+            .query_row(
+                &candidate_sql(rule),
+                params![cutoff(rule, now), now, dictionary_books],
+                |r| r.get::<_, String>(0),
+            )
             .optional()?
         {
             return Ok(Some((id, rule)));
@@ -242,7 +247,14 @@ impl Library {
     /// The maintenance step: delete at most one expired Trash entry or off-shelf record.
     pub fn purge_expired_book(&self) -> Result<bool, ApiError> {
         let db = self.reader_connection()?;
-        let candidate = next_candidate(&db, now())?;
+        let mut candidate = next_candidate(&db, now(), "[]")?;
+        // The QT database is read only when an off-shelf record is due (Trash comes first).
+        if matches!(candidate, Some((_, Rule::OffShelf))) {
+            let Some(books) = self.dictionary_books() else {
+                return Ok(false);
+            };
+            candidate = next_candidate(&db, now(), &books)?;
+        }
         drop(db);
         let Some((book, rule)) = candidate else {
             return Ok(false);
@@ -254,6 +266,13 @@ impl Library {
     /// held from the check until commit (the lock order `evict_chapters` uses), so a lease taken
     /// meanwhile waits and then finds the book gone instead of racing the delete.
     pub(crate) fn purge_if_eligible(&self, book: &str, rule: Rule) -> Result<bool, ApiError> {
+        let books = match rule {
+            Rule::Trash => "[]".to_owned(),
+            Rule::OffShelf => match self.dictionary_books() {
+                Some(books) => books,
+                None => return Ok(false),
+            },
+        };
         let mut db = self.write_connection()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let leases = self.chapter_leases.lock();
@@ -263,10 +282,10 @@ impl Library {
         let time = now();
         let eligible: bool = tx.query_row(
             &format!(
-                "SELECT EXISTS(SELECT 1 FROM books b WHERE b.id=?3 AND {})",
+                "SELECT EXISTS(SELECT 1 FROM books b WHERE b.id=?4 AND {})",
                 predicate(rule)
             ),
-            params![cutoff(rule, time), time, book],
+            params![cutoff(rule, time), time, books, book],
             |r| r.get(0),
         )?;
         if !eligible {
@@ -280,6 +299,16 @@ impl Library {
         tx.commit()?;
         drop(leases);
         Ok(true)
+    }
+}
+
+impl Library {
+    /// Book ids with their own QT entries, as a JSON array; `None` (keep every off-shelf book)
+    /// when the dictionary can't be read. Adding entries needs an open reader, which already
+    /// keeps the book, so reading this outside the purge transaction leaves no gap.
+    fn dictionary_books(&self) -> Option<String> {
+        let books = self.qt().and_then(|qt| qt.book_scopes()).ok()?;
+        Some(json!(books).to_string())
     }
 }
 

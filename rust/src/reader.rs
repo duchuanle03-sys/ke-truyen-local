@@ -1647,7 +1647,7 @@ pub(crate) mod tests {
                 candidate_sql(Rule::OffShelf)
             ))
             .unwrap()
-            .query_map(params![now(), now()], |r| r.get::<_, String>(3))
+            .query_map(params![now(), now(), "[]"], |r| r.get::<_, String>(3))
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -1685,6 +1685,28 @@ pub(crate) mod tests {
         exec(&library, undo);
         assert!(library.purge_expired_book().unwrap(), "{undo}");
         assert!(!present(&library, "web"), "{undo}");
+    }
+    #[test]
+    fn off_shelf_gc_keeps_a_book_with_its_own_dictionary_and_moves_past_it() {
+        let (_fixture, library) = online();
+        stale_off_shelf(&library, "web");
+        let qt = library.qt().unwrap();
+        qt.save("rules", "a", "b", "web").unwrap();
+        exec(
+            &library,
+            "INSERT INTO books(id,name,source,path,chapter_count,archived,added_at,updated_at,read_at)
+             VALUES('bare','Trống','full','https://truyenfull.live/trong/',0,1,1,1,1)",
+        );
+        assert!(library.purge_expired_book().unwrap());
+        assert!(
+            !present(&library, "bare"),
+            "the record behind it is still cleaned"
+        );
+        assert!(!library.purge_expired_book().unwrap());
+        assert!(present(&library, "web"), "its dictionary entries keep it");
+        qt.delete("rules", "a", "web").unwrap();
+        assert!(library.purge_expired_book().unwrap());
+        assert!(!present(&library, "web"));
     }
     const UNDOWNLOAD: &str = "UPDATE chapters SET downloaded=0 WHERE book_id='web' AND idx=1";
     #[test]
@@ -1823,7 +1845,8 @@ pub(crate) mod tests {
         for (n, change) in changes.iter().enumerate() {
             let (_fixture, library) = online();
             stale_off_shelf(&library, "web");
-            let candidate = next_candidate(&library.reader_connection().unwrap(), now()).unwrap();
+            let candidate =
+                next_candidate(&library.reader_connection().unwrap(), now(), "[]").unwrap();
             assert!(
                 matches!(candidate, Some((ref id, Rule::OffShelf)) if id == "web"),
                 "{n}"

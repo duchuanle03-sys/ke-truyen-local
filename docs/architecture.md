@@ -65,8 +65,9 @@ app is `491c059`.
   - The maintenance step (`purge_expired_book`, after the Trash rule) deletes one off-shelf record
     per tick, only when it is untouched for 31 days and holds nothing saved.
   - Saved content is checked on `chapters` itself: downloaded but not plain cache, or edited. Notes,
-    an active job, an open reader, a held chapter lease, groups and non-web sources also keep the
-    record.
+    the book's own QT dictionary entries, an active job, an open reader, a held chapter lease, groups
+    and non-web sources also keep the record. The QT database is read only when an off-shelf record
+    is due, with one primary-key seek per (kind, scope) pair.
   - The re-check and delete run in one IMMEDIATE transaction with the `chapter_leases` mutex held
     until commit, the same order `evict_chapters` uses. A lease taken meanwhile waits, then finds
     the book gone.
