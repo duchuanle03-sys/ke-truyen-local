@@ -6,7 +6,74 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
 
 const TRASH_RETENTION: f64 = 30.0 * 24.0 * 60.0 * 60.0;
+/// Off-shelf records are cleaned one day after they leave the 30-day History.
+const HISTORY_GC: f64 = 31.0 * 24.0 * 60.0 * 60.0;
 const ACTIVE_JOB: &str = "status IN ('queued','running','paused','verification_required')";
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Rule {
+    Trash,
+    OffShelf,
+}
+
+/// Which books `rule` may delete. `?1` is the cutoff, `?2` the current time.
+fn predicate(rule: Rule) -> String {
+    match rule {
+        Rule::Trash => format!(
+            "(b.trashed_at>0)=1 AND b.trashed_at<=?1 AND ?2=?2
+             AND NOT EXISTS(SELECT 1 FROM download_jobs WHERE book_id=b.id AND {ACTIVE_JOB})"
+        ),
+        // Saved content is read from `chapters` itself, so a library whose chapter-cache
+        // inventory is still being built never looks empty.
+        Rule::OffShelf => format!(
+            "(b.trashed_at>0)=0 AND b.archived=1 AND b.updated_at<?1 AND b.read_at<?1
+             AND b.source IN ('qq','full','hako','stv') AND b.groups_json='[]'
+             AND NOT EXISTS(SELECT 1 FROM chapters c WHERE c.book_id=b.id AND (
+                 c.original_html IS NOT NULL OR c.original_text IS NOT NULL OR (c.downloaded=1 AND NOT EXISTS(
+                 SELECT 1 FROM chapter_cache k WHERE k.book_id=c.book_id AND k.idx=c.idx AND k.kind='cache' AND k.offline=0))))
+             AND NOT EXISTS(SELECT 1 FROM notes WHERE book_id=b.id)
+             AND NOT EXISTS(SELECT 1 FROM download_jobs WHERE book_id=b.id AND {ACTIVE_JOB})
+             AND NOT EXISTS(SELECT 1 FROM chapter_readers WHERE book_id=b.id AND expires>?2)"
+        ),
+    }
+}
+
+fn cutoff(rule: Rule, now: f64) -> f64 {
+    now - match rule {
+        Rule::Trash => TRASH_RETENTION,
+        Rule::OffShelf => HISTORY_GC,
+    }
+}
+
+pub(crate) fn candidate_sql(rule: Rule) -> String {
+    let index = if rule == Rule::OffShelf {
+        " INDEXED BY books_shelf_updated"
+    } else {
+        ""
+    };
+    format!(
+        "SELECT b.id FROM books b{index} WHERE {} LIMIT 1",
+        predicate(rule)
+    )
+}
+
+/// The next book to clean up: an expired Trash entry first, then an expired off-shelf record.
+pub(crate) fn next_candidate(
+    db: &Connection,
+    now: f64,
+) -> Result<Option<(String, Rule)>, ApiError> {
+    for rule in [Rule::Trash, Rule::OffShelf] {
+        if let Some(id) = db
+            .query_row(&candidate_sql(rule), params![cutoff(rule, now), now], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+        {
+            return Ok(Some((id, rule)));
+        }
+    }
+    Ok(None)
+}
 
 impl Library {
     pub(crate) fn edit_chapter(
@@ -172,33 +239,47 @@ impl Library {
         Ok(json!({"id":book,"deleted":true}))
     }
 
-    pub(crate) fn purge_expired_book(&self) -> Result<bool, ApiError> {
-        let mut db = self.write_connection()?;
-        let cutoff = now() - TRASH_RETENTION;
-        let candidate = format!(
-            "SELECT id FROM books b WHERE (trashed_at>0)=1 AND trashed_at<=?
-             AND NOT EXISTS(SELECT 1 FROM download_jobs WHERE book_id=b.id AND {ACTIVE_JOB}) LIMIT 1"
-        );
-        let Some(book) = db
-            .query_row(&candidate, [cutoff], |r| r.get::<_, String>(0))
-            .optional()?
-        else {
+    /// The maintenance step: delete at most one expired Trash entry or off-shelf record.
+    pub fn purge_expired_book(&self) -> Result<bool, ApiError> {
+        let db = self.reader_connection()?;
+        let candidate = next_candidate(&db, now())?;
+        drop(db);
+        let Some((book, rule)) = candidate else {
             return Ok(false);
         };
+        self.purge_if_eligible(&book, rule)
+    }
+
+    /// Re-checks `book` and deletes it in one IMMEDIATE transaction. The chapter-lease mutex is
+    /// held from the check until commit (the lock order `evict_chapters` uses), so a lease taken
+    /// meanwhile waits and then finds the book gone instead of racing the delete.
+    pub(crate) fn purge_if_eligible(&self, book: &str, rule: Rule) -> Result<bool, ApiError> {
+        let mut db = self.write_connection()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let expired: bool = tx.query_row(
+        let leases = self.chapter_leases.lock();
+        if leases.keys().any(|(id, _)| id == book) {
+            return Ok(false);
+        }
+        let time = now();
+        let eligible: bool = tx.query_row(
             &format!(
-                "SELECT EXISTS(SELECT 1 FROM books b WHERE id=? AND trashed_at>0 AND trashed_at<=?
-              AND NOT EXISTS(SELECT 1 FROM download_jobs WHERE book_id=b.id AND {ACTIVE_JOB}))"
+                "SELECT EXISTS(SELECT 1 FROM books b WHERE b.id=?3 AND {})",
+                predicate(rule)
             ),
-            params![book, cutoff],
+            params![cutoff(rule, time), time, book],
             |r| r.get(0),
         )?;
-        if expired {
-            purge(&tx, &book)?;
+        if !eligible {
+            return Ok(false);
         }
+        #[cfg(test)]
+        if let Some(hook) = self.purge_hook.lock().unwrap().as_ref() {
+            hook();
+        }
+        purge(&tx, book)?;
         tx.commit()?;
-        Ok(expired)
+        drop(leases);
+        Ok(true)
     }
 }
 

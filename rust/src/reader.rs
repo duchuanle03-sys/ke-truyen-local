@@ -1338,6 +1338,514 @@ pub(crate) mod tests {
         assert_eq!(error.status, 404);
         assert!(library.notes(Some("missing")).unwrap()[0].is_null());
     }
+    // ---- Off-shelf clean-up (History GC) ----
+    use crate::chapters::{Rule, candidate_sql, next_candidate};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const DAY: f64 = 86400.0;
+    fn exec(library: &Library, sql: &str) {
+        library
+            .write_connection()
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
+    }
+    fn drain(step: impl Fn(&AtomicBool) -> Result<usize, ApiError>) {
+        let stop = AtomicBool::new(false);
+        while step(&stop).unwrap() > 0 {}
+    }
+    /// Makes `web` an off-shelf book untouched for 32 days, with nothing saved.
+    fn stale_off_shelf(library: &Library, id: &str) {
+        let old = now() - 32.0 * DAY;
+        let db = library.write_connection().unwrap();
+        db.execute("UPDATE chapters SET downloaded=0 WHERE book_id=?", [id])
+            .unwrap();
+        db.execute(
+            "UPDATE books SET archived=1,read_at=?,updated_at=? WHERE id=?",
+            params![old, old, id],
+        )
+        .unwrap();
+        drop(db);
+        drain(|s| library.index_assets(s));
+    }
+    fn present(library: &Library, id: &str) -> bool {
+        library.get_book(id).is_ok()
+    }
+    fn count(library: &Library, sql: &str) -> i64 {
+        library
+            .reader_connection()
+            .unwrap()
+            .query_row(sql, [], |r| r.get(0))
+            .unwrap()
+    }
+    fn image_name(url: &str) -> String {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(url.as_bytes()))
+    }
+    fn web_detail(path: &str) -> Value {
+        json!({"name":"Truyện mạng","author":"","source":"full","path":path,"cover":"","kind":"text",
+            "format":"online","description":"","chapters":(0..4).map(|n| json!({"title":format!("Chương {n}"),
+            "url":format!("{ONLINE_BOOK}chuong-{n}/")})).collect::<Vec<_>>()})
+    }
+    #[test]
+    fn off_shelf_gc_uses_the_updated_index() {
+        let (_fixture, library) = online();
+        let db = library.reader_connection().unwrap();
+        let plan = db
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                candidate_sql(Rule::OffShelf)
+            ))
+            .unwrap()
+            .query_map(params![now(), now()], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|l| l.starts_with("SEARCH b") && l.contains("books_shelf_updated")),
+            "{plan:?}"
+        );
+        assert!(!plan.iter().any(|l| l.starts_with("SCAN b")), "{plan:?}");
+    }
+    #[test]
+    fn off_shelf_gc_purges_a_cache_only_book_and_queues_its_assets() {
+        let (_fixture, library) = online();
+        library.prefetch_chapter("web", 2, &|| false).unwrap();
+        stale_off_shelf(&library, "web");
+        let refs = "SELECT count(*) FROM asset_refs WHERE book_id='web'";
+        assert!(count(&library, refs) > 0);
+        let queued = count(&library, "SELECT count(*) FROM asset_gc_candidates");
+        assert!(library.purge_expired_book().unwrap());
+        assert!(!present(&library, "web"));
+        assert_eq!(count(&library, refs), 0);
+        assert!(count(&library, "SELECT count(*) FROM asset_gc_candidates") > queued);
+        assert_eq!(
+            count(&library, "SELECT count(*) FROM pragma_foreign_key_check"),
+            0
+        );
+    }
+    /// Each keep condition blocks the purge, and removing it lets the purge happen.
+    fn keeps(setup: &str, undo: &str) {
+        let (_fixture, library) = online();
+        stale_off_shelf(&library, "web");
+        exec(&library, setup);
+        assert!(!library.purge_expired_book().unwrap(), "{setup}");
+        assert!(present(&library, "web"), "{setup}");
+        exec(&library, undo);
+        assert!(library.purge_expired_book().unwrap(), "{undo}");
+        assert!(!present(&library, "web"), "{undo}");
+    }
+    const UNDOWNLOAD: &str = "UPDATE chapters SET downloaded=0 WHERE book_id='web' AND idx=1";
+    #[test]
+    fn off_shelf_gc_keeps_an_offline_chapter() {
+        keeps(
+            "UPDATE chapters SET text='x',downloaded=1 WHERE book_id='web' AND idx=1;
+             UPDATE chapter_cache SET kind='protected',offline=1 WHERE book_id='web' AND idx=1",
+            UNDOWNLOAD,
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_a_legacy_chapter() {
+        keeps(
+            "UPDATE chapters SET text='x',downloaded=1 WHERE book_id='web' AND idx=1",
+            UNDOWNLOAD,
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_a_download_whose_cache_inventory_is_not_built_yet() {
+        keeps(
+            "UPDATE chapters SET text='x',downloaded=1 WHERE book_id='web' AND idx=1;
+             DELETE FROM chapter_cache WHERE book_id='web' AND idx=1",
+            UNDOWNLOAD,
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_an_edited_chapter() {
+        keeps(
+            "UPDATE chapters SET original_html='<p>gốc</p>' WHERE book_id='web' AND idx=2",
+            "UPDATE chapters SET original_html=NULL WHERE book_id='web' AND idx=2",
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_a_note() {
+        keeps(
+            "INSERT INTO notes(id,book_id,created_at) VALUES('n','web',1)",
+            "DELETE FROM notes",
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_every_active_download_job() {
+        for status in ["queued", "running", "paused", "verification_required"] {
+            keeps(
+                &format!(
+                    "INSERT INTO download_jobs(id,book_id,status,data,created_at,updated_at) VALUES('j','web','{status}','{{}}',1,1)"
+                ),
+                "DELETE FROM download_jobs",
+            );
+        }
+    }
+    #[test]
+    fn off_shelf_gc_keeps_an_open_reader() {
+        keeps(
+            &format!(
+                "INSERT INTO chapter_readers(id,book_id,idx,sequence,expires) VALUES('r','web',0,1,{})",
+                now() + 60.0
+            ),
+            "DELETE FROM chapter_readers",
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_a_book_hidden_from_history_but_inside_the_grace_day() {
+        keeps(
+            &format!(
+                "UPDATE books SET read_at={} WHERE id='web'",
+                now() - 30.5 * DAY
+            ),
+            &format!(
+                "UPDATE books SET read_at={} WHERE id='web'",
+                now() - 32.0 * DAY
+            ),
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_a_recently_updated_book() {
+        keeps(
+            &format!("UPDATE books SET updated_at={} WHERE id='web'", now()),
+            &format!(
+                "UPDATE books SET updated_at={} WHERE id='web'",
+                now() - 32.0 * DAY
+            ),
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_shelf_books_other_sources_and_grouped_books() {
+        keeps(
+            "UPDATE books SET archived=0 WHERE id='web'",
+            "UPDATE books SET archived=1 WHERE id='web'",
+        );
+        keeps(
+            "UPDATE books SET source='blog' WHERE id='web'",
+            "UPDATE books SET source='full' WHERE id='web'",
+        );
+        keeps(
+            r#"UPDATE books SET groups_json='["g"]' WHERE id='web'"#,
+            "UPDATE books SET groups_json='[]' WHERE id='web'",
+        );
+    }
+    #[test]
+    fn off_shelf_gc_keeps_a_book_with_a_held_chapter_lease() {
+        let (_fixture, library) = online();
+        stale_off_shelf(&library, "web");
+        let lease = library.chapter_leases.acquire(("web".into(), 1));
+        assert!(!library.purge_expired_book().unwrap());
+        assert!(present(&library, "web"));
+        drop(lease);
+        assert!(library.purge_expired_book().unwrap());
+        assert!(!present(&library, "web"));
+    }
+    #[test]
+    fn a_change_between_selection_and_purge_keeps_the_book() {
+        let changes: [&dyn Fn(&Library); 5] = [
+            &|l| {
+                l.save_note(&json!({"id":"n","book_id":"web"})).unwrap();
+            },
+            &|l| {
+                l.progress("web", &json!({"index":1,"position":0.2}))
+                    .unwrap();
+            },
+            &|l| {
+                exec(
+                    l,
+                    "INSERT INTO download_jobs(id,book_id,status,data,created_at,updated_at) VALUES('j','web','queued','{}',1,1)",
+                )
+            },
+            &|l| {
+                l.add_source_book(web_detail(ONLINE_BOOK), true).unwrap();
+            },
+            &|l| {
+                exec(
+                    l,
+                    "UPDATE chapters SET original_html='<p>gốc</p>' WHERE book_id='web' AND idx=3",
+                )
+            },
+        ];
+        for (n, change) in changes.iter().enumerate() {
+            let (_fixture, library) = online();
+            stale_off_shelf(&library, "web");
+            let candidate = next_candidate(&library.reader_connection().unwrap(), now()).unwrap();
+            assert!(
+                matches!(candidate, Some((ref id, Rule::OffShelf)) if id == "web"),
+                "{n}"
+            );
+            change(&library);
+            assert!(
+                !library.purge_if_eligible("web", Rule::OffShelf).unwrap(),
+                "change {n}"
+            );
+            assert!(present(&library, "web"), "change {n}");
+        }
+    }
+    #[test]
+    fn a_lease_taken_during_the_purge_waits_and_then_sees_the_book_gone() {
+        let (_fixture, library) = online();
+        stale_off_shelf(&library, "web");
+        let (signal, wait) = std::sync::mpsc::channel::<()>();
+        let acquired = std::sync::Arc::new(AtomicBool::new(false));
+        let seen = acquired.clone();
+        *library.purge_hook.lock().unwrap() = Some(Box::new(move || {
+            signal.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert!(
+                !seen.load(Ordering::Acquire),
+                "the lease waited for the purge"
+            );
+        }));
+        let (shared, flag) = (&library, &acquired);
+        std::thread::scope(|scope| {
+            let helper = scope.spawn(move || {
+                wait.recv().unwrap();
+                let _lease = shared.chapter_leases.acquire(("web".into(), 1));
+                flag.store(true, Ordering::Release);
+                shared.get_book("web").is_err()
+            });
+            assert!(library.purge_if_eligible("web", Rule::OffShelf).unwrap());
+            assert!(helper.join().unwrap(), "the late lease found the book gone");
+        });
+        assert_eq!(library.chapter("web", 1, None, 0).unwrap_err().status, 404);
+    }
+    #[test]
+    fn a_download_blocked_mid_fetch_blocks_gc_and_then_protects_the_book() {
+        let (_fixture, library) = online();
+        let library = std::sync::Arc::new(library);
+        stale_off_shelf(&library, "web");
+        let before = library.get_book("web").unwrap();
+        slow_images(&library, 150);
+        let owner = library.clone();
+        let jobs = crate::downloads::Downloads::open(library.clone(), move |job, control| {
+            owner.download_source_chapter(job, control)
+        })
+        .unwrap();
+        jobs.start("web", 2, 1).unwrap();
+        let status = || {
+            jobs.list(0).unwrap()["jobs"][0]["status"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while downloads(&library) == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(status(), "running");
+        assert!(!library.purge_expired_book().unwrap(), "mid-fetch");
+        while status() != "completed" {
+            assert!(std::time::Instant::now() < deadline, "{}", status());
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            !library.purge_expired_book().unwrap(),
+            "downloaded content is protected"
+        );
+        let after = library.get_book("web").unwrap();
+        assert_eq!(after["read_at"], before["read_at"]);
+        assert_eq!(after["updated_at"], before["updated_at"]);
+        jobs.join();
+    }
+    #[test]
+    fn background_work_never_touches_read_at_or_updated_at() {
+        let (_fixture, library) = online();
+        let library = std::sync::Arc::new(library);
+        let before = library.get_book("web").unwrap();
+        library.prefetch_chapter("web", 2, &|| false).unwrap();
+        let owner = library.clone();
+        let jobs = crate::downloads::Downloads::open(library.clone(), move |job, control| {
+            owner.download_source_chapter(job, control)
+        })
+        .unwrap();
+        jobs.start("web", 1, 1).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while jobs.list(0).unwrap()["jobs"][0]["status"] != "completed" {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        jobs.join();
+        let after = library.get_book("web").unwrap();
+        assert_eq!(after["read_at"], before["read_at"]);
+        assert_eq!(after["updated_at"], before["updated_at"]);
+    }
+    #[test]
+    fn prefetch_image_phase_in_flight_during_purge_leaves_ordinary_cache() {
+        let (_fixture, library) = online();
+        slow_images(&library, 300);
+        std::thread::scope(|scope| {
+            let prefetch = scope.spawn(|| library.prefetch_chapter("web", 2, &|| false));
+            while downloads(&library) == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            stale_off_shelf(&library, "web");
+            assert!(library.purge_expired_book().unwrap());
+            assert!(prefetch.join().unwrap().is_ok());
+        });
+        for table in [
+            "chapters",
+            "chapter_cache",
+            "asset_refs",
+            "asset_pending",
+            "image_pins",
+            "chapter_search_docs",
+            "notes",
+        ] {
+            assert_eq!(
+                count(
+                    &library,
+                    &format!("SELECT count(*) FROM {table} WHERE book_id='web'")
+                ),
+                0,
+                "{table}"
+            );
+        }
+        assert_eq!(
+            count(&library, "SELECT count(*) FROM pragma_foreign_key_check"),
+            0
+        );
+        let saved = count(&library, "SELECT count(*) FROM image_cache");
+        assert!(saved > 0);
+        assert_eq!(
+            count(
+                &library,
+                "SELECT count(*) FROM image_cache WHERE pin_count>0 OR protected"
+            ),
+            0
+        );
+    }
+    /// A shelf book `keep` with a downloaded chapter that pins `illustration(0)`.
+    fn keep_pinning_first_illustration(library: &Library) {
+        library
+            .save_source_image(&illustration(0), ONLINE_BOOK, None)
+            .unwrap();
+        let name = image_name(&illustration(0));
+        exec(library, &format!(
+            "INSERT INTO books(id,name,source,path,chapter_count,added_at,updated_at) VALUES('keep','Giữ','full','https://truyenfull.live/giu/',1,1,1);
+             INSERT INTO chapters(book_id,idx,title,url,html,images,downloaded) VALUES('keep',0,'C','https://truyenfull.live/giu/c/','','[\"{}\"]',1);
+             UPDATE chapter_cache SET kind='protected',offline=1 WHERE book_id='keep';
+             INSERT INTO image_pins VALUES('keep',0,'{name}')",
+            illustration(0)
+        ));
+        drain(|s| library.index_assets(s));
+    }
+    #[test]
+    fn a_shared_protected_image_survives_the_purge() {
+        let (_fixture, library) = online();
+        keep_pinning_first_illustration(&library);
+        library.prefetch_chapter("web", 2, &|| false).unwrap();
+        stale_off_shelf(&library, "web");
+        assert!(library.purge_expired_book().unwrap());
+        drain(|s| library.cleanup_assets(s));
+        assert!(cached_image(&library, &illustration(0)));
+        let name = image_name(&illustration(0));
+        assert!(
+            count(
+                &library,
+                &format!("SELECT pin_count FROM image_cache WHERE name='{name}'")
+            ) > 0
+        );
+    }
+    #[test]
+    fn leftover_prefetch_images_are_evicted_by_the_existing_size_limit() {
+        let (_fixture, library) = online();
+        keep_pinning_first_illustration(&library);
+        slow_images(&library, 100);
+        std::thread::scope(|scope| {
+            let prefetch = scope.spawn(|| library.prefetch_chapter("web", 2, &|| false));
+            while downloads(&library) < 2 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            stale_off_shelf(&library, "web");
+            assert!(library.purge_expired_book().unwrap());
+            prefetch.join().unwrap().unwrap();
+        });
+        let leftovers = "SELECT count(*) FROM image_cache WHERE pin_count=0";
+        assert!(
+            count(&library, leftovers) > 0,
+            "in-flight images land as unpinned cache"
+        );
+        library.set_image_cache_limit(&json!(1)).unwrap();
+        for _ in 0..3 {
+            drain(|s| library.queue_image_evictions(s));
+            drain(|s| library.cleanup_assets(s));
+        }
+        assert_eq!(count(&library, leftovers), 0);
+        assert!((1..10).all(|k| !cached_image(&library, &illustration(k))));
+        assert!(
+            cached_image(&library, &illustration(0)),
+            "the pinned image stays"
+        );
+    }
+    #[test]
+    fn a_leased_or_shared_cover_survives_the_purge() {
+        for shared in [true, false] {
+            let (_fixture, library) = online();
+            let cover = illustration(11);
+            library
+                .save_source_image(&cover, ONLINE_BOOK, None)
+                .unwrap();
+            exec(
+                &library,
+                &format!("UPDATE books SET cover='{cover}' WHERE id='web'"),
+            );
+            if shared {
+                exec(
+                    &library,
+                    &format!(
+                        "INSERT INTO books(id,name,source,path,cover,added_at,updated_at) VALUES('keep','Giữ','full','https://truyenfull.live/giu/','{cover}',1,1)"
+                    ),
+                );
+            }
+            stale_off_shelf(&library, "web");
+            let path = library.root().join("images").join(image_name(&cover));
+            let lease = library.asset_leases.acquire(path.clone());
+            assert!(library.purge_expired_book().unwrap());
+            drain(|s| library.cleanup_assets(s));
+            assert!(path.exists(), "leased cover kept (shared={shared})");
+            drop(lease);
+            // A leased file is retried after 1 s; let that delay pass.
+            exec(&library, "UPDATE asset_gc_candidates SET retry_at=0");
+            drain(|s| library.cleanup_assets(s));
+            assert_eq!(path.exists(), shared, "shared={shared}");
+        }
+    }
+    #[test]
+    fn preserved_off_shelf_book_is_found_again_with_notes_and_edits() {
+        let (_fixture, library) = online();
+        stale_off_shelf(&library, "web");
+        let old = now() - 32.0 * DAY;
+        exec(&library, &format!(
+            "INSERT INTO notes(id,book_id,created_at) VALUES('n','web',1);
+             UPDATE chapters SET html='<p>Đã sửa</p>',original_html='<p>gốc</p>',downloaded=1 WHERE book_id='web' AND idx=1;
+             INSERT INTO books(id,name,source,path,archived,read_at,added_at,updated_at) VALUES('gone','Tạm','full','https://truyenfull.live/tam/',1,{old},1,{old})"
+        ));
+        while library.purge_expired_book().unwrap() {}
+        assert!(!present(&library, "gone"));
+        let books = book_count(&library);
+        for path in [
+            ONLINE_BOOK,
+            "https://truyenfull.vision/truyen-a/",
+            "https://truyenfull.live/truyen-a.html",
+            "https://truyenfull.live/truyen-a",
+            "https://truyenfull.live/truyen-a/?ref=1",
+        ] {
+            let again = library.add_source_book(web_detail(path), false).unwrap();
+            assert_eq!(again["id"], "web", "{path}");
+            assert_eq!(book_count(&library), books, "{path}");
+        }
+        assert_eq!(library.notes(Some("web")).unwrap()[0]["id"], "n");
+        let chapter = library.chapter("web", 1, None, 0).unwrap();
+        assert!(
+            chapter["html"].as_str().unwrap().contains("Đã sửa"),
+            "{chapter}"
+        );
+    }
     #[test]
     fn progress_on_a_missing_book_is_not_found() {
         let (_fixture, library) = writable();

@@ -354,6 +354,9 @@ pub struct Library {
     pub(crate) asset_leases: crate::lifecycle::Leases<PathBuf>,
     pub(crate) database_gate: std::sync::RwLock<()>,
     pub(crate) critical_operations: crate::lifecycle::CriticalOperations,
+    /// Test-only: runs inside `purge_if_eligible` after the re-check, before the delete.
+    #[cfg(test)]
+    pub(crate) purge_hook: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 pub fn checked_path(path: &Path) -> Result<PathBuf, ApiError> {
     let absolute = std::path::absolute(path)?;
@@ -495,6 +498,8 @@ impl Library {
             asset_leases: Default::default(),
             database_gate: Default::default(),
             critical_operations: Default::default(),
+            #[cfg(test)]
+            purge_hook: Default::default(),
         };
         if writable {
             crate::schema::upgrade(&mut library.base_connection(true)?)?;
