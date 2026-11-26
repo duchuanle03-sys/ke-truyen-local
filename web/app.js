@@ -247,6 +247,7 @@ $('manage-groups').onclick = () => loadGroups().then(manageGroups);
 
 async function navigate(view) {
   state.activeView = view;
+  if (view !== 'downloads') stopPolling();
   for (const section of document.querySelectorAll('.view')) section.hidden = section.id !== `${view}-view`;
   for (const button of document.querySelectorAll('[data-nav]')) {
     button.classList.toggle('active', button.dataset.nav === view);
@@ -254,6 +255,7 @@ async function navigate(view) {
   }
   if (view === 'library') await loadLibrary();
   if (view === 'history') renderHistory();
+  if (view === 'downloads') renderDownloads();
   if (view === 'dictionary') renderDictionary($('dictionary-page'));
   if (view === 'settings') renderSettings();
 }
@@ -421,8 +423,117 @@ async function bookDetail(initial, fromSource = false) {
   }
 }
 
-// Task 7 (Tải xuống) refreshes its job list here.
-function downloadsChanged() {}
+// ---- Tải xuống: job progress polled every 2 s only while it can change and is visible ----
+const jobStatuses = { queued: 'Đang chờ', running: 'Đang tải', paused: 'Tạm dừng', verification_required: 'Chờ xác minh CAPTCHA', completed: 'Hoàn tất', failed: 'Lỗi', cancelled: 'Đã hủy' };
+const poller = { timer: 0, generation: 0, inFlight: false, pending: false, offset: 0, active: new Set() };
+const pollable = () => state.activeView === 'downloads' && $('reader').hidden && document.visibilityState === 'visible';
+function schedulePoll() {
+  clearTimeout(poller.timer);
+  if (pollable() && !poller.inFlight && poller.active.size) poller.timer = setTimeout(pollJobs, 2000);
+}
+function stopPolling() { clearTimeout(poller.timer); poller.generation++; poller.pending = false; }
+// An immediate refresh that never overlaps one already in flight.
+function refreshJobs() {
+  clearTimeout(poller.timer);
+  if (!pollable()) return;
+  if (poller.inFlight) poller.pending = true; else pollJobs();
+}
+async function pollJobs() {
+  poller.inFlight = true;
+  const generation = poller.generation;
+  try {
+    const page = await api(`/api/jobs?offset=${poller.offset}`);
+    if (generation === poller.generation) {
+      const jobs = Array.isArray(page) ? page : page.jobs || [];
+      const active = new Set(jobs.filter((job) => ['queued', 'running'].includes(job.status)).map((job) => job.id));
+      const ended = [...poller.active].some((id) => !active.has(id));
+      poller.active = active;
+      renderJobs(jobs, page.next_offset);
+      if (ended) renderDownloaded();
+    }
+  } catch (error) {
+    if (generation === poller.generation) { poller.active = new Set(); $('download-jobs').replaceChildren(el('p', { class: 'inline-error', text: error.message })); }
+  } finally {
+    poller.inFlight = false;
+    if (poller.pending && pollable()) { poller.pending = false; pollJobs(); } else { poller.pending = false; schedulePoll(); }
+  }
+}
+function downloadsChanged() { if (state.activeView === 'downloads') { refreshJobs(); renderDownloaded(); } }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshJobs(); else stopPolling(); });
+
+function renderJobs(jobs, nextOffset) {
+  const rows = jobs.map((job) => {
+    const total = Number(job.total) || 0, done = Number(job.completed) || 0, pct = total ? Math.floor(done * 100 / total) : 0;
+    const row = el('article', { class: 'download-job' }, [el('h3', { text: job.name || 'Tải chương' }), el('p', { class: 'muted small', text: `${pct}% · ${done}/${total} chương · ${jobStatuses[job.status] || job.status}` }), el('progress', { value: done, max: total || 1, 'aria-label': `Tiến độ tải ${pct}%` })]);
+    if (Number(job.image_total) > 0) row.append(el('p', { class: 'job-images', text: `Chương ${Number(job.start) + done + 1}: ảnh ${job.image_done}/${job.image_total}` }));
+    if (job.error) row.append(el('p', { class: 'inline-error', text: job.error }));
+    const controls = el('div', { class: 'header-actions' });
+    if (job.status === 'verification_required' && job.captcha) controls.append(el('button', { class: 'button primary', text: 'Xác minh CAPTCHA', onclick: async () => {
+      try { await verifyCaptcha(job.captcha); } catch (error) { notify(error.message, true); }
+      refreshJobs();
+    } }));
+    for (const [action, text, enabled] of [['pause', 'Tạm dừng', job.status === 'running'], ['resume', 'Tiếp tục', job.status === 'paused'], ['retry', 'Thử lại phần còn lại', ['failed', 'cancelled'].includes(job.status)], ['cancel', 'Hủy tải', ['queued', 'running', 'paused', 'verification_required'].includes(job.status)], ['delete', 'Xóa khỏi danh sách', ['completed', 'failed', 'cancelled'].includes(job.status)]]) {
+      if (enabled) controls.append(el('button', { class: 'button', text, onclick: async (event) => {
+        event.currentTarget.disabled = true;
+        try { await api(`/api/jobs/${encodeURIComponent(job.id)}/${action}`, {}); }
+        catch (error) { notify(error.message, true); }
+        refreshJobs();
+      } }));
+    }
+    row.append(controls);
+    return row;
+  });
+  if (!rows.length) rows.push(el('p', { class: 'muted', text: 'Chưa có yêu cầu tải. Chọn Tải xuống ở một truyện trong Khám phá hoặc trên kệ.' }));
+  const pages = el('div', { class: 'header-actions' });
+  if (poller.offset) pages.append(el('button', { class: 'button', text: 'Tác vụ trước', onclick: () => { poller.offset = Math.max(0, poller.offset - 50); refreshJobs(); } }));
+  if (nextOffset != null) pages.append(el('button', { class: 'button', text: 'Tác vụ tiếp', onclick: () => { poller.offset = nextOffset; refreshJobs(); } }));
+  $('download-jobs').replaceChildren(...rows, pages);
+}
+
+async function clearDownloads(book, refresh) {
+  if (!confirm('Xóa nội dung đã tải của truyện này để giải phóng dung lượng? Chương đã sửa được giữ. Có thể tải lại từ nguồn khi cần.')) return;
+  const send = (confirmed) => api(`/api/books/${encodeURIComponent(book.id)}/downloads/clear`, { confirmed });
+  let result;
+  try { result = await send(false); }
+  catch (error) {
+    if (error.code !== 'legacy_confirmation') { notify(error.message, true); return; }
+    if (!confirm(error.message)) return;
+    try { result = await send(true); } catch (problem) { notify(problem.message, true); return; }
+  }
+  // Nothing is freed on disk yet: say what is waiting for deletion and what SQLite reuses.
+  const parts = [`Đã xóa ${result.cleared} chương.`];
+  if (result.pending_file_bytes) parts.push(`Khoảng ${formatBytes(result.pending_file_bytes)} ảnh đang chờ xóa khỏi ổ đĩa trong nền.`);
+  if (result.sqlite_reusable_bytes) parts.push(`${formatBytes(result.sqlite_reusable_bytes)} trong tệp thư viện được để SQLite dùng lại; tệp chỉ nhỏ lại khi bấm Thu gọn trong Thiết lập.`);
+  notify(parts.join(' '));
+  refresh();
+}
+
+async function renderDownloaded(offset = 0) {
+  const target = $('downloaded-list');
+  let page;
+  try { page = await api(`/api/downloads?offset=${offset}`); }
+  catch (error) { target.replaceChildren(el('p', { class: 'inline-error', text: error.message })); return; }
+  const refresh = () => renderDownloaded(offset);
+  const rows = page.items.map((book) => {
+    const info = el('div', { class: 'saved-info' }, [el('h3', {}, [book.name || 'Chưa có tên', el('span', { class: `saved-badge${book.archived ? ' off' : ''}`, text: book.archived ? 'Ngoài kệ' : 'Trên kệ' })]), el('p', { class: 'muted', text: `${sourceName(book.source)} · Đã tải ${book.downloaded_count}/${book.chapter_count || '?'} chương` })]);
+    const actions = [el('button', { class: 'button danger', text: 'Xóa nội dung đã tải', onclick: () => clearDownloads(book, refresh) })];
+    if (book.archived) actions.push(el('button', { class: 'button', text: 'Thêm vào kệ', onclick: () => putOnShelf(book, refresh) }));
+    actions.push(el('button', { class: 'button primary', text: 'Đọc', onclick: () => { stopPolling(); openSaved(book, refresh); } }));
+    return el('article', { class: 'saved-row' }, [cover(book), info, el('div', { class: 'header-actions' }, actions)]);
+  });
+  if (!rows.length) rows.push(el('p', { class: 'muted', text: 'Chưa có truyện nào được tải để đọc offline.' }));
+  const pages = el('div', { class: 'header-actions' });
+  if (offset) pages.append(el('button', { class: 'button', text: 'Trang trước', onclick: () => renderDownloaded(Math.max(0, offset - 60)) }));
+  if (page.next_offset != null) pages.append(el('button', { class: 'button', text: 'Trang sau', onclick: () => renderDownloaded(page.next_offset) }));
+  target.replaceChildren(...rows, pages);
+}
+
+function renderDownloads() {
+  poller.offset = 0;
+  $('download-jobs').replaceChildren(el('p', { class: 'muted', text: 'Đang lấy tiến độ…' }));
+  refreshJobs();
+  renderDownloaded();
+}
 
 async function refreshShelfCount() {
   try { $('nav-count').textContent = (await api('/api/books?limit=1')).shelf_total || ''; } catch { /* the next shelf load shows it */ }
@@ -801,10 +912,9 @@ function shutdownPanel() {
   return el('section', { class: 'settings-section', id: 'server-settings' }, [el('h2', { text: 'Máy chủ cục bộ' }), status, control]);
 }
 
-async function renderSettings(jobsOffset = 0) {
-  jobsOffset = Number.isInteger(jobsOffset) ? Math.max(0, jobsOffset) : 0;
+async function renderSettings() {
   const target = $('settings-page'); target.replaceChildren(el('p', { text: 'Đang kiểm tra công cụ…' }));
-  const results = await Promise.allSettled([api('/api/capabilities'), api(`/api/jobs?offset=${jobsOffset}`), api('/api/cache/images'), api('/api/cache/chapters')]);
+  const results = await Promise.allSettled([api('/api/capabilities'), api('/api/cache/images'), api('/api/cache/chapters')]);
   const capabilities = el('section', { class: 'settings-section' }, [el('h2', { text: 'Khả năng trên máy này' }), el('p', { class: 'muted', text: 'Chỉ công cụ phát hiện được mới được ghi nhận sẵn sàng. Giọng đọc được kiểm tra trong trình đọc.' })]);
   if (results[0].status === 'fulfilled') {
     const data = results[0].value;
@@ -822,34 +932,7 @@ async function renderSettings(jobsOffset = 0) {
     for (const [label, value] of rows) summary.append(el('dt', { text: label }), el('dd', { text: value }));
     capabilities.append(summary, el('details', {}, [el('summary', { text: 'Chi tiết công cụ phát hiện được' }), reportNode(data)]));
   } else capabilities.append(el('p', { class: 'inline-error', text: results[0].reason.message }));
-  const jobs = el('section', { class: 'settings-section' }, [el('h2', { text: 'Tải nội dung' }), el('p', { class: 'muted small', text: 'Tác vụ được lưu trên máy và tự tiếp tục khi mở lại máy chủ. Tác vụ tạm dừng, đã hủy hoặc bị lỗi vẫn giữ trạng thái để bạn quyết định.' }), el('button', { class: 'button', text: 'Cập nhật trạng thái', onclick: () => renderSettings(jobsOffset) })]);
-  if (results[1].status === 'fulfilled') {
-    const list = Array.isArray(results[1].value) ? results[1].value : results[1].value.jobs || [];
-    if (!list.length) jobs.append(el('p', { class: 'muted', text: 'Chưa có yêu cầu tải. Mở chi tiết sách trên kệ để tải một khoảng chương.' }));
-    const jobStatuses = { queued: 'Đang chờ', running: 'Đang tải', paused: 'Tạm dừng', verification_required: 'Chờ xác minh CAPTCHA', completed: 'Hoàn tất', failed: 'Lỗi', cancelled: 'Đã hủy' };
-    for (const job of list) {
-      const row = el('article', { class: 'download-job' }, [el('h3', { text: job.name || 'Tải chương' }), el('p', { class: 'muted small', text: `${jobStatuses[job.status] || job.status} · ${job.completed}/${job.total} chương` }), el('progress', { value: job.completed, max: job.total, 'aria-label': 'Tiến độ tải chương' })]);
-      if (job.error) row.append(el('p', { class: 'inline-error', text: job.error }));
-      const controls = el('div', { class: 'header-actions' });
-      if (job.status === 'verification_required' && job.captcha) controls.append(el('button', { class: 'button primary', text: 'Xác minh CAPTCHA', onclick: async () => {
-        try { await verifyCaptcha(job.captcha); await renderSettings(jobsOffset); }
-        catch (error) { notify(error.message, true); await renderSettings(jobsOffset); }
-      } }));
-      for (const [action, text, enabled] of [['pause', 'Tạm dừng', job.status === 'running'], ['resume', 'Tiếp tục', job.status === 'paused'], ['retry', 'Thử lại phần còn lại', ['failed', 'cancelled'].includes(job.status)], ['cancel', 'Hủy tải', ['queued', 'running', 'paused', 'verification_required'].includes(job.status)], ['delete', 'Xóa khỏi danh sách', ['completed', 'failed', 'cancelled'].includes(job.status)]]) {
-        if (enabled) controls.append(el('button', { class: 'button', text, onclick: async (event) => {
-          event.currentTarget.disabled = true;
-          try { await api(`/api/jobs/${encodeURIComponent(job.id)}/${action}`, {}); await renderSettings(jobsOffset); }
-          catch (error) { notify(error.message, true); event.target.disabled = false; }
-        } }));
-      }
-      row.append(controls); jobs.append(row);
-    }
-    const pages = el('div', { class: 'header-actions' });
-    if (jobsOffset) pages.append(el('button', { class: 'button', text: 'Tác vụ trước', onclick: () => renderSettings(Math.max(0, jobsOffset - 50)) }));
-    if (results[1].value.next_offset != null) pages.append(el('button', { class: 'button', text: 'Tác vụ tiếp', onclick: () => renderSettings(results[1].value.next_offset) }));
-    jobs.append(pages);
-  } else jobs.append(el('p', { class: 'inline-error', text: results[1].reason.message }));
-  target.replaceChildren(capabilities, chapterCachePanel(results[3].status === 'fulfilled' ? results[3].value : null, results[3].reason?.message), imageCachePanel(results[2].status === 'fulfilled' ? results[2].value : null, results[2].reason?.message), jobs, el('section', { class: 'settings-section' }, [el('h2', { text: 'Dữ liệu thư viện' }), el('p', { class: 'muted', text: 'Thư viện, nội dung và cài đặt mới nằm riêng trong reader-local/user-data. Nhập backup giữ nguyên bộ xuất gốc. Đóng ứng dụng trước khi sao chép thư mục dữ liệu để lưu dự phòng.' }), el('div', { class: 'header-actions' }, [el('button', { class: 'button', text: 'Nhập thư viện hiện có', onclick: importBackup }), el('button', { class: 'button', text: 'Tất cả ghi chú đã lưu', onclick: globalNotesDialog })])]));
+  target.replaceChildren(capabilities, chapterCachePanel(results[2].status === 'fulfilled' ? results[2].value : null, results[2].reason?.message), imageCachePanel(results[1].status === 'fulfilled' ? results[1].value : null, results[1].reason?.message), el('section', { class: 'settings-section' }, [el('h2', { text: 'Dữ liệu thư viện' }), el('p', { class: 'muted', text: 'Thư viện, nội dung và cài đặt mới nằm riêng trong reader-local/user-data. Nhập backup giữ nguyên bộ xuất gốc. Đóng ứng dụng trước khi sao chép thư mục dữ liệu để lưu dự phòng.' }), el('div', { class: 'header-actions' }, [el('button', { class: 'button', text: 'Nhập thư viện hiện có', onclick: importBackup }), el('button', { class: 'button', text: 'Tất cả ghi chú đã lưu', onclick: globalNotesDialog })])]));
   target.append(shutdownPanel());
 }
 

@@ -17,6 +17,7 @@
         <button data-nav="library" class="nav-item active"><span aria-hidden="true">▤</span> Kệ sách <span id="nav-count" class="nav-count"></span></button>
         <button data-nav="discover" class="nav-item"><span aria-hidden="true">⌕</span> Khám phá</button>
         <button data-nav="history" class="nav-item"><span aria-hidden="true">◷</span> Lịch sử</button>
+        <button data-nav="downloads" class="nav-item"><span aria-hidden="true">⇩</span> Tải xuống</button>
         <button data-nav="dictionary" class="nav-item"><span aria-hidden="true">Aa</span> Từ điển</button>
         <button data-nav="settings" class="nav-item"><span aria-hidden="true">⚙</span> Thiết lập</button>
       </nav>
@@ -39,6 +40,10 @@
         <div id="source-status" class="results-line" role="status">Kết quả lấy trực tiếp từ nguồn bạn chọn.</div><div id="source-results" class="source-results"></div><button id="source-next" class="button" hidden>Xem trang tiếp</button>
       </section>
       <section id="history-view" class="view" hidden><header class="page-header"><div><h1>Lịch sử</h1><p>Truyện đọc ngoài kệ trong 30 ngày qua.</p></div></header><div id="history-list" class="saved-list"></div></section>
+      <section id="downloads-view" class="view" hidden><header class="page-header"><div><h1>Tải xuống</h1><p>Tiến độ tải và các truyện đã tải để đọc offline, trên kệ hay không.</p></div></header>
+        <section class="settings-section"><h2>Đang tải</h2><p class="muted small">Tác vụ được lưu trên máy và tự tiếp tục khi mở lại máy chủ. Tác vụ tạm dừng, đã hủy hoặc bị lỗi vẫn giữ trạng thái để bạn quyết định.</p><div id="download-jobs"></div></section>
+        <section class="settings-section"><h2>Truyện đã tải</h2><div id="downloaded-list" class="saved-list"></div></section>
+      </section>
       <section id="dictionary-view" class="view" hidden><header class="page-header"><div><h1>Từ điển</h1><p>Quản lý dữ liệu QT cục bộ và nghĩa riêng theo truyện.</p></div></header><div id="dictionary-page"></div></section>
       <section id="settings-view" class="view" hidden><header class="page-header"><div><h1>Thiết lập</h1><p>Trạng thái công cụ và dữ liệu trên máy của bạn.</p></div></header><div id="settings-page"></div></section>
     </main>
