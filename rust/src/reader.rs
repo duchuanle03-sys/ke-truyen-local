@@ -668,7 +668,11 @@ impl Library {
                 .unwrap_or_else(|| default.into())
         };
         let db = self.write_connection()?;
-        db.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET quote=excluded.quote,note=excluded.note,color=excluded.color,position=excluded.position",params![id,book,index,get("quote",""),get("note",""),get("color",""),position,get("type","note"),now(),json_store(body)?])?;
+        // One statement: a new note needs its book to exist; updating an existing (even orphan) note does not.
+        let written = db.execute("INSERT INTO notes SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10 WHERE EXISTS(SELECT 1 FROM notes WHERE id=?1) OR EXISTS(SELECT 1 FROM books WHERE id=?2) ON CONFLICT(id) DO UPDATE SET quote=excluded.quote,note=excluded.note,color=excluded.color,position=excluded.position",params![id,book,index,get("quote",""),get("note",""),get("color",""),position,get("type","note"),now(),json_store(body)?])?;
+        if written == 0 {
+            return Err(ApiError::new(404, "Không tìm thấy truyện."));
+        }
         Ok(rows(&db, "SELECT * FROM notes WHERE id=?", [id])?
             .pop()
             .expect("inserted note"))
@@ -1283,6 +1287,65 @@ pub(crate) mod tests {
         assert_eq!(state["has_notes"], true);
         assert_eq!(state["downloaded"], 1);
     }
+    fn history(library: &Library, since: &str) -> Result<Vec<String>, ApiError> {
+        let query = crate::library::ShelfQuery::from_uri(&format!(
+            "/api/books?archived=1&sort=recent&read_since={since}"
+        ))?;
+        Ok(library
+            .list_books(&query)?
+            .items
+            .iter()
+            .map(|b| b["id"].as_str().unwrap().to_owned())
+            .collect())
+    }
+    #[test]
+    fn history_lists_recent_off_shelf_reads_only() {
+        let (_fixture, library) = writable();
+        let day = 86400.0;
+        let t = now();
+        let db = library.write_connection().unwrap();
+        for (id, archived, read_at) in [
+            ("recent", 1, t - 5.0 * day),
+            ("old", 1, t - 30.5 * day),
+            ("unread", 1, 0.0),
+            ("shelf", 0, t - day),
+        ] {
+            db.execute(
+                "INSERT INTO books(id,name,archived,read_at,added_at,updated_at) VALUES(?,?,?,?,1,1)",
+                params![id, id, archived, read_at],
+            )
+            .unwrap();
+        }
+        drop(db);
+        assert_eq!(
+            history(&library, &format!("{}", t - 30.0 * day)).unwrap(),
+            ["recent"]
+        );
+    }
+    #[test]
+    fn history_rejects_a_bad_read_since() {
+        let (_fixture, library) = writable();
+        for bad in ["abc", "-1", "inf", "NaN"] {
+            assert_eq!(history(&library, bad).unwrap_err().status, 400, "{bad}");
+        }
+    }
+    #[test]
+    fn a_new_note_needs_its_book() {
+        let (_fixture, library) = writable();
+        let error = library
+            .save_note(&json!({"id":"n1","book_id":"missing"}))
+            .unwrap_err();
+        assert_eq!(error.status, 404);
+        assert!(library.notes(Some("missing")).unwrap()[0].is_null());
+    }
+    #[test]
+    fn progress_on_a_missing_book_is_not_found() {
+        let (_fixture, library) = writable();
+        let error = library
+            .progress("gone", &json!({"index":0,"position":0.1}))
+            .unwrap_err();
+        assert_eq!(error.status, 404);
+    }
     #[test]
     fn failed_detail_creates_no_record() {
         let (_fixture, library) = online();
@@ -1595,9 +1658,13 @@ pub(crate) mod tests {
             library.settings(None).unwrap()["array"],
             json!([true, 1, null])
         );
-        let note = library
-            .save_note(&json!({"id":"orphan","book_id":"missing","position":0.3,"quote":"Việt"}))
+        // A vBook import keeps notes whose book is missing; it writes them directly.
+        library
+            .write_connection()
+            .unwrap()
+            .execute("INSERT INTO notes(id,book_id,position,quote,created_at) VALUES('orphan','missing',0.3,'Việt',1)", [])
             .unwrap();
+        let note = library.notes(Some("missing")).unwrap()[0].clone();
         library
             .save_note(&json!({"id":"orphan","book_id":"book","position":0.7,"note":"updated"}))
             .unwrap();

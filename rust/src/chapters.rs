@@ -339,7 +339,12 @@ mod tests {
             .save_note(&json!({"id":"theirs","book_id":"book"}))
             .unwrap();
         library
-            .save_note(&json!({"id":"orphan","book_id":"unrelated"}))
+            .write_connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO notes(id,book_id,created_at) VALUES('orphan','unrelated',1)",
+                [],
+            )
             .unwrap();
         library
             .update_book("book", &json!({"archived":true}))

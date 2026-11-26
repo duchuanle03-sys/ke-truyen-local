@@ -145,6 +145,8 @@ pub struct ShelfQuery {
     pub reverse: bool,
     pub offset: i64,
     pub limit: i64,
+    /// History: off-shelf books read at or after this Unix time.
+    pub read_since: Option<f64>,
 }
 pub fn decode(input: &str, plus: bool) -> String {
     let bytes = input.as_bytes();
@@ -300,6 +302,16 @@ impl ShelfQuery {
         let get = |k: &str, d: &str| q.get(k).cloned().unwrap_or_else(|| d.to_owned());
         let offset = integer(&get("offset", "0"))?.max(0);
         let limit = integer(&get("limit", "60"))?.clamp(1, 200);
+        let read_since = match get("read_since", "").as_str() {
+            "" => None,
+            value => Some(
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|t| t.is_finite() && *t >= 0.0)
+                    .ok_or_else(|| ApiError::new(400, "Mốc thời gian lịch sử không hợp lệ."))?,
+            ),
+        };
         let kind = get("kind", "all");
         if !["all", "text", "comic", "file"].contains(&kind.as_str()) {
             return Err(ApiError::new(400, "Loại truyện không hợp lệ."));
@@ -315,6 +327,7 @@ impl ShelfQuery {
             reverse: get("reverse", "") == "1",
             offset,
             limit,
+            read_since,
         })
     }
 }
@@ -632,11 +645,16 @@ impl Library {
     pub fn list_books(&self, q: &ShelfQuery) -> Result<ShelfPage, ApiError> {
         let mut db = self.connection()?;
         let tx = db.transaction()?;
+        let trashed = q.trashed && q.read_since.is_none();
         let mut predicate = String::from("(trashed_at>0)=?");
-        let mut values: Vec<rusqlite::types::Value> = vec![(q.trashed as i64).into()];
-        if !q.trashed {
+        let mut values: Vec<rusqlite::types::Value> = vec![(trashed as i64).into()];
+        if !trashed {
             predicate.push_str(" AND archived=?");
             values.push((q.archived as i64).into());
+        }
+        if let Some(since) = q.read_since {
+            predicate.push_str(" AND read_at>0 AND read_at>=?");
+            values.push(since.into());
         }
         let term = casefold(&q.query).trim_matches(python_space).to_owned();
         if !term.is_empty() {
