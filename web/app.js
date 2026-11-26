@@ -112,7 +112,7 @@ function saveSettings(patch) {
     catch (error) { notify(`Chưa lưu được thiết lập: ${error.message}`, true); }
   }, 350);
 }
-const reader = createReader({ api, el, notify, showDialog, getSettings: () => state.settings.reader || {}, saveSettings: (value) => saveSettings({ reader: value }), openDictionary: (book) => openDictionary(book), onClose: () => (state.activeView === 'library' ? loadLibrary(state.offset) : navigate(state.activeView)) });
+const reader = createReader({ api, el, notify, showDialog, getSettings: () => state.settings.reader || {}, saveSettings: (value) => saveSettings({ reader: value }), openDictionary: (book) => openDictionary(book), downloadDialog: (book, resolve) => downloadDialog(book, resolve), onClose: () => (state.activeView === 'library' ? loadLibrary(state.offset) : navigate(state.activeView)) });
 
 function safeMedia(value) {
   if (!value) return '';

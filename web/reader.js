@@ -2,12 +2,12 @@ const defaults = { theme: 'sepia', mode: 'scroll', font: 'Times', size: 21, line
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));
 const fonts = { Times: '"Times New Roman",serif', Segoe: '"Segoe UI",Arial,sans-serif', Arial: 'Arial,sans-serif' };
 
-export function createReader({ api, el, notify, showDialog, getSettings, saveSettings, openDictionary, onClose }) {
+export function createReader({ api, el, notify, showDialog, getSettings, saveSettings, openDictionary, downloadDialog, onClose }) {
   const root = document.getElementById('reader');
   const app = document.getElementById('app');
   let book = null, chapters = [], chapter = null, index = 0, prefs = { ...defaults }, generation = 0;
   let tocEntries = [], disposeToc = () => {}, refreshToc = () => {};
-  let scroller, sheet, content, status, progressBar, chapterTitle, previousButton, nextButton, selectionTip, speechBar;
+  let scroller, sheet, content, status, progressBar, chapterTitle, previousButton, nextButton, selectionTip, speechBar, endBlock = null, checking = null;
   let saveTimer, resizeTimer, progressChain = Promise.resolve(), loading = false, dirty = false, lastSelection = '';
   let imagePage = 0, autoFrame = 0, autoLast = 0, lastReadingPosition = 0;
   let lastReadable = null, savedReading = null;
@@ -27,6 +27,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   const button = (text, action, primary = false) => el('button', { class: `button${primary ? ' primary' : ''}`, text, onclick: action });
   const icon = (text, title, action, extra = '') => el('button', { class: `icon-button ${extra}`, text, title, 'aria-label': title, onclick: action });
   const path = (suffix = '') => `/api/books/${encodeURIComponent(book.id)}${suffix}`;
+  const online = () => ['qq', 'full', 'hako', 'stv'].includes(book?.source);
   const chapterPath = () => path(`/chapters/${index}`);
 
   function tocEntry(item, fallback) {
@@ -95,7 +96,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     lastReadingPosition = pos;
     const total = Math.max(chapters.length, book.chapter_count || 0, 1);
     let label = `Chương ${index + 1}/${total} · ${Math.round(pos * 100)}% chương`;
-    if (book.kind === 'comic' && prefs.mode === 'paged') label = `Ảnh ${imagePage + 1}/${content.children.length} · Chương ${index + 1}/${total}`;
+    if (book.kind === 'comic' && prefs.mode === 'paged') { const images = content.querySelectorAll('.comic-page').length; label = `Ảnh ${Math.min(imagePage + 1, images)}/${images} · Chương ${index + 1}/${total}`; }
     else if (prefs.mode === 'paged') { const pages = pageCount(); label = `Trang ${Math.min(pages, Math.round(scroller.scrollLeft / pageStep()) + 1)}/${pages} · Chương ${index + 1}/${total}`; }
     status.textContent = label;
     progressBar.style.width = `${clamp(((index + pos) / total) * 100, 0, 100)}%`;
@@ -121,7 +122,7 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
   // chapter, so scrolling back and forth or repeated progress events never send it twice.
   let prefetchKey = '';
   function maybePrefetch() {
-    if (loading || !chapter || !['qq', 'full', 'hako', 'stv'].includes(book.source)) return;
+    if (loading || !chapter || !online()) return;
     const next = index + 1;
     const key = `${book.id}\n${next}`;
     if (next >= chapters.length || chapters[next]?.downloaded || chapters[next]?.is_vip === true || prefetchKey === key || readFraction() < 0.8) return;
@@ -411,6 +412,59 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     if (!content.textContent.trim() && !content.querySelector('img')) throw new Error('Nguồn trả về nội dung rỗng. Không có nội dung để đọc hoặc nghe.');
     const firstHeading = content.querySelector('h1,h2,h3,h4');
     if (firstHeading?.textContent.trim() === chapterTitle.textContent.trim()) firstHeading.remove();
+    placeEnd();
+  }
+
+  // "Đã ở chương cuối" after the last chapter. A comic gets it as its last page (so paged mode steps
+  // onto it); a text chapter gets it after the content, where speech, QT and search don't see it.
+  function placeEnd() {
+    endBlock?.remove(); endBlock = null;
+    if (!chapter || index !== chapters.length - 1) return;
+    const note = el('p', { class: 'chapter-end-note', role: 'status' });
+    const check = online() ? el('button', { class: 'chapter-end-check', text: 'Kiểm tra chương mới', onclick: async () => {
+      check.disabled = true; check.textContent = 'Đang kiểm tra…'; note.textContent = '';
+      try { await checkNewChapters(); }
+      catch (error) { if (error.code !== 'captcha_cancelled') note.textContent = error.message; }
+      finally { check.disabled = false; check.textContent = 'Kiểm tra chương mới'; }
+    } }) : null;
+    endBlock = el('section', { class: 'chapter-end', 'aria-label': 'Hết chương mới nhất' }, [
+      book.kind === 'comic' ? el('span', { class: 'chapter-end-icon', 'aria-hidden': 'true', text: '✓≡' }) : null,
+      el('p', { class: 'chapter-end-title', text: 'Đã ở chương cuối' }), note, check]);
+    (book.kind === 'comic' ? content : sheet).append(endBlock);
+    if (book.kind === 'comic') showImagePage();
+  }
+
+  // The one "check for new chapters", for the ↻ in Mục lục and the button above. The source's list
+  // goes through the add route, which only appends (downloads, edits and notes stay) and never moves
+  // the book on or off the shelf; then the chapter list is reloaded and "Chương sau" follows it.
+  function checkNewChapters() {
+    if (checking) return checking;
+    const current = book, before = chapters.length, reading = chapters[index]?.url;
+    checking = (async () => {
+      const request = () => api(`/api/sources/${encodeURIComponent(current.source)}/add`, { url: current.path, shelf: false });
+      let added;
+      try { added = await request(); }
+      catch (error) {
+        // A concurrent change to the record: reading the source once more settles it.
+        if (error.http_status !== 400 || !/đã thay đổi/.test(error.message)) throw error;
+        added = await request();
+      }
+      const result = await api(`/api/books/${encodeURIComponent(current.id)}/chapters`);
+      if (book !== current) return 0;
+      Object.assign(book, added.book || added);
+      chapters = Array.isArray(result) ? result : result.chapters || [];
+      tocEntries = chapters.map(tocEntry);
+      const moved = chapters.findIndex((item) => item.url === reading);
+      if (moved >= 0) index = moved;
+      const count = Math.max(0, chapters.length - before);
+      refreshToc(); updateStatus();
+      if (endBlock) {
+        if (count) { endBlock.querySelector('.chapter-end-title').textContent = `Đã thêm ${count} chương mới`; endBlock.querySelector('.chapter-end-check')?.remove(); }
+        else endBlock.querySelector('.chapter-end-note').textContent = 'Truyện đã cập nhật mới nhất.';
+      }
+      return count;
+    })().finally(() => { checking = null; });
+    return checking;
   }
 
   function appendParagraphs(text, target) {
@@ -472,7 +526,20 @@ export function createReader({ api, el, notify, showDialog, getSettings, saveSet
     const help = el('p', { id: 'toc-help', class: 'sr-only', text: 'Dùng phím mũi tên, Home, End, Page Up và Page Down để chọn chương; Enter để mở.' });
     const spacer = el('div', { class: 'toc-window', role: 'presentation' });
     const list = el('div', { class: 'toc-list', role: 'list', 'aria-label': 'Mục lục', 'aria-describedby': 'toc-help' }, [spacer]);
-    const dialog = showDialog(`Mục lục · ${chapters.length} chương`, [query, count, help, list]);
+    const tools = [query];
+    if (online()) {
+      const refresh = icon('↻', 'Kiểm tra chương mới', async () => {
+        refresh.disabled = true;
+        try {
+          const added = await checkNewChapters();
+          dialog.title(`Mục lục · ${chapters.length} chương`);
+          notify(added ? `Đã thêm ${added} chương mới.` : 'Truyện đã cập nhật mới nhất.');
+        } catch (error) { if (error.code !== 'captcha_cancelled') notify(error.message, true); }
+        finally { refresh.disabled = false; }
+      });
+      tools.push(refresh, icon('⇩', 'Tải xuống', () => downloadDialog({ ...book, chapter_count: chapters.length }, async () => book)));
+    }
+    const dialog = showDialog(`Mục lục · ${chapters.length} chương`, [el('div', { class: 'toc-tools' }, tools), count, help, list]);
     const nativeDialog = dialog.body.closest('dialog'), rowHeight = 64, overscan = 6, rows = new Map();
     let items = tocEntries, focused = Math.max(0, items.findIndex(item => item.index === index)), frame = 0;
     list.style.setProperty('--toc-row-height', `${rowHeight}px`);
