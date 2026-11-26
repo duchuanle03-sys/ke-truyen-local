@@ -684,6 +684,8 @@ impl Scheduler {
             };
             if matches!(outcome, Some(Ok(()))) {
                 active.completed += 1;
+                // Under the same lock, so a listing never pairs the next chapter with these images.
+                control.images(0, 0);
                 unflushed += 1;
                 task.index += 1;
             }

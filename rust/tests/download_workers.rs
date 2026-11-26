@@ -419,6 +419,33 @@ fn active_comic_job_reports_images_in_the_current_chapter() {
 }
 
 #[test]
+fn a_finished_chapter_leaves_no_image_count_for_the_next() {
+    let fixture = fixture(&[("book", "qq", 2)]);
+    let (entered, calls) = mpsc::channel();
+    let downloads = Downloads::open(open(&fixture), move |task, control| {
+        if task.index == 0 {
+            control.images(54, 54);
+            return Ok(());
+        }
+        // Chapter 1 hasn't reached its images yet.
+        let (done, release) = mpsc::channel();
+        entered.send(done).unwrap();
+        release.recv_timeout(LIMIT).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    downloads.start("book", 0, -1).unwrap();
+    let release = calls.recv_timeout(LIMIT).unwrap();
+    let listed = downloads.list(0).unwrap()["jobs"][0].clone();
+    assert_eq!(listed["completed"], 1, "{listed}");
+    assert!(
+        listed["image_total"].as_i64().unwrap_or(0) == 0,
+        "chapter 0's 54/54 isn't shown against chapter 1: {listed}"
+    );
+    release.send(()).unwrap();
+}
+
+#[test]
 fn a_full_novel_download_covers_every_chapter() {
     let fixture = fixture(&[("book", "full", 5)]);
     let downloads = Downloads::open(open(&fixture), |_, _| Ok(())).unwrap();
