@@ -337,8 +337,7 @@ impl Library {
         // Image files that only these chapters use: they will be deleted, but not yet.
         let pending: i64 = tx.query_row(
             &format!(
-                "SELECT coalesce(sum(i.size),0) FROM image_cache i WHERE i.legacy=0
-                 AND i.name IN (SELECT name FROM asset_refs WHERE book_id=?1 AND kind='images' AND idx IN ({list}))
+                "SELECT coalesce(sum(i.size),0) FROM image_cache i WHERE i.name IN (SELECT name FROM asset_refs WHERE book_id=?1 AND kind='images' AND idx IN ({list}))
                  AND NOT EXISTS(SELECT 1 FROM asset_refs r WHERE r.kind='images' AND r.name=i.name AND NOT (r.book_id=?1 AND r.idx IN ({list})))
                  AND NOT EXISTS(SELECT 1 FROM image_pins p WHERE p.name=i.name AND NOT (p.book_id=?1 AND p.idx IN ({list})))"
             ),

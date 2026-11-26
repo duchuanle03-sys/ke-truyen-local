@@ -1432,6 +1432,28 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn clearing_downloads_counts_old_app_images_the_gc_will_delete() {
+        let (_fixture, library) = downloaded_fixture();
+        let n0 = image_name(&illustration(0));
+        exec(
+            &library,
+            &format!("UPDATE image_cache SET legacy=1 WHERE name='{n0}'"),
+        );
+        let private = count(
+            &library,
+            &format!("SELECT size FROM image_cache WHERE name='{n0}'"),
+        );
+        assert!(private > 0);
+        let result = library.clear_book_downloads("web", true).unwrap();
+        assert_eq!(result["pending_file_bytes"], private, "{result}");
+        drain(|s| library.index_assets(s));
+        drain(|s| library.cleanup_assets(s));
+        assert!(
+            !cached_image(&library, &illustration(0)),
+            "the GC deletes it, so the reply must count it"
+        );
+    }
+    #[test]
     fn clearing_a_books_downloads_frees_their_content_and_image_files() {
         let (_fixture, library) = downloaded_fixture();
         let size = |name: &str| {

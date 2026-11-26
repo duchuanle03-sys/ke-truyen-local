@@ -461,33 +461,63 @@ async function pollJobs() {
 function downloadsChanged() { if (state.activeView === 'downloads') { refreshJobs(); renderDownloaded(); } }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshJobs(); else stopPolling(); });
 
-function renderJobs(jobs, nextOffset) {
-  const rows = jobs.map((job) => {
-    const total = Number(job.total) || 0, done = Number(job.completed) || 0, pct = total ? Math.floor(done * 100 / total) : 0;
-    const row = el('article', { class: 'download-job' }, [el('h3', { text: job.name || 'Tải chương' }), el('p', { class: 'muted small', text: `${pct}% · ${done}/${total} chương · ${jobStatuses[job.status] || job.status}` }), el('progress', { value: done, max: total || 1, 'aria-label': `Tiến độ tải ${pct}%` })]);
-    if (Number(job.image_total) > 0) row.append(el('p', { class: 'job-images', text: `Chương ${Number(job.start) + done + 1}: ảnh ${job.image_done}/${job.image_total}` }));
-    if (job.error) row.append(el('p', { class: 'inline-error', text: job.error }));
-    const controls = el('div', { class: 'header-actions' });
-    if (job.status === 'verification_required' && job.captcha) controls.append(el('button', { class: 'button primary', text: 'Xác minh CAPTCHA', onclick: async () => {
-      try { await verifyCaptcha(job.captcha); } catch (error) { notify(error.message, true); }
+// Rows are kept per job and updated in place, so a poll never drops a click or keyboard focus.
+const jobRows = new Map();
+const jobPager = { key: null, node: null };
+let noJobs = null;
+function jobButtons(job) {
+  const buttons = [];
+  if (job.status === 'verification_required' && job.captcha) buttons.push(el('button', { class: 'button primary', text: 'Xác minh CAPTCHA', onclick: async () => {
+    try { await verifyCaptcha(job.captcha); } catch (error) { notify(error.message, true); }
+    refreshJobs();
+  } }));
+  for (const [action, text, enabled] of [['pause', 'Tạm dừng', job.status === 'running'], ['resume', 'Tiếp tục', job.status === 'paused'], ['retry', 'Thử lại phần còn lại', ['failed', 'cancelled'].includes(job.status)], ['cancel', 'Hủy tải', ['queued', 'running', 'paused', 'verification_required'].includes(job.status)], ['delete', 'Xóa khỏi danh sách', ['completed', 'failed', 'cancelled'].includes(job.status)]]) {
+    if (enabled) buttons.push(el('button', { class: 'button', text, onclick: async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try { await api(`/api/jobs/${encodeURIComponent(job.id)}/${action}`, {}); }
+      catch (error) { notify(error.message, true); }
+      button.disabled = false;
       refreshJobs();
     } }));
-    for (const [action, text, enabled] of [['pause', 'Tạm dừng', job.status === 'running'], ['resume', 'Tiếp tục', job.status === 'paused'], ['retry', 'Thử lại phần còn lại', ['failed', 'cancelled'].includes(job.status)], ['cancel', 'Hủy tải', ['queued', 'running', 'paused', 'verification_required'].includes(job.status)], ['delete', 'Xóa khỏi danh sách', ['completed', 'failed', 'cancelled'].includes(job.status)]]) {
-      if (enabled) controls.append(el('button', { class: 'button', text, onclick: async (event) => {
-        event.currentTarget.disabled = true;
-        try { await api(`/api/jobs/${encodeURIComponent(job.id)}/${action}`, {}); }
-        catch (error) { notify(error.message, true); }
-        refreshJobs();
-      } }));
+  }
+  return buttons;
+}
+function renderJobs(jobs, nextOffset) {
+  const rows = jobs.map((job) => {
+    let row = jobRows.get(job.id);
+    if (!row) {
+      row = { title: el('h3'), info: el('p', { class: 'muted small' }), bar: el('progress'), images: el('p', { class: 'job-images' }), error: el('p', { class: 'inline-error' }), controls: el('div', { class: 'header-actions' }), key: null };
+      row.node = el('article', { class: 'download-job' }, [row.title, row.info, row.bar, row.images, row.error, row.controls]);
+      jobRows.set(job.id, row);
     }
-    row.append(controls);
-    return row;
+    const total = Number(job.total) || 0, done = Number(job.completed) || 0, pct = total ? Math.floor(done * 100 / total) : 0;
+    row.title.textContent = job.name || 'Tải chương';
+    row.info.textContent = `${pct}% · ${done}/${total} chương · ${jobStatuses[job.status] || job.status}`;
+    row.bar.max = total || 1;
+    row.bar.value = done;
+    row.bar.setAttribute('aria-label', `Tiến độ tải ${pct}%`);
+    row.images.hidden = !(Number(job.image_total) > 0);
+    row.images.textContent = row.images.hidden ? '' : `Chương ${Number(job.start) + done + 1}: ảnh ${job.image_done}/${job.image_total}`;
+    row.error.hidden = !job.error;
+    row.error.textContent = job.error || '';
+    const key = `${job.status}|${JSON.stringify(job.captcha ?? null)}`;
+    if (key !== row.key) { row.key = key; row.controls.replaceChildren(...jobButtons(job)); }
+    return row.node;
   });
-  if (!rows.length) rows.push(el('p', { class: 'muted', text: 'Chưa có yêu cầu tải. Chọn Tải xuống ở một truyện trong Khám phá hoặc trên kệ.' }));
-  const pages = el('div', { class: 'header-actions' });
-  if (poller.offset) pages.append(el('button', { class: 'button', text: 'Tác vụ trước', onclick: () => { poller.offset = Math.max(0, poller.offset - 50); refreshJobs(); } }));
-  if (nextOffset != null) pages.append(el('button', { class: 'button', text: 'Tác vụ tiếp', onclick: () => { poller.offset = nextOffset; refreshJobs(); } }));
-  $('download-jobs').replaceChildren(...rows, pages);
+  const shown = new Set(jobs.map((job) => job.id));
+  for (const id of jobRows.keys()) if (!shown.has(id)) jobRows.delete(id);
+  if (!rows.length) rows.push(noJobs ||= el('p', { class: 'muted', text: 'Chưa có yêu cầu tải. Chọn Tải xuống ở một truyện trong Khám phá hoặc trên kệ.' }));
+  const pagerKey = `${poller.offset}|${nextOffset}`;
+  if (pagerKey !== jobPager.key) {
+    jobPager.key = pagerKey;
+    jobPager.node = el('div', { class: 'header-actions' });
+    if (poller.offset) jobPager.node.append(el('button', { class: 'button', text: 'Tác vụ trước', onclick: () => { poller.offset = Math.max(0, poller.offset - 50); refreshJobs(); } }));
+    if (nextOffset != null) jobPager.node.append(el('button', { class: 'button', text: 'Tác vụ tiếp', onclick: () => { poller.offset = nextOffset; refreshJobs(); } }));
+  }
+  rows.push(jobPager.node);
+  const box = $('download-jobs'), current = [...box.children];
+  if (current.length !== rows.length || rows.some((node, i) => node !== current[i])) box.replaceChildren(...rows);
 }
 
 async function clearDownloads(book, refresh) {
