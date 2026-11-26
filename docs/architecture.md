@@ -50,6 +50,38 @@ app is `491c059`.
   spaced 2 s apart. Opening the chapter never waits for this phase; it stops the rest.
 - **Paths.** Canonical paths are checked component by component; symlinks and reparse points are
   rejected for data and static files.
+- **`archived=1` means "not on the shelf".**
+  - Khám phá reads and downloads create records with `archived=1`; "Thêm vào kệ" sets 0, keeps
+    progress and `read_at`, and sets `added_at`.
+  - Opening a shelf novel from Khám phá never takes it off the shelf, and a vBook backup import
+    puts matching records on the shelf.
+  - Records are found again by source plus `key(path)`, so host, query, `.html` and a trailing
+    slash don't matter (`find_source_book`).
+- **Only user actions write `read_at` and `updated_at`.** That means progress saves, Khám phá
+  `add` and backup import. Downloads, prefetch and maintenance never do. A background job that
+  needs to protect a book uses presence or leases, not these timestamps.
+- **Lịch sử and the off-shelf clean-up are separate.**
+  - History shows off-shelf books read in the last 30 days.
+  - The maintenance step (`purge_expired_book`, after the Trash rule) deletes one off-shelf record
+    per tick, only when it is untouched for 31 days and holds nothing saved.
+  - Saved content is checked on `chapters` itself: downloaded but not plain cache, or edited. Notes,
+    an active job, an open reader, a held chapter lease, groups and non-web sources also keep the
+    record.
+  - The re-check and delete run in one IMMEDIATE transaction with the `chapter_leases` mutex held
+    until commit, the same order `evict_chapters` uses. A lease taken meanwhile waits, then finds
+    the book gone.
+  - The asset GC removes images and covers only when nothing else references or leases them.
+- **Deleting a novel's downloads** (`clear_book_downloads`) empties its web, unedited downloaded
+  chapters through the same body-clearing step as cache eviction.
+  - Image files are deleted later by the asset GC.
+  - Text frees SQLite pages for reuse; the file shrinks only with "Thu gọn".
+  - The reply reports freed, pending-file and SQLite-reusable bytes separately.
+- **Shutdown ends with a bounded checkpoint.**
+  - `final_checkpoint` tries `wal_checkpoint(TRUNCATE)` at most 5 times within 8 s.
+  - `/api/shutdown/wait` then answers `complete` or `incomplete`, and the window closes only on
+    `complete`.
+  - `incomplete` is not data loss: committed transactions stay in the WAL and are applied at the
+    next open.
 
 ## Tests
 
