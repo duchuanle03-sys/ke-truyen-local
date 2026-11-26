@@ -59,6 +59,19 @@ pub(crate) fn candidate_sql(rule: Rule) -> String {
     )
 }
 
+/// An off-shelf record that the clean-up could delete if it were old enough: nothing saved, and no
+/// reader or job using it. Its chapter list can be replaced when the source reorders it.
+pub(crate) fn replaceable(db: &Connection, book: &str) -> Result<bool, ApiError> {
+    Ok(db.query_row(
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM books b WHERE b.id=?4 AND {})",
+            predicate(Rule::OffShelf)
+        ),
+        params![f64::MAX, now(), "[]", book],
+        |r| r.get(0),
+    )?)
+}
+
 /// The next book to clean up: an expired Trash entry first, then an expired off-shelf record.
 pub(crate) fn next_candidate(
     db: &Connection,

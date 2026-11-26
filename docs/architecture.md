@@ -57,6 +57,10 @@ app is `491c059`.
     puts matching records on the shelf.
   - Records are found again by source plus `key(path)`, so host, query, `.html` and a trailing
     slash don't matter (`find_source_book`).
+  - Chapters are identified by position. When the source reorders or drops chapters, the stored list
+    is refused, except on a record the clean-up rule says holds nothing (`replaceable`): its rows
+    are deleted and rewritten under the clean-up's lock order, which drops their cache, search and
+    asset rows, and progress follows its chapter by address (or starts over if it's gone).
 - **Only user actions write `read_at` and `updated_at`.** That means progress saves, Khám phá
   `add` and backup import. Downloads, prefetch and maintenance never do. A background job that
   needs to protect a book uses presence or leases, not these timestamps.

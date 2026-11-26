@@ -1652,6 +1652,118 @@ pub(crate) mod tests {
             "format":"online","description":"","chapters":(0..4).map(|n| json!({"title":format!("Chương {n}"),
             "url":format!("{ONLINE_BOOK}chuong-{n}/")})).collect::<Vec<_>>()})
     }
+    /// An off-shelf record with nothing saved: a cache-only body and its search entry for chapter 1,
+    /// progress in chapter 2.
+    fn reorderable(library: &Library) {
+        stale_off_shelf(library, "web");
+        exec(
+            library,
+            "UPDATE books SET chapter_index=2,position=0.4 WHERE id='web';
+             UPDATE chapters SET text='nội dung cũ',downloaded=1 WHERE book_id='web' AND idx=1;
+             UPDATE chapter_cache SET kind='cache',offline=0 WHERE book_id='web' AND idx=1;
+             INSERT INTO chapter_search_docs(book_id,idx,scope,literal_check,text) VALUES('web',1,'s',0,'nội dung cũ');",
+        );
+    }
+    fn source_order(order: &[i64]) -> Value {
+        let mut detail = web_detail(ONLINE_BOOK);
+        detail["chapters"] = order
+            .iter()
+            .map(|n| json!({"title":format!("Chương {n}"),"url":format!("{ONLINE_BOOK}chuong-{n}/")}))
+            .collect();
+        detail
+    }
+    fn urls(library: &Library) -> Vec<String> {
+        let db = library.reader_connection().unwrap();
+        let mut stmt = db
+            .prepare("SELECT url FROM chapters WHERE book_id='web' ORDER BY idx")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+    #[test]
+    fn an_off_shelf_book_with_nothing_saved_takes_a_reordered_source_list() {
+        let (_fixture, library) = online();
+        reorderable(&library);
+        let book = library
+            .add_source_book(source_order(&[3, 2, 1]), false)
+            .unwrap();
+        let url = |n: i64| format!("{ONLINE_BOOK}chuong-{n}/");
+        assert_eq!(urls(&library), [url(3), url(2), url(1)]);
+        assert_eq!(
+            (
+                &book["chapter_index"],
+                &book["position"],
+                &book["chapter_count"],
+                &book["archived"]
+            ),
+            (&json!(1), &json!(0.4), &json!(3), &json!(true)),
+            "progress follows chapter 2 to its new place: {book}"
+        );
+        for (sql, what) in [
+            (
+                "SELECT count(*) FROM chapters WHERE book_id='web' AND (text!='' OR html!='')",
+                "stale bodies",
+            ),
+            (
+                "SELECT count(*) FROM chapter_search_docs WHERE book_id='web'",
+                "search documents",
+            ),
+            (
+                "SELECT count(*) FROM chapter_search_fts WHERE chapter_search_fts MATCH 'dung'",
+                "FTS entries",
+            ),
+        ] {
+            assert_eq!(count(&library, sql), 0, "{what}");
+        }
+    }
+    #[test]
+    fn a_reorder_that_drops_the_current_chapter_starts_from_the_beginning() {
+        let (_fixture, library) = online();
+        reorderable(&library);
+        let book = library
+            .add_source_book(source_order(&[3, 1, 0]), false)
+            .unwrap();
+        assert_eq!(
+            (&book["chapter_index"], &book["position"]),
+            (&json!(0), &json!(0.0)),
+            "{book}"
+        );
+    }
+    #[test]
+    fn a_reordered_source_list_is_refused_while_the_book_holds_saved_data() {
+        let (_fixture, library) = online();
+        reorderable(&library);
+        let before = urls(&library);
+        exec(
+            &library,
+            "INSERT INTO notes(id,book_id,created_at) VALUES('n','web',1)",
+        );
+        let error = library
+            .add_source_book(source_order(&[3, 2, 1]), false)
+            .unwrap_err();
+        assert_eq!(error.status, 400);
+        assert_eq!(urls(&library), before);
+    }
+    #[test]
+    fn a_reordered_source_list_is_refused_while_a_chapter_is_leased() {
+        let (_fixture, library) = online();
+        reorderable(&library);
+        let before = urls(&library);
+        let lease = library.chapter_leases.acquire(("web".into(), 1));
+        let error = library
+            .add_source_book(source_order(&[3, 2, 1]), false)
+            .unwrap_err();
+        assert_eq!(error.status, 400);
+        assert_eq!(urls(&library), before);
+        drop(lease);
+        assert!(
+            library
+                .add_source_book(source_order(&[3, 2, 1]), false)
+                .is_ok()
+        );
+    }
     #[test]
     fn off_shelf_gc_uses_the_updated_index() {
         let (_fixture, library) = online();

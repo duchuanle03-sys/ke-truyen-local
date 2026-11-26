@@ -1017,6 +1017,7 @@ impl crate::Library {
         };
         let previous = timestamp(&view)?;
         let mut metadata = Vec::new();
+        let mut reordered = false;
         {
             let mut stmt = view
                 .prepare("SELECT idx,url,title,raw FROM chapters WHERE book_id=? ORDER BY idx")?;
@@ -1031,15 +1032,23 @@ impl crate::Library {
                         .and_then(|chapter| chapter["url"].as_str())
                         .is_none_or(|url_new| key(url_new) != key(&url))
                 {
-                    return Err(ApiError::new(
-                        400,
-                        "Mục lục nguồn đã đổi thứ tự hoặc thiếu chương. Thư viện, ghi chú và tiến độ cũ được giữ nguyên; cần đối chiếu chương trước khi cập nhật.",
-                    ));
+                    reordered = true;
+                    break;
                 }
                 metadata.push((url, row.get::<_, String>(2)?, row.get::<_, String>(3)?));
             }
         }
         view.commit()?;
+        // A reordered list replaces the old one only on a record with nothing saved (checked below).
+        if reordered {
+            metadata.clear();
+        }
+        let refused = || {
+            ApiError::new(
+                400,
+                "Mục lục nguồn đã đổi thứ tự hoặc thiếu chương. Thư viện, ghi chú và tiến độ cũ được giữ nguyên; cần đối chiếu chương trước khi cập nhật.",
+            )
+        };
         let mut changed = Vec::new();
         for (idx, chapter) in chapters.iter().enumerate() {
             let existing = metadata.get(idx);
@@ -1084,6 +1093,27 @@ impl crate::Library {
         if timestamp(&tx)? != previous {
             return Err(concurrent());
         }
+        // Same lock order as the clean-up: a reader or prefetch taking a lease meanwhile waits,
+        // then sees the new list. Deleting the rows also drops their cache, search and asset rows.
+        let reorder = if reordered {
+            let leases = self.chapter_leases.lock();
+            if leases.keys().any(|(book, _)| *book == id)
+                || !crate::chapters::replaceable(&tx, &id)?
+            {
+                return Err(refused());
+            }
+            let current: Option<(String, f64)> = tx
+                .query_row(
+                    "SELECT c.url,b.position FROM books b JOIN chapters c ON c.book_id=b.id AND c.idx=b.chapter_index WHERE b.id=?",
+                    [&id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            tx.execute("DELETE FROM chapters WHERE book_id=?", [&id])?;
+            Some((leases, current))
+        } else {
+            None
+        };
         let now = crate::reader::now();
         tx.execute("INSERT INTO books(id,name,author,source,path,cover,kind,format,description,progress,chapter_index,position,groups_json,added_at,updated_at,read_at,chapter_count,raw,archived) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,0,0,0,'[]',?10,?10,0,?11,?12,NOT ?13) ON CONFLICT(id) DO UPDATE SET name=excluded.name,author=excluded.author,source=excluded.source,path=excluded.path,cover=excluded.cover,kind=excluded.kind,format=excluded.format,description=excluded.description,chapter_count=excluded.chapter_count,updated_at=excluded.updated_at,raw=excluded.raw,archived=CASE WHEN ?13 THEN 0 ELSE books.archived END,added_at=CASE WHEN ?13 AND books.archived=1 THEN ?10 ELSE books.added_at END", params![id,field("name"),field("author"),source,path,field("cover"),field("kind"),field("format"),field("description"),now,chapters.len() as i64,book_raw,shelf])?;
         {
@@ -1102,7 +1132,24 @@ impl crate::Library {
                 }
             }
         }
+        if let Some((_, current)) = &reorder {
+            // Progress follows its chapter by address; a chapter the source dropped starts over.
+            let (index, position) = current
+                .as_ref()
+                .and_then(|(url, position)| {
+                    chapters
+                        .iter()
+                        .position(|c| c["url"].as_str().is_some_and(|u| key(u) == key(url)))
+                        .map(|index| (index as i64, *position))
+                })
+                .unwrap_or((0, 0.0));
+            tx.execute(
+                "UPDATE books SET chapter_index=?,position=? WHERE id=?",
+                params![index, position, id],
+            )?;
+        }
         tx.commit()?;
+        drop(reorder);
         self.index_book_assets(&id)?;
         let book = self.get_book(&id)?;
         if shelf && book["trashed_at"].as_f64().unwrap_or_default() != 0.0 {
