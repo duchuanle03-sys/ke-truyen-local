@@ -2252,11 +2252,26 @@ fn respond_writable(
                             query.get("q").map_or("", String::as_str),
                             crate::library::integer(query.get("page").map_or("1", String::as_str))?,
                         )?,
-                        ("detail", "GET") => library.sources.detail(id, url)?,
+                        ("detail", "GET") => {
+                            let mut detail = library.sources.detail(id, url)?;
+                            let path = detail["path"].as_str().unwrap_or_default().to_owned();
+                            detail["library"] = library.source_book_state(id, &path)?;
+                            detail
+                        }
                         ("add", "POST") => {
                             let url = body.get("url").ok_or_else(|| ApiError::new(404, "url"))?;
                             let url = url.as_str().ok_or(rusqlite::Error::InvalidQuery)?;
-                            library.add_source_book(library.sources.detail(id, url)?)?
+                            let shelf = match body.get("shelf") {
+                                None => true,
+                                Some(Value::Bool(shelf)) => *shelf,
+                                Some(_) => {
+                                    return Err(ApiError::new(
+                                        400,
+                                        "shelf phải là true hoặc false.",
+                                    ));
+                                }
+                            };
+                            library.add_source_book(library.sources.detail(id, url)?, shelf)?
                         }
                         _ => return Err(ApiError::new(404, "Không tìm thấy API.")),
                     }

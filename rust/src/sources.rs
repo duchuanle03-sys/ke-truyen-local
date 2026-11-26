@@ -798,6 +798,32 @@ fn stored_json(value: &Value) -> String {
     String::from_utf8(crate::http::json_bytes(value)).expect("JSON is UTF-8")
 }
 
+/// The record a source URL belongs to: an exact path first, then the same path on any alias host.
+pub(crate) fn find_source_book(
+    db: &rusqlite::Connection,
+    source: &str,
+    path: &str,
+) -> Result<Option<String>, ApiError> {
+    if let Some(id) = db
+        .query_row(
+            "SELECT id FROM books WHERE source=? AND path=? ORDER BY rowid LIMIT 1",
+            params![source, path],
+            |r| r.get(0),
+        )
+        .optional()?
+    {
+        return Ok(Some(id));
+    }
+    let mut stmt = db.prepare("SELECT id,path FROM books WHERE source=? ORDER BY rowid")?;
+    let mut rows = stmt.query([source])?;
+    while let Some(row) = rows.next()? {
+        if key(&row.get::<_, String>(1)?) == key(path) {
+            return Ok(Some(row.get(0)?));
+        }
+    }
+    Ok(None)
+}
+
 pub(crate) fn key(url: &str) -> &str {
     let url = url.split(['#', '?']).next().unwrap_or_default();
     let url = url
@@ -934,7 +960,32 @@ impl crate::Library {
         })
     }
 
-    pub(crate) fn add_source_book(&self, mut detail: Value) -> Result<Value, ApiError> {
+    /// The library record a Discover result belongs to, or `Null` when it has none yet.
+    pub(crate) fn source_book_state(&self, source: &str, path: &str) -> Result<Value, ApiError> {
+        let db = self.reader_connection()?;
+        let Some(id) = find_source_book(&db, source, path)? else {
+            return Ok(Value::Null);
+        };
+        Ok(db.query_row(
+            "SELECT archived,trashed_at,chapter_index,position,
+                EXISTS(SELECT 1 FROM notes WHERE book_id=b.id),
+                (SELECT count(*) FROM chapter_cache WHERE book_id=b.id AND (offline=1 OR kind='legacy'))
+             FROM books b WHERE id=?",
+            [&id],
+            |r| {
+                Ok(json!({"id":id,"on_shelf":r.get::<_, i64>(0)? == 0,"trashed":r.get::<_, f64>(1)? > 0.0,
+                    "chapter_index":r.get::<_, i64>(2)?,"position":r.get::<_, f64>(3)?,
+                    "has_notes":r.get::<_, bool>(4)?,"downloaded":r.get::<_, i64>(5)?}))
+            },
+        )?)
+    }
+
+    /// `shelf=false` opens or downloads a novel without putting it on the shelf.
+    pub(crate) fn add_source_book(
+        &self,
+        mut detail: Value,
+        shelf: bool,
+    ) -> Result<Value, ApiError> {
         let chapters = detail
             .as_object_mut()
             .and_then(|book| book.shift_remove("chapters"))
@@ -952,29 +1003,8 @@ impl crate::Library {
         );
         let mut read = self.reader_connection()?;
         let view = read.transaction()?;
-        let current: Option<String> = view
-            .query_row(
-                "SELECT id FROM books WHERE source=? AND path=? ORDER BY rowid LIMIT 1",
-                params![source, path],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let id = if let Some(id) = current {
-            id
-        } else {
-            let mut stmt =
-                view.prepare("SELECT id,path FROM books WHERE source=? ORDER BY rowid")?;
-            let mut rows = stmt.query([source])?;
-            let mut found = None;
-            while let Some(row) = rows.next()? {
-                let existing: String = row.get(1)?;
-                if key(&existing) == key(path) {
-                    found = Some(row.get(0)?);
-                    break;
-                }
-            }
-            found.unwrap_or_else(|| default_id[..32].to_owned())
-        };
+        let id =
+            find_source_book(&view, source, path)?.unwrap_or_else(|| default_id[..32].to_owned());
         let timestamp = |db: &rusqlite::Connection| {
             db.query_row("SELECT updated_at FROM books WHERE id=?", [&id], |row| {
                 row.get::<_, f64>(0)
@@ -1051,7 +1081,7 @@ impl crate::Library {
             return Err(concurrent());
         }
         let now = crate::reader::now();
-        tx.execute("INSERT INTO books(id,name,author,source,path,cover,kind,format,description,progress,chapter_index,position,groups_json,added_at,updated_at,read_at,chapter_count,raw) VALUES(?,?,?,?,?,?,?,?,?,0,0,0,'[]',?,?,0,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,author=excluded.author,source=excluded.source,path=excluded.path,cover=excluded.cover,kind=excluded.kind,format=excluded.format,description=excluded.description,chapter_count=excluded.chapter_count,updated_at=excluded.updated_at,raw=excluded.raw", params![id,field("name"),field("author"),source,path,field("cover"),field("kind"),field("format"),field("description"),now,now,chapters.len() as i64,book_raw])?;
+        tx.execute("INSERT INTO books(id,name,author,source,path,cover,kind,format,description,progress,chapter_index,position,groups_json,added_at,updated_at,read_at,chapter_count,raw,archived) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,0,0,0,'[]',?10,?10,0,?11,?12,NOT ?13) ON CONFLICT(id) DO UPDATE SET name=excluded.name,author=excluded.author,source=excluded.source,path=excluded.path,cover=excluded.cover,kind=excluded.kind,format=excluded.format,description=excluded.description,chapter_count=excluded.chapter_count,updated_at=excluded.updated_at,raw=excluded.raw,archived=CASE WHEN ?13 THEN 0 ELSE books.archived END,added_at=CASE WHEN ?13 AND books.archived=1 THEN ?10 ELSE books.added_at END", params![id,field("name"),field("author"),source,path,field("cover"),field("kind"),field("format"),field("description"),now,chapters.len() as i64,book_raw,shelf])?;
         {
             let mut update=tx.prepare("UPDATE chapters SET title=?,url=?,raw=? WHERE book_id=? AND idx=? AND url=? AND title=? AND raw=?")?;
             let mut insert=tx.prepare("INSERT OR IGNORE INTO chapters(book_id,idx,title,url,html,text,images,downloaded,raw) VALUES(?,?,?,?,'','','[]',0,?)")?;
@@ -1071,7 +1101,7 @@ impl crate::Library {
         tx.commit()?;
         self.index_book_assets(&id)?;
         let book = self.get_book(&id)?;
-        if book["trashed_at"].as_f64().unwrap_or_default() != 0.0 {
+        if shelf && book["trashed_at"].as_f64().unwrap_or_default() != 0.0 {
             self.restore_book(&id)
         } else {
             Ok(book)

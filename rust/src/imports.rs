@@ -623,7 +623,8 @@ fn write_book(
                 source=excluded.source,path=excluded.path,cover=excluded.cover,kind=excluded.kind,
                 format=excluded.format,description=excluded.description,
                 chapter_count=excluded.chapter_count,updated_at=excluded.updated_at,
-                read_at=CASE WHEN books.read_at=0 THEN excluded.read_at ELSE books.read_at END,raw=excluded.raw",
+                read_at=CASE WHEN books.read_at=0 THEN excluded.read_at ELSE books.read_at END,raw=excluded.raw,
+                archived=0",
             params![
                 book_id, name, author, source, path, cover, kind, format, description,
                 progress.clamp(0.0, 1.0), chapter_index, position.min(1.0), groups_json, now, now, read_at, count, raw
@@ -895,5 +896,31 @@ mod tests {
         assert_eq!(windows_name("C:fakepath/x/Truyện.TXT"), "Truyện.TXT");
         assert_eq!(windows_name("a:b.txt"), "b.txt");
         assert!(book_entry("backup/books/1/book.json") && !book_entry("books/book.json"));
+    }
+
+    #[test]
+    fn backup_import_puts_a_matching_off_shelf_book_on_the_shelf() {
+        let (fixture, library) = crate::reader::tests::writable();
+        let path = "https://truyenfull.live/truyen-c/";
+        library
+            .write_connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO books(id,name,source,path,archived,added_at,updated_at) VALUES('off','Ngoài kệ','full',?,1,1,1)",
+                [path],
+            )
+            .unwrap();
+        let backup = fixture.db.parent().unwrap().join("backup");
+        std::fs::create_dir_all(backup.join("books/1")).unwrap();
+        std::fs::write(
+            backup.join("books/1/book.json"),
+            serde_json::to_vec(
+                &json!({"book_id":"off","name":"Ngoài kệ","source":"full","path":path}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        library.import_backup(&backup).unwrap();
+        assert_eq!(library.get_book("off").unwrap()["archived"], false);
     }
 }

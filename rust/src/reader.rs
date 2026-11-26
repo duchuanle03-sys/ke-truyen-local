@@ -682,6 +682,8 @@ impl Library {
         self.get_book(id)?;
         let mut db = self.write_connection()?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let was_archived: bool =
+            tx.query_row("SELECT archived FROM books WHERE id=?", [id], |r| r.get(0))?;
         for key in ["name", "author", "archived", "cover"] {
             if let Some(v) = body.get(key) {
                 tx.execute(
@@ -701,6 +703,13 @@ impl Library {
             tx.execute(
                 "UPDATE books SET groups_json=? WHERE id=?",
                 params![String::from_utf8(json_bytes(&json!(groups))).unwrap(), id],
+            )?;
+        }
+        if was_archived {
+            // Putting an off-shelf novel on the shelf makes "Mới thêm" mean the moment it was added.
+            tx.execute(
+                "UPDATE books SET added_at=? WHERE id=? AND archived=0",
+                params![now(), id],
             )?;
         }
         tx.commit()?;
@@ -1110,6 +1119,181 @@ pub(crate) mod tests {
             library.chapter("web", 3, None, 0).is_err(),
             "foreground still tries the source"
         );
+    }
+    const SOURCE_BOOK: &str = "https://truyenfull.live/truyen-b/";
+    fn source_detail(path: &str) -> Value {
+        json!({"name":"Truyện nguồn","author":"Tác giả","source":"full","path":path,"cover":"",
+            "kind":"text","format":"online","description":"","chapters":[
+                {"title":"Chương 1","url":format!("{SOURCE_BOOK}chuong-1/")},
+                {"title":"Chương 2","url":format!("{SOURCE_BOOK}chuong-2/")}]})
+    }
+    fn book_count(library: &Library) -> i64 {
+        library
+            .reader_connection()
+            .unwrap()
+            .query_row("SELECT count(*) FROM books", [], |r| r.get(0))
+            .unwrap()
+    }
+    fn set_read_at(library: &Library, id: &str, at: f64) {
+        library
+            .write_connection()
+            .unwrap()
+            .execute("UPDATE books SET read_at=? WHERE id=?", params![at, id])
+            .unwrap();
+    }
+    #[test]
+    fn off_shelf_read_then_add_keeps_progress_and_sorts_first() {
+        let (_fixture, library) = writable();
+        let book = library
+            .add_source_book(source_detail(SOURCE_BOOK), false)
+            .unwrap();
+        assert_eq!(book["archived"], true);
+        let id = book["id"].as_str().unwrap().to_owned();
+        library
+            .progress(&id, &json!({"index":1,"position":0.4}))
+            .unwrap();
+        set_read_at(&library, "book", 1.0);
+        let before = library.get_book(&id).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let added = library
+            .add_source_book(source_detail(SOURCE_BOOK), true)
+            .unwrap();
+        assert_eq!(added["id"], id.as_str());
+        assert_eq!(added["archived"], false);
+        assert_eq!(added["chapter_index"], 1);
+        assert_eq!(added["position"], 0.4);
+        assert_eq!(added["read_at"], before["read_at"]);
+        assert!(added["added_at"].as_f64().unwrap() > before["added_at"].as_f64().unwrap());
+        let page = library
+            .list_books(&crate::library::ShelfQuery::from_uri("/api/books?sort=recent").unwrap())
+            .unwrap();
+        assert_eq!(page.items[0]["id"], id.as_str());
+    }
+    #[test]
+    fn local_add_to_shelf_keeps_progress_and_sets_added_at() {
+        let (_fixture, library) = writable();
+        let id = library
+            .add_source_book(source_detail(SOURCE_BOOK), false)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        library
+            .progress(&id, &json!({"index":1,"position":0.4}))
+            .unwrap();
+        let before = library.get_book(&id).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let added = library
+            .update_book(&id, &json!({"archived":false}))
+            .unwrap();
+        assert_eq!(added["archived"], false);
+        assert_eq!(added["chapter_index"], 1);
+        assert_eq!(added["position"], 0.4);
+        assert_eq!(added["read_at"], before["read_at"]);
+        assert!(added["added_at"].as_f64().unwrap() > before["added_at"].as_f64().unwrap());
+        let again = library
+            .update_book(&id, &json!({"archived":false}))
+            .unwrap();
+        assert_eq!(again["added_at"], added["added_at"]);
+    }
+    #[test]
+    fn opening_a_shelf_book_from_discover_keeps_it_on_the_shelf() {
+        let (_fixture, library) = writable();
+        library
+            .add_source_book(source_detail(SOURCE_BOOK), true)
+            .unwrap();
+        let again = library
+            .add_source_book(source_detail(SOURCE_BOOK), false)
+            .unwrap();
+        assert_eq!(again["archived"], false);
+    }
+    #[test]
+    fn discover_finds_the_same_record_under_every_url_spelling() {
+        let (_fixture, library) = writable();
+        let id = library
+            .add_source_book(source_detail(SOURCE_BOOK), false)
+            .unwrap()["id"]
+            .clone();
+        let count = book_count(&library);
+        for path in [
+            "https://truyenfull.vision/truyen-b/",
+            "https://truyenfull.live/truyen-b.html",
+            "https://truyenfull.live/truyen-b",
+            "https://truyenfull.live/truyen-b/?ref=1",
+        ] {
+            let again = library.add_source_book(source_detail(path), false).unwrap();
+            assert_eq!(again["id"], id, "{path}");
+            assert_eq!(book_count(&library), count, "{path}");
+        }
+    }
+    #[test]
+    fn adding_from_discover_never_untrashes() {
+        let (_fixture, library) = writable();
+        let id = library
+            .add_source_book(source_detail(SOURCE_BOOK), false)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        library.trash_book(&id).unwrap();
+        let again = library
+            .add_source_book(source_detail(SOURCE_BOOK), false)
+            .unwrap();
+        assert!(again["trashed_at"].as_f64().unwrap() > 0.0);
+        assert_eq!(again["archived"], true);
+    }
+    #[test]
+    fn source_book_state_reports_shelf_notes_and_downloads() {
+        let (_fixture, library) = writable();
+        assert!(
+            library
+                .source_book_state("full", SOURCE_BOOK)
+                .unwrap()
+                .is_null()
+        );
+        let id = library
+            .add_source_book(source_detail(SOURCE_BOOK), false)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let db = library.write_connection().unwrap();
+        db.execute(
+            "INSERT INTO notes(id,book_id,created_at) VALUES('n',?,1)",
+            [&id],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE chapters SET text='Đã tải',downloaded=1 WHERE book_id=? AND idx=0",
+            [&id],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE chapter_cache SET kind='protected',offline=1 WHERE book_id=? AND idx=0",
+            [&id],
+        )
+        .unwrap();
+        drop(db);
+        let state = library
+            .source_book_state("full", "https://truyenfull.vision/truyen-b")
+            .unwrap();
+        assert_eq!(state["id"], id.as_str());
+        assert_eq!(state["on_shelf"], false);
+        assert_eq!(state["trashed"], false);
+        assert_eq!(state["has_notes"], true);
+        assert_eq!(state["downloaded"], 1);
+    }
+    #[test]
+    fn failed_detail_creates_no_record() {
+        let (_fixture, library) = online();
+        let count = book_count(&library);
+        assert!(
+            library
+                .sources
+                .detail("full", "https://truyenfull.live/khong-co/")
+                .is_err()
+        );
+        assert_eq!(book_count(&library), count);
     }
     #[test]
     fn renaming_a_group_keeps_its_id_and_books() {
